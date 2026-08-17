@@ -292,6 +292,8 @@ bool ReadConfigRouterType()
 			DECLARE_BVALUE(DisableBlindCBScan),
 			DECLARE_BVALUE(FullColumnEyeShift),
 			DECLARE_BVALUE(ModifyShadersDX11),
+			DECLARE_IVALUE(ModifyShadersMaxCount),
+			DECLARE_IVALUE(FrameTraceMinDraws),
 			DECLARE_BVALUE(ReplayDynamicBuffers),
 			DECLARE_BVALUE(DuplicateDraws),
 			DECLARE_BVALUE(CollectDebugInformation),
