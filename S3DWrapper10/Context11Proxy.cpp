@@ -235,6 +235,10 @@ void Context11Proxy::ReleaseStereoShiftCBs()
 static int s_matDumpRejected = 0;
 static int s_matDumpShifted  = 0;
 
+// Present counter, so a buffer's last eye-shift can be dated against the frame
+// being drawn rather than only "ever shifted at some point".
+static unsigned s_frameId = 0;
+
 // Camera projection _11, cached from the last clean view-projection seen.
 static float s_projXScale = 0.f;
 
@@ -275,13 +279,50 @@ void Context11Proxy::TallyDrawCoverage()
         ++m_drawsVSNoMatrixThisFrame;
         return;
     }
-    for (UINT s = 0; s < kMaxVSCBSlots; ++s)
+    // GTA V presents twice per game frame, so allow a few Presents of slack
+    // before calling a shift stale; a CB the game stopped rewriting keeps a
+    // valid shifted sibling and must not be reported as uncorrected.
+    unsigned newest = 0;
+    bool anyEver = false, anySlot = false;
+    for (auto it = info->projection.matrixData.cb.begin();
+         it != info->projection.matrixData.cb.end(); ++it)
     {
-        if (!m_boundVSCBs[s]) continue;
-        Buffer11Proxy* b = TryUnwrapBuffer(m_boundVSCBs[s]);
-        if (b && b->EverShifted()) return;
+        const DWORD slot = it->first;
+        if (slot >= kMaxVSCBSlots || !m_boundVSCBs[slot]) continue;
+        anySlot = true;
+        Buffer11Proxy* b = TryUnwrapBuffer(m_boundVSCBs[slot]);
+        if (!b || !b->EverShifted()) continue;
+        anyEver = true;
+        if (b->ShiftedFrame() > newest) newest = b->ShiftedFrame();
     }
-    ++m_drawsVSNeverShiftedThisFrame;
+    // The shift lands in the right-eye sibling, so it only reaches the right eye
+    // if that sibling is what gets bound for the duplicated draw.
+    for (auto it = info->projection.matrixData.cb.begin();
+         it != info->projection.matrixData.cb.end(); ++it)
+    {
+        const DWORD slot = it->first;
+        if (slot >= kMaxCBs || !m_boundVSCBs[slot]) continue;
+        ID3D11Buffer* r = m_cbSlots[ST_VS].right[slot];
+        if (!r || r == m_cbSlots[ST_VS].left[slot])
+        {
+            ++m_drawsVSNoSiblingCBThisFrame;
+            ++m_uncorrectedVSDraws[BoundShaderCRC(m_parent, m_boundVS)];
+            break;
+        }
+    }
+
+    if (!anySlot) return;
+    if (!anyEver)
+    {
+        ++m_drawsVSNeverShiftedThisFrame;
+        ++m_uncorrectedVSDraws[BoundShaderCRC(m_parent, m_boundVS)];
+        return;
+    }
+    if (s_frameId > newest + 4)
+    {
+        ++m_drawsVSStaleShiftThisFrame;
+        ++m_uncorrectedVSDraws[BoundShaderCRC(m_parent, m_boundVS)];
+    }
 }
 
 std::string Context11Proxy::DescribeAllContexts()
@@ -301,8 +342,8 @@ std::string Context11Proxy::DescribeAllContexts()
 
 void Context11Proxy::LogAndResetFrameDrawStats()
 {
-    static unsigned s_frame = 0;
-    ++s_frame;
+    ++s_frameId;
+    const unsigned s_frame = s_frameId;
     // Publish before any reset so the trace gate sees this frame's real count.
     if ((int)m_drawsThisFrame > g_FrameTraceLastFrameDraws)
         g_FrameTraceLastFrameDraws = (int)m_drawsThisFrame;
@@ -352,13 +393,38 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     }
 
     DDILog("  [frame %u] basis |w|: min=%.4f max=%.4f projXScale=%.4f"
-           " | uncorrected draws: vsUnparsed=%u vsNoMatrix=%u cbNeverShifted=%u\n",
+           " | uncorrected draws: vsUnparsed=%u vsNoMatrix=%u cbNeverShifted=%u"
+           " cbStale=%u noSiblingCB=%u\n",
            s_frame, s_wnMin, s_wnMax, s_projXScale,
            m_drawsVSUnparsedThisFrame, m_drawsVSNoMatrixThisFrame,
-           m_drawsVSNeverShiftedThisFrame);
+           m_drawsVSNeverShiftedThisFrame, m_drawsVSStaleShiftThisFrame,
+           m_drawsVSNoSiblingCBThisFrame);
     m_drawsVSUnparsedThisFrame     = 0;
     m_drawsVSNoMatrixThisFrame     = 0;
     m_drawsVSNeverShiftedThisFrame = 0;
+    m_drawsVSStaleShiftThisFrame   = 0;
+    m_drawsVSNoSiblingCBThisFrame  = 0;
+
+    // Which shaders those uncorrected draws belong to: the tree/wire/paint
+    // geometry should name itself here.
+    if (!m_uncorrectedVSDraws.empty())
+    {
+        std::vector<std::pair<unsigned, DWORD>> byUse;
+        for (std::map<DWORD, unsigned>::const_iterator it = m_uncorrectedVSDraws.begin();
+             it != m_uncorrectedVSDraws.end(); ++it)
+            byUse.push_back(std::make_pair(it->second, it->first));
+        std::sort(byUse.begin(), byUse.end());
+        std::string line;
+        char b2[64];
+        for (size_t k = byUse.size(); k-- > 0 && byUse.size() - k <= 12; )
+        {
+            sprintf_s(b2, " %08lX=%u", byUse[k].second, byUse[k].first);
+            line += b2;
+        }
+        DDILog("  [frame %u] uncorrected VS (%zu distinct):%s\n",
+               s_frame, m_uncorrectedVSDraws.size(), line.c_str());
+        m_uncorrectedVSDraws.clear();
+    }
 
     // Which modified shaders the scene actually draws with; creation order says
     // nothing about this, so the cap cannot be aimed without it.
@@ -1697,11 +1763,6 @@ struct EyeShiftMatrix
 // `f` is the matrix in register order, so f[0]=_11, f[3]=_14, f[12]=_41,
 // f[15]=_44 — matching the legacy _RC element names used below.
 // ---------------------------------------------------------------------------
-// Last forward matrix we shifted, kept so the inverse detector further down can
-// recognise an inverse by multiplying the two out. Diagnostic, immediate ctx.
-static float s_lastForwardMatrix[16];
-static bool  s_haveForwardMatrix = false;
-
 static void DumpMatrix(const char* tag, const float* f, DWORD reg, bool transposed)
 {
     DDILog("  [mat %s] reg=%u transposed=%d\n"
@@ -1714,30 +1775,6 @@ static void DumpMatrix(const char* tag, const float* f, DWORD reg, bool transpos
            f[4],  f[5],  f[6],  f[7],
            f[8],  f[9],  f[10], f[11],
            f[12], f[13], f[14], f[15]);
-}
-
-// Ring of distinct mono matrices we shifted this frame. The camera view-
-// projection is among them, so a candidate inverse can be identified by
-// multiplying against each and looking for identity.
-static const int kFwdRing = 12;
-static float s_fwdRing[kFwdRing][16];
-static int   s_fwdRingCount = 0;
-
-static void RememberForwardMatrix(const float* f)
-{
-    for (int i = 0; i < s_fwdRingCount; ++i)
-    {
-        bool same = true;
-        for (int k = 0; k < 16 && same; ++k)
-            if (fabsf(s_fwdRing[i][k] - f[k]) > 1e-5f) same = false;
-        if (same) return;
-    }
-    // Roll, so the ring always holds the most recent distinct matrices and
-    // tracks the camera as it moves.
-    static int s_next = 0;
-    memcpy(s_fwdRing[s_next], f, 16 * sizeof(float));
-    s_next = (s_next + 1) % kFwdRing;
-    if (s_fwdRingCount < kFwdRing) ++s_fwdRingCount;
 }
 
 // Right-eye clip-space x shift per unit w. The forward and inverse paths
@@ -1886,17 +1923,14 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
             DDILog("      eyeShift=%.6f xScale=%.6f b=%.6f m41=%.6f\n",
                    eyeShift, xs, eyeShift * xs, EyeOffsetM41(eyeShift) * xs);
         }
-        // Snapshot the mono matrix before shifting, for the inverse detector.
-        memcpy(s_lastForwardMatrix, f, sizeof(s_lastForwardMatrix));
-        s_haveForwardMatrix = true;
-        RememberForwardMatrix(f);
-
         // Cache only from clean view-projections, so neither a scaled WVP nor a
         // light projection can poison the value the rest of the frame reuses.
         float basisXn, basisWn;
         MatrixBasisNorms(f, transposed, basisXn, basisWn);
         if (basisWn > 1e-6f && fabsf(basisWn - 1.f) < 0.05f)
+        {
             s_projXScale = basisXn / basisWn;
+        }
         if (basisWn < s_wnMin) s_wnMin = basisWn;
         if (basisWn > s_wnMax) s_wnMax = basisWn;
         const float camXScale = ProjXScaleFromMatrix(f, transposed);
@@ -1932,185 +1966,6 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
     }
 }
 
-// A*B == I within tolerance, with either operand optionally transposed so all
-// four storage conventions are covered.
-static bool MultiplyIsIdentity(const float* A, const float* B, bool transA, bool transB)
-{
-    for (int r = 0; r < 4; ++r)
-        for (int c = 0; c < 4; ++c)
-        {
-            float sum = 0.f;
-            for (int k = 0; k < 4; ++k)
-                sum += (transA ? A[k * 4 + r] : A[r * 4 + k]) *
-                       (transB ? B[c * 4 + k] : B[k * 4 + c]);
-            if (fabsf(sum - ((r == c) ? 1.f : 0.f)) > 2e-2f) return false;
-        }
-    return true;
-}
-
-// An inverse perspective projection has a distinctive zero pattern: only
-// _11, _22 and the two z/w terms are populated, and that pattern is symmetric
-// under transpose, so only which of the two terms is ~1 tells them apart.
-static bool LooksLikeInverseProjection(const float* f, bool& outTransposed)
-{
-    static const int kZero[] = { 1, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13 };
-    for (int i = 0; i < _countof(kZero); ++i)
-        if (fabsf(f[kZero[i]]) > 1e-4f) return false;
-    if (fabsf(f[0]) < 1e-6f || fabsf(f[5]) < 1e-6f) return false;
-    if (fabsf(f[11]) < 1e-6f || fabsf(f[14]) < 1e-6f) return false;
-    outTransposed = fabsf(f[11] - 1.f) < fabsf(f[14] - 1.f);
-    return true;
-}
-
-// A view-projection factors as V*P with V rigid, so in the product's last
-// column the first three components are the camera forward axis: unit length,
-// and orthogonal to the (scaled) right and up columns. A candidate is an
-// inverse view-projection exactly when its inverse has that structure — which
-// the _44==0 tests above cannot see, since (V*P)._44 is the camera-relative z
-// of the world origin and is generally non-zero.
-static bool InverseIsViewProjection(const float* f, bool& outTransposed)
-{
-    D3DXMATRIX cand(f), A;
-    if (!D3DXMatrixInverse(&A, nullptr, &cand)) return false;
-
-    for (int pass = 0; pass < 2; ++pass)
-    {
-        #define ELEM(r, c) (pass ? A.m[c][r] : A.m[r][c])
-        const float c3[3] = { ELEM(0,3), ELEM(1,3), ELEM(2,3) };
-        const float n3 = sqrtf(c3[0]*c3[0] + c3[1]*c3[1] + c3[2]*c3[2]);
-        if (fabsf(n3 - 1.f) > 0.02f) continue;
-
-        const float c0[3] = { ELEM(0,0), ELEM(1,0), ELEM(2,0) };
-        const float c1[3] = { ELEM(0,1), ELEM(1,1), ELEM(2,1) };
-        #undef ELEM
-        const float n0 = sqrtf(c0[0]*c0[0] + c0[1]*c0[1] + c0[2]*c0[2]);
-        const float n1 = sqrtf(c1[0]*c1[0] + c1[1]*c1[1] + c1[2]*c1[2]);
-        if (n0 < 1e-4f || n1 < 1e-4f) continue;
-        if (fabsf((c0[0]*c3[0] + c0[1]*c3[1] + c0[2]*c3[2]) / n0) > 0.02f) continue;
-        if (fabsf((c1[0]*c3[0] + c1[1]*c3[1] + c1[2]*c3[2]) / n1) > 0.02f) continue;
-        outTransposed = (pass == 1);
-        return true;
-    }
-    return false;
-}
-
-// Inverse view matrix: a rigid transform, so the upper 3x3 is orthonormal and
-// the last column is exactly (0,0,0,1). Its translation row is the camera
-// world position, which differs per eye — a prime suspect for screen-space
-// passes that reconstruct view-space position and then go to world space.
-static bool LooksLikeInverseView(const float* f, bool& outTransposed, float outCamPos[3])
-{
-    for (int pass = 0; pass < 2; ++pass)
-    {
-        #define M(r, c) (pass ? f[(c) * 4 + (r)] : f[(r) * 4 + (c)])
-        if (fabsf(M(0,3)) > 1e-4f || fabsf(M(1,3)) > 1e-4f ||
-            fabsf(M(2,3)) > 1e-4f || fabsf(M(3,3) - 1.f) > 1e-3f) continue;
-
-        bool ok = true;
-        float row[3][3];
-        for (int r = 0; r < 3 && ok; ++r)
-        {
-            for (int c = 0; c < 3; ++c) row[r][c] = M(r, c);
-            const float n = sqrtf(row[r][0]*row[r][0] + row[r][1]*row[r][1] + row[r][2]*row[r][2]);
-            if (fabsf(n - 1.f) > 0.02f) ok = false;
-        }
-        if (!ok) continue;
-        // Mutually orthogonal rows confirm a rotation rather than a coincidence.
-        if (fabsf(row[0][0]*row[1][0] + row[0][1]*row[1][1] + row[0][2]*row[1][2]) > 0.02f) continue;
-        if (fabsf(row[0][0]*row[2][0] + row[0][1]*row[2][1] + row[0][2]*row[2][2]) > 0.02f) continue;
-
-        outCamPos[0] = M(3,0); outCamPos[1] = M(3,1); outCamPos[2] = M(3,2);
-        #undef M
-        outTransposed = (pass == 1);
-        return true;
-    }
-    return false;
-}
-
-// Diagnostic only: names every CB register holding such a matrix, with the
-// shader CRCs and slot a BaseProfile.xml <Inverse> entry would need.
-static void ReportInverseProjectionCandidates(
-    const unsigned char* data, size_t byteCount,
-    DWORD vsCRC, DWORD psCRC, int vsSlot, int psSlot)
-{
-    constexpr size_t kRegBytes = 16;
-    // Proof the scan ran, so an empty result is a real negative.
-    static unsigned s_scans = 0;
-    if ((++s_scans % 512) == 0)
-        FrameTrace("    INVSCAN buffers=%u haveFwd=%d lastSize=%u\n",
-                   s_scans, (int)s_haveForwardMatrix, (unsigned)byteCount);
-
-    for (size_t reg = 0; (reg + 4) * kRegBytes <= byteCount; ++reg)
-    {
-        // Matrices are laid out on 4-register boundaries; scanning every offset
-        // reports misaligned windows into a neighbouring matrix as hits.
-        if ((reg & 3) != 0) continue;
-        const float* f = reinterpret_cast<const float*>(data + reg * kRegBytes);
-        // Uninitialised fill (0xCDCDCDCD decodes to ~-4.3e8) and NaN otherwise
-        // pass the inverse test as noise. Reject before testing.
-        bool sane = true;
-        for (int i = 0; i < 16 && sane; ++i)
-            if (!(fabsf(f[i]) < 1e6f)) sane = false;
-        if (!sane) continue;
-
-        bool transposed = false;
-        const char* how = nullptr;
-        float camPos[3] = { 0, 0, 0 };
-        if (InverseIsViewProjection(f, transposed))
-        {
-            how = "INVVP";
-        }
-        else if (LooksLikeInverseView(f, transposed, camPos) &&
-                 (fabsf(camPos[0]) + fabsf(camPos[1]) + fabsf(camPos[2])) > 0.01f)
-        {
-            // Identity trivially satisfies the rigid test and is everywhere in
-            // constant buffers, so require a real translation.
-            DDILog("  INVVIEW: reg=%u transposed=%d vs=0x%08lX ps=0x%08lX"
-                   " cb(vs=%d ps=%d) camPos=[%.2f %.2f %.2f]\n",
-                   (unsigned)reg, (int)transposed, vsCRC, psCRC,
-                   vsSlot, psSlot, camPos[0], camPos[1], camPos[2]);
-            how = "INVVIEW";
-        }
-        else if (LooksLikeInverseProjection(f, transposed))
-        {
-            how = "struct";
-        }
-        else
-        {
-            // Pairing-free test: invert the candidate and ask whether the
-            // result is a perspective transform. True of any inverse
-            // view-projection regardless of how dense the matrix itself is.
-            D3DXMATRIX cand(f), inv;
-            if (D3DXMatrixInverse(&inv, nullptr, &cand))
-            {
-                if (fabsf(inv._44) < 1e-3f && fabsf(inv._34) > 0.5f)
-                { how = "invIsProj";  transposed = false; }
-                else if (fabsf(inv._44) < 1e-3f && fabsf(inv._43) > 0.5f)
-                { how = "invIsProjT"; transposed = true;  }
-            }
-        }
-
-        // Decisive check: does this candidate invert a matrix we actually
-        // shift? If so it is the camera inverse and this is the register.
-        int pairedWith = -1;
-        for (int i = 0; i < s_fwdRingCount && pairedWith < 0; ++i)
-        {
-            if      (MultiplyIsIdentity(f, s_fwdRing[i], false, false)) { pairedWith = i; transposed = false; }
-            else if (MultiplyIsIdentity(f, s_fwdRing[i], true,  false)) { pairedWith = i; transposed = true;  }
-            else if (MultiplyIsIdentity(f, s_fwdRing[i], false, true))  { pairedWith = i; transposed = true;  }
-            if (pairedWith >= 0) how = "PAIRED";
-        }
-        if (!how) continue;
-        if (pairedWith >= 0)
-            DDILog("  INVPAIR: reg=%u transposed=%d vs=0x%08lX ps=0x%08lX cb(vs=%d ps=%d)"
-                   " inverts shifted matrix #%d\n",
-                   (unsigned)reg, (int)transposed, vsCRC, psCRC, vsSlot, psSlot, pairedWith);
-        FrameTrace("    INVPROJ(%s) reg=%u transposed=%d vs=0x%08lX ps=0x%08lX"
-                   " vsSlot=%d psSlot=%d [%.4f %.4f %.4f %.4f]\n",
-                   how, (unsigned)reg, (int)transposed, vsCRC, psCRC,
-                   vsSlot, psSlot, f[0], f[5], f[11], f[14]);
-    }
-}
 
 // Hand-authored matrix declarations from BaseProfile.xml, covering what the
 // bytecode analyzer cannot detect — chiefly inverse view-projection matrices.
@@ -2144,6 +1999,7 @@ static void AddProfileMatrixTargets(const ShaderProfileDataMap& map, DWORD crc,
         em.matrixRegister     = md.matrixRegister;
         em.matrixIsTransposed = md.matrixIsTransposed;
         em.matrixIsInverse    = md.inverse;
+        em.matrixFromLearned  = FALSE;
         targets.push_back(em);
     }
 }
@@ -2352,6 +2208,7 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                             em.matrixRegister     = pmd.matrixRegister;
                             em.matrixIsTransposed = pmd.matrixIsTransposed;
                             em.matrixIsInverse    = FALSE;
+                            em.matrixFromLearned  = FALSE;
                             targets.push_back(em);
                         }
                     }
@@ -2409,32 +2266,6 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                 }
             }
 
-            if (FrameTraceActive())
-            {
-                // Seed the ring from this buffer's own forward matrices first:
-                // a camera CB usually holds both the view-projection and its
-                // inverse, and the pairing test needs this frame's values.
-                for (size_t ti = 0; ti < targets.size(); ++ti)
-                {
-                    if (targets[ti].matrixIsInverse) continue;
-                    size_t off = size_t(targets[ti].matrixRegister) * 16;
-                    if (off + 64 <= bytes.size())
-                        RememberForwardMatrix(
-                            reinterpret_cast<const float*>(bytes.data() + off));
-                }
-                int vsSlot = -1, psSlot = -1;
-                for (UINT s = 0; s < kMaxVSCBSlots; ++s)
-                    if (m_boundVSCBs[s] == pResource) { vsSlot = (int)s; break; }
-                for (UINT s = 0; s < kMaxPSCBSlots; ++s)
-                    if (m_boundPSCBs[s] == pResource) { psSlot = (int)s; break; }
-                // Scanned regardless of current binding: games commonly write
-                // a CB before binding it, so slot may legitimately be unknown.
-                ReportInverseProjectionCandidates(
-                        bytes.data(), bytes.size(),
-                        BoundShaderCRC(m_parent, m_boundVS),
-                        BoundShaderCRC(m_parent, m_boundPS), vsSlot, psSlot);
-            }
-
             // Draw duplication keeps the two eyes' constants in separate
             // buffers, so the patch lands in the sibling now rather than in a
             // replay closure that rewrites one shared buffer later.
@@ -2463,11 +2294,13 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                                 static_cast<unsigned char*>(mapped.pData),
                                 bytes.size(), eyeShift, targets,
                                 &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame);
-                            if (m_cbMatShiftedThisFrame != before) bp->MarkShifted();
+                            if (m_cbMatShiftedThisFrame != before) bp->MarkShifted(s_frameId);
                         }
                         else if (useBlindNow)
                             ApplyEyeShiftToCB(static_cast<unsigned char*>(mapped.pData),
                                               bytes.size(), eyeShift);
+                        // gViewInverse stays untouched: RAGE reads only its
+                        // translation row, which shared shadow maps rely on.
                         m_real->Unmap(rightBuf, subres);
                     }
                 }
