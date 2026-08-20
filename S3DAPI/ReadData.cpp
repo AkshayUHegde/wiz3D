@@ -447,8 +447,13 @@ void ReadProfileRouterType(TCHAR* szApplicationFileName, TCHAR* szProfilesFileNa
 						}
 					}
 				}
-				else if (!bCreate || _tcscmp(gInfo.Params, L"") == 0)
+				else
 				{
+					// An entry carrying no CmdLine applies to any command line.
+					// Requiring gInfo.Params to be empty meant a user profile
+					// could never load for a game launched through a store
+					// client, which passes arguments — Battlefield 3 saved its
+					// tuned values on exit and silently reloaded the defaults.
 					FileFound = true;
 					profileNode = node;
 				}
