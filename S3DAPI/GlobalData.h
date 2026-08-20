@@ -372,6 +372,11 @@ public:
 	// element form scales the shift by each mesh's own object space and makes
 	// attached objects drift apart. Flagged so it can be A/B'd.
 	bool		FullColumnEyeShift;
+	// DX10\11 COM-wrap: hunt inverse view-projections numerically in CB writes
+	// the analyzer cleared, and eye-shift them via the matrixIsInverse branch.
+	// Deferred lighting keeps them in pixel-shader-only buffers no SV_Position
+	// analysis reaches (BF3: lighting offset by a constant at every depth).
+	bool		DetectInverseMatrix;
 	// DX10\11 COM-wrap: modify vertex shaders so they shift their own output
 	// position, instead of patching a projection matrix in a constant buffer.
 	bool		ModifyShadersDX11;
@@ -521,6 +526,7 @@ public:
 		COMWrapEyeShift  = 0.0f;      // 0 = use per-game profile StereoBase; non-zero = override.
 		DisableBlindCBScan = true;    // Never guess: the blind scan corrupted cascade transforms.
 		FullColumnEyeShift = true;    // Real 1/z parallax; false = legacy single-element shift.
+		DetectInverseMatrix = false;  // Off until a game's config opts in (deferred-lighting titles).
 		ModifyShadersDX11  = false;   // false = constant-buffer patching only.
 		ModifyShadersMaxCount = 0;    // 0 = modify every eligible shader.
 		DumpModifiedShaders = 0;      // 1 = write per-shader before/after disassembly.
