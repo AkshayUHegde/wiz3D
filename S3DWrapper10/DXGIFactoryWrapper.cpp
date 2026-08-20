@@ -389,6 +389,15 @@ STDMETHODIMP CreateSwapChain( IDXGIFactory* This, IUnknown *pDevice, DXGI_SWAP_C
 	return hResult;
 }
 
+// One place to install the slot-10 hook, so the two CreateDXGIFactory entry
+// points can't disagree about which factory IIDs deserve it.
+static void HookFactorySwapChainSlot(void* pFactory)
+{
+	if (!pFactory) return;
+	void** vt = *(void***)pFactory;
+	HookCode(vt[10], CreateSwapChain, (PVOID*)&Original_CreateSwapChain, HOOKING_FLAG);
+}
+
 STDMETHODIMP Hooked_CreateDXGIFactory(REFIID riid, void **ppFactory, HMODULE hCallingModule)
 {
 	if (IsInternalCall() || gInfo.UseMonoDeviceWrapper)
@@ -404,11 +413,13 @@ STDMETHODIMP Hooked_CreateDXGIFactory(REFIID riid, void **ppFactory, HMODULE hCa
 #endif
 
 	HRESULT hResult = CreateDXGIFactory(riid, ppFactory);
-	if (SUCCEEDED(hResult) && riid == __uuidof(IDXGIFactory))
-	{
-		void** p = *(void***)(*ppFactory);
-		HookCode(p[10], CreateSwapChain, (PVOID*)&Original_CreateSwapChain, HOOKING_FLAG);
-	}	
+	// Slot 10 is CreateSwapChain on IDXGIFactory and every interface derived
+	// from it, so hook it whichever IID the caller asked for. Requiring an
+	// exact riid match missed Battlefield 3, which calls CreateDXGIFactory1
+	// asking for IID_IDXGIFactory — legal, but it fell through both entry
+	// points' guards, so no swap chain was ever wrapped and no SBS appeared.
+	if (SUCCEEDED(hResult) && ppFactory && *ppFactory)
+		HookFactorySwapChainSlot(*ppFactory);
 	return hResult;
 }
 
@@ -432,11 +443,8 @@ STDMETHODIMP Hooked_CreateDXGIFactory1(REFIID riid, void **ppFactory, HMODULE hC
 #endif
 
 	HRESULT hResult = p(riid, ppFactory);
-	if (SUCCEEDED(hResult) && riid == __uuidof(IDXGIFactory1))
-	{
-		void** p = *(void***)(*ppFactory);
-		HookCode(p[10], CreateSwapChain, (PVOID*)&Original_CreateSwapChain, HOOKING_FLAG);
-	}
+	if (SUCCEEDED(hResult) && ppFactory && *ppFactory)
+		HookFactorySwapChainSlot(*ppFactory);
 	return hResult;
 }
 
