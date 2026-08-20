@@ -247,6 +247,14 @@ static float s_projXScale = 0.f;
 static float s_wnMin = 1e30f;
 static float s_wnMax = 0.f;
 
+// Ring of pre-shift (mono) perspective matrices the forward path corrected,
+// canonical row-vector layout; DetectInverseInCB tests candidates against it.
+struct CachedForwardVP { float m[16]; bool valid; };
+static CachedForwardVP s_vpRing[32];
+static unsigned s_vpRingNext = 0;
+static unsigned s_vpRingInsertsThisFrame = 0;   // churn indicator for the log
+static int      s_invDumpBudget = 8;
+
 // Classifies each logical draw by whether its geometry could have reached the
 // right eye corrected: no parsed VS, a VS the analyzer found no matrix in, or a
 // VS with a matrix whose constant buffers have never once been shifted. Any of
@@ -405,6 +413,33 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     m_drawsVSNeverShiftedThisFrame = 0;
     m_drawsVSStaleShiftThisFrame   = 0;
     m_drawsVSNoSiblingCBThisFrame  = 0;
+
+    if (gInfo.DetectInverseMatrix)
+    {
+        // Step-by-step health of the inverse hunt: ring=0 means nothing was
+        // cached to compare against; scans without hits report the closest
+        // miss as a ratio of the pass bound (1.0 would have passed).
+        unsigned ringValid = 0;
+        for (unsigned i = 0; i < _countof(s_vpRing); ++i)
+            if (s_vpRing[i].valid) ++ringValid;
+        const float bestMiss =
+            (m_invBestMissThisFrame < 1e29f) ? m_invBestMissThisFrame : -1.f;
+        DDILog("  [frame %u] invDetect: ring=%u ringInserts=%u scans=%u hits=%u"
+               " patched=%u learnedReplay=%u updCB=%u updCBPatched=%u bestMiss=%.2f\n",
+               s_frame, ringValid, s_vpRingInsertsThisFrame,
+               m_invScansThisFrame, m_invHitsThisFrame, m_invPatchedThisFrame,
+               m_invLearnedThisFrame, m_updCBWritesThisFrame,
+               m_updCBPatchedThisFrame, bestMiss);
+    }
+    s_vpRingInsertsThisFrame  = 0;
+    m_invScansThisFrame       = 0;
+    m_invHitsThisFrame        = 0;
+    m_invPatchedThisFrame     = 0;
+    m_invLearnedThisFrame     = 0;
+    m_updCBWritesThisFrame    = 0;
+    m_updCBPatchedThisFrame   = 0;
+    m_invBestMissThisFrame    = 1e30f;
+    if (s_invDumpBudget < 1) s_invDumpBudget = 1;
 
     // Which shaders those uncorrected draws belong to: the tree/wire/paint
     // geometry should name itself here.
@@ -1929,13 +1964,123 @@ static bool ShouldSkipProjectionMatrix(const float* f, bool transposed)
     return false;
 }
 
-// outShifted / outRejected are diagnostic tallies (may be null); they feed the
-// per-frame summary so we can see the guards actually firing.
+// ---------------------------------------------------------------------------
+// Numeric inverse-matrix detection (DetectInverseMatrix=1).
+//
+// Deferred renderers reconstruct position in screen-space pixel-shader passes
+// from an inverse view-projection living in a PS-only constant buffer. Shader
+// analysis anchors on SV_Position and never reaches pixel shaders (every
+// CreatePixelShader logs parsed=0), so those buffers land in the `skipped`
+// bucket and the right eye's lighting is computed with the left eye's
+// matrices — a screen-space offset that is constant at all depths.
+//
+// Instead of analysing PS dataflow, identify the matrix numerically: cache
+// the pre-shift (mono) values of every perspective matrix the forward path
+// shifts, then test 4x4 blocks of otherwise-unidentified CB writes for
+// C * V == I. A hit is learned on the buffer like any other target and
+// corrected through the existing matrixIsInverse branch below.
+// ---------------------------------------------------------------------------
+// f interpreted per `transposed` into canonical row-vector layout (the
+// w-producing column at m[3], m[7], m[11], m[15]).
+static void CanonicalizeMat4(const float* f, bool transposed, float* out)
+{
+    if (!transposed) { memcpy(out, f, 16 * sizeof(float)); return; }
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            out[r * 4 + c] = f[c * 4 + r];
+}
+
+static void CacheForwardVP(const float* f, bool transposed)
+{
+    float canon[16];
+    CanonicalizeMat4(f, transposed, canon);
+    for (unsigned i = 0; i < _countof(s_vpRing); ++i)
+        if (s_vpRing[i].valid && memcmp(s_vpRing[i].m, canon, sizeof(canon)) == 0)
+            return;
+    memcpy(s_vpRing[s_vpRingNext].m, canon, sizeof(canon));
+    s_vpRing[s_vpRingNext].valid = true;
+    s_vpRingNext = (s_vpRingNext + 1) % _countof(s_vpRing);
+    ++s_vpRingInsertsThisFrame;
+}
+
+// One product element with a cancellation-aware tolerance: |acc - target|
+// must stay under 1e-4 * (sum of |term|) + 2e-3. Returned as a ratio of that
+// bound, so <= 1 passes and the frame log can report the closest miss.
+static float InverseProductDeviation(const float* c, const float* v, int i, int j)
+{
+    float acc = 0.f, mag = 0.f;
+    for (int k = 0; k < 4; ++k)
+    {
+        const float t = c[i * 4 + k] * v[k * 4 + j];
+        acc += t;
+        mag += fabsf(t);
+    }
+    const float target = (i == j) ? 1.f : 0.f;
+    return fabsf(acc - target) / (1e-4f * mag + 2e-3f);
+}
+
+// Scan the buffer's 4x4 blocks (both storage orders) against the cached
+// forward matrices, newest first. bestMiss tracks the closest failing
+// candidate so a run of zero hits names its margin in the frame log.
+static bool DetectInverseInCB(const unsigned char* data, size_t byteCount,
+                              DWORD& outReg, BOOL& outTransposed, float& bestMiss)
+{
+    const size_t regCount = byteCount / 16;
+    if (regCount < 4) return false;
+    // A real layout keeps invVP near the front; cap the scan so one large
+    // material buffer cannot make every write O(buffer size).
+    const size_t lastReg = (regCount > 128 ? 128 : regCount) - 4;
+    const float* fbuf = reinterpret_cast<const float*>(data);
+    for (size_t reg = 0; reg <= lastReg; ++reg)
+    {
+        for (int orient = 0; orient < 2; ++orient)
+        {
+            float cand[16];
+            CanonicalizeMat4(fbuf + reg * 4, orient == 1, cand);
+            for (unsigned ri = 0; ri < _countof(s_vpRing); ++ri)
+            {
+                const unsigned idx = (s_vpRingNext + _countof(s_vpRing) - 1 - ri)
+                                     % _countof(s_vpRing);
+                if (!s_vpRing[idx].valid) continue;
+                const float* v = s_vpRing[idx].m;
+                // Two-element prefilter before paying for the full product.
+                float dev = InverseProductDeviation(cand, v, 0, 0);
+                const float d01 = InverseProductDeviation(cand, v, 0, 1);
+                if (d01 > dev) dev = d01;
+                if (dev > 1.f)
+                {
+                    if (dev < bestMiss) bestMiss = dev;
+                    continue;
+                }
+                for (int i = 0; i < 4 && dev <= 1.f; ++i)
+                    for (int j = 0; j < 4; ++j)
+                    {
+                        const float d = InverseProductDeviation(cand, v, i, j);
+                        if (d > dev) dev = d;
+                        if (dev > 1.f) break;
+                    }
+                if (dev <= 1.f)
+                {
+                    outReg = (DWORD)reg;
+                    outTransposed = (orient == 1) ? TRUE : FALSE;
+                    return true;
+                }
+                if (dev < bestMiss) bestMiss = dev;
+            }
+        }
+    }
+    return false;
+}
+
+// outShifted / outRejected / outInvPatched are diagnostic tallies (may be
+// null); they feed the per-frame summary so we can see the guards actually
+// firing.
 static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
                                       float eyeShift,
                                       const std::vector<EyeShiftMatrix>& matrices,
                                       unsigned* outShifted = nullptr,
-                                      unsigned* outRejected = nullptr)
+                                      unsigned* outRejected = nullptr,
+                                      unsigned* outInvPatched = nullptr)
 {
     if (eyeShift == 0.f || matrices.empty()) return;
     constexpr size_t kRegBytes  = 16;
@@ -1967,6 +2112,7 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
                 f[14] -= s * f[2];  f[15] -= s * f[3];
             }
             if (outShifted) ++*outShifted;
+            if (outInvPatched) ++*outInvPatched;
             continue;
         }
 
@@ -2010,6 +2156,8 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         if (basisWn > 1e-6f && fabsf(basisWn - 1.f) < 0.05f)
         {
             s_projXScale = basisXn / basisWn;
+            // Pre-shift values: the game derives its inverse from these.
+            if (gInfo.DetectInverseMatrix) CacheForwardVP(f, transposed);
         }
         if (basisWn < s_wnMin) s_wnMin = basisWn;
         if (basisWn > s_wnMax) s_wnMax = basisWn;
@@ -2341,8 +2489,39 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                     {
                         EyeShiftMatrix e = { mem[ti].reg, mem[ti].transposed, mem[ti].inverse, TRUE };
                         targets.push_back(e);
+                        if (mem[ti].inverse) ++m_invLearnedThisFrame;
                     }
                     if (!targets.empty()) analyzerKnows = true;
+                }
+            }
+
+            // Stage 4e.3: still unidentified. Deferred lighting keeps its
+            // inverse view-projection in PS-only buffers that no shader
+            // analysis reaches, so test the bytes numerically.
+            if (targets.empty() && gInfo.DetectInverseMatrix && bytes.size() >= 64)
+            {
+                ++m_invScansThisFrame;
+                DWORD ireg; BOOL itr;
+                if (DetectInverseInCB(bytes.data(), bytes.size(), ireg, itr,
+                                      m_invBestMissThisFrame))
+                {
+                    ++m_invHitsThisFrame;
+                    EyeShiftMatrix em = { ireg, itr, TRUE, FALSE };
+                    targets.push_back(em);
+                    if (Buffer11Proxy* ib = TryUnwrapBuffer(pResource))
+                    {
+                        Buffer11Proxy::MatrixTarget mt = { ireg, itr, TRUE };
+                        ib->LearnMatrix(mt);
+                    }
+                    if (s_invDumpBudget > 0)
+                    {
+                        --s_invDumpBudget;
+                        DDILog("  invDetect: HIT buf=%p bytes=%zu reg=%u transposed=%d\n",
+                               pResource, bytes.size(), ireg, (int)itr);
+                        DumpMatrix("inverse-hit",
+                                   reinterpret_cast<const float*>(bytes.data()) + ireg * 4,
+                                   ireg, itr != FALSE);
+                    }
                 }
             }
 
@@ -2374,7 +2553,8 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                             ApplyTargetedEyeShiftToCB(
                                 static_cast<unsigned char*>(mapped.pData),
                                 bytes.size(), eyeShift, targets,
-                                &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame);
+                                &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame,
+                                &m_invPatchedThisFrame);
                             if (m_cbMatShiftedThisFrame != before) bp->MarkShifted(s_frameId);
                         }
                         else if (useBlindNow)
@@ -2421,7 +2601,8 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                         ApplyTargetedEyeShiftToCB(
                             static_cast<unsigned char*>(mapped.pData),
                             bytes.size(), eyeShift, targets,
-                            &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame);
+                            &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame,
+                            &m_invPatchedThisFrame);
                     }
                     else if (useBlind)
                     {
@@ -2454,13 +2635,78 @@ void Context11Proxy::DoUpdateSubresource(
                                   pSrcData, SrcRowPitch, SrcDepthPitch);
 
     // Buffers have no stereo sibling in UnwrapResourceForEye, so CBs filled by
-    // UpdateSubresource rather than Map need mirroring explicitly.
+    // UpdateSubresource rather than Map need mirroring explicitly. This path
+    // used to mirror verbatim, so a matrix written here reached the right eye
+    // unshifted no matter what the Map/Unmap policy knew about the buffer;
+    // full-buffer writes now get the same learned-target + inverse-detection
+    // treatment, boxed partial writes keep the verbatim copy.
     if (gInfo.DuplicateDraws)
     {
         Buffer11Proxy* bp = TryUnwrapBuffer(pDstResource);
         if (bp && bp->GetRealRight())
-            m_real->UpdateSubresource(bp->GetRealRight(), DstSubresource, pDstBox,
-                                      pSrcData, SrcRowPitch, SrcDepthPitch);
+        {
+            ++m_updCBWritesThisFrame;
+            bool patched = false;
+            if (!pDstBox && pSrcData)
+            {
+                D3D11_BUFFER_DESC bd = {};
+                bp->GetRealRight()->GetDesc(&bd);
+                std::vector<unsigned char> tmp(bd.ByteWidth);
+                memcpy(tmp.data(), pSrcData, bd.ByteWidth);
+
+                std::vector<EyeShiftMatrix> targets;
+                const std::vector<Buffer11Proxy::MatrixTarget>& mem = bp->LearnedMatrices();
+                for (size_t ti = 0; ti < mem.size(); ++ti)
+                {
+                    EyeShiftMatrix e = { mem[ti].reg, mem[ti].transposed,
+                                         mem[ti].inverse, TRUE };
+                    targets.push_back(e);
+                    if (mem[ti].inverse) ++m_invLearnedThisFrame;
+                }
+                if (targets.empty() && gInfo.DetectInverseMatrix && bd.ByteWidth >= 64)
+                {
+                    ++m_invScansThisFrame;
+                    DWORD ireg; BOOL itr;
+                    if (DetectInverseInCB(tmp.data(), bd.ByteWidth, ireg, itr,
+                                          m_invBestMissThisFrame))
+                    {
+                        ++m_invHitsThisFrame;
+                        EyeShiftMatrix em = { ireg, itr, TRUE, FALSE };
+                        targets.push_back(em);
+                        Buffer11Proxy::MatrixTarget mt = { ireg, itr, TRUE };
+                        bp->LearnMatrix(mt);
+                        if (s_invDumpBudget > 0)
+                        {
+                            --s_invDumpBudget;
+                            DDILog("  invDetect: HIT-updSub buf=%p bytes=%u reg=%u"
+                                   " transposed=%d\n",
+                                   pDstResource, bd.ByteWidth, ireg, (int)itr);
+                            DumpMatrix("inverse-hit",
+                                       reinterpret_cast<const float*>(tmp.data()) + ireg * 4,
+                                       ireg, itr != FALSE);
+                        }
+                    }
+                }
+                if (!targets.empty())
+                {
+                    const unsigned before = m_cbMatShiftedThisFrame;
+                    float eyeShift = wiz3D_GetEffectiveEyeShift()
+                                   * ProfileShaderMultiplier(m_parent, m_boundVS);
+                    ApplyTargetedEyeShiftToCB(tmp.data(), bd.ByteWidth, eyeShift,
+                                              targets, &m_cbMatShiftedThisFrame,
+                                              &m_cbMatRejectedThisFrame,
+                                              &m_invPatchedThisFrame);
+                    if (m_cbMatShiftedThisFrame != before) bp->MarkShifted(s_frameId);
+                    m_real->UpdateSubresource(bp->GetRealRight(), DstSubresource,
+                                              nullptr, tmp.data(), 0, 0);
+                    ++m_updCBPatchedThisFrame;
+                    patched = true;
+                }
+            }
+            if (!patched)
+                m_real->UpdateSubresource(bp->GetRealRight(), DstSubresource, pDstBox,
+                                          pSrcData, SrcRowPitch, SrcDepthPitch);
+        }
     }
 }
 

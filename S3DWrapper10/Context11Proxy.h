@@ -478,6 +478,17 @@ private:
     // rejected by the ortho / shadow-map guards in ShouldSkipProjectionMatrix.
     unsigned             m_cbMatShiftedThisFrame  = 0;
     unsigned             m_cbMatRejectedThisFrame = 0;
+    // DetectInverseMatrix pipeline (per-frame): scans of unidentified CB
+    // writes, fresh numeric detections, inverse matrices actually patched,
+    // learned inverse targets replayed, and CB traffic through the
+    // UpdateSubresource mirror (writes seen / writes patched).
+    unsigned             m_invScansThisFrame     = 0;
+    unsigned             m_invHitsThisFrame      = 0;
+    unsigned             m_invPatchedThisFrame   = 0;
+    unsigned             m_invLearnedThisFrame   = 0;
+    unsigned             m_updCBWritesThisFrame  = 0;
+    unsigned             m_updCBPatchedThisFrame = 0;
+    float                m_invBestMissThisFrame  = 1e30f;
     // Draw-level stereo coverage: why a draw's geometry could not be corrected.
     unsigned             m_drawsVSUnparsedThisFrame     = 0;
     unsigned             m_drawsVSNoMatrixThisFrame     = 0;

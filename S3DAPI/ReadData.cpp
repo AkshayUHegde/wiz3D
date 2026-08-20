@@ -291,6 +291,7 @@ bool ReadConfigRouterType()
 			DECLARE_FVALUE(COMWrapEyeShift),
 			DECLARE_BVALUE(DisableBlindCBScan),
 			DECLARE_BVALUE(FullColumnEyeShift),
+			DECLARE_BVALUE(DetectInverseMatrix),
 			DECLARE_BVALUE(ModifyShadersDX11),
 			DECLARE_IVALUE(ModifyShadersMaxCount),
 			DECLARE_IVALUE(DumpModifiedShaders),
