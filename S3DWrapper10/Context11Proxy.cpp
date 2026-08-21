@@ -302,7 +302,20 @@ void Context11Proxy::TallyDrawCoverage()
         if (slot >= kMaxVSCBSlots || !m_boundVSCBs[slot]) continue;
         anySlot = true;
         Buffer11Proxy* b = TryUnwrapBuffer(m_boundVSCBs[slot]);
-        if (!b || !b->EverShifted()) continue;
+        if (!b) continue;
+        // Draw-time teaching: the write path attributes a CB by the shader
+        // bound at write time, but Far Cry 4's job renderer writes its CBs
+        // long before binding the consumer, so not one write was ever
+        // targeted. Here both sides are certain — teach the buffer so later
+        // writes hit the learned path (unit-w guarded).
+        for (const auto& pmd : it->second)
+        {
+            if (pmd.incorrectProjection) continue;
+            Buffer11Proxy::MatrixTarget mt = { pmd.matrixRegister,
+                                               pmd.matrixIsTransposed, FALSE };
+            b->LearnMatrix(mt);
+        }
+        if (!b->EverShifted()) continue;
         anyEver = true;
         if (b->ShiftedFrame() > newest) newest = b->ShiftedFrame();
     }
