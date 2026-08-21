@@ -423,6 +423,7 @@ private:
     // the targets are mono, or we are already inside the right-eye pass.
     bool BeginRightEyeDraw();
     void EndRightEyeDraw();
+    void ProbeRightCB();
 
     // OM-UAV binding, AddRef'd, so BindEye can re-issue it per eye — a plain
     // OMSetRenderTargets would silently unbind the UAVs.

@@ -234,6 +234,8 @@ void Context11Proxy::ReleaseStereoShiftCBs()
 // tracks the current scene instead of only the first frames after launch.
 static int s_matDumpRejected = 0;
 static int s_matDumpShifted  = 0;
+static int s_mirrorLogBudget = 40;   // [mirror] copy/resolve samples, same refill
+static int s_cbProbeBudget   = 2;    // [cbprobe] right-CB readback at dup draws
 
 // Present counter, so a buffer's last eye-shift can be dated against the frame
 // being drawn rather than only "ever shifted at some point".
@@ -253,6 +255,7 @@ struct CachedForwardVP { float m[16]; bool valid; };
 static CachedForwardVP s_vpRing[32];
 static unsigned s_vpRingNext = 0;
 static unsigned s_vpRingInsertsThisFrame = 0;   // churn indicator for the log
+static unsigned s_invStaleThisFrame = 0;        // learned inverses failing re-verify
 static int      s_invDumpBudget = 8;
 
 // Classifies each logical draw by whether its geometry could have reached the
@@ -425,12 +428,14 @@ void Context11Proxy::LogAndResetFrameDrawStats()
         const float bestMiss =
             (m_invBestMissThisFrame < 1e29f) ? m_invBestMissThisFrame : -1.f;
         DDILog("  [frame %u] invDetect: ring=%u ringInserts=%u scans=%u hits=%u"
-               " patched=%u learnedReplay=%u updCB=%u updCBPatched=%u bestMiss=%.2f\n",
+               " patched=%u stale=%u learnedReplay=%u updCB=%u updCBPatched=%u"
+               " bestMiss=%.2f\n",
                s_frame, ringValid, s_vpRingInsertsThisFrame,
                m_invScansThisFrame, m_invHitsThisFrame, m_invPatchedThisFrame,
-               m_invLearnedThisFrame, m_updCBWritesThisFrame,
+               s_invStaleThisFrame, m_invLearnedThisFrame, m_updCBWritesThisFrame,
                m_updCBPatchedThisFrame, bestMiss);
     }
+    s_invStaleThisFrame       = 0;
     s_vpRingInsertsThisFrame  = 0;
     m_invScansThisFrame       = 0;
     m_invHitsThisFrame        = 0;
@@ -488,6 +493,8 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     // Refill the matrix dump budget so each report is followed by a fresh sample.
     s_matDumpRejected = 6;
     s_matDumpShifted  = 3;
+    if (s_mirrorLogBudget < 4) s_mirrorLogBudget = 4;
+    if (s_cbProbeBudget < 2) s_cbProbeBudget = 2;
 
     m_drawsThisFrame          = 0;
     m_dispatchesThisFrame     = 0;
@@ -872,7 +879,62 @@ bool Context11Proxy::BeginRightEyeDraw()
     }
     m_activeEye = Eye::Right;
     BindEye(true);
+    ProbeRightCB();
     return true;
+}
+
+// The last unverified link (BC2: patches land, binds fire, output still
+// byte-identical): at a duplicated draw whose VS cb0 was patched THIS frame,
+// read back both siblings and compare the WVP registers the draw consumes.
+void Context11Proxy::ProbeRightCB()
+{
+    if (!gInfo.CollectDebugInformation) return;
+    if (s_cbProbeBudget <= 0) return;
+    ID3D11Buffer* l = m_cbSlots[ST_VS].left[0];
+    ID3D11Buffer* r = m_cbSlots[ST_VS].right[0];
+    if (!l || !r || l == r) return;
+    Buffer11Proxy* bp = m_boundVSCBs[0]
+        ? TryUnwrapBuffer(m_boundVSCBs[0]) : nullptr;
+    if (!bp || !bp->EverShifted() || bp->ShiftedFrame() != s_frameId) return;
+    --s_cbProbeBudget;
+
+    D3D11_BUFFER_DESC bd = {};
+    l->GetDesc(&bd);
+    if (bd.ByteWidth < 64) return;
+    D3D11_BUFFER_DESC sd = bd;
+    sd.Usage          = D3D11_USAGE_STAGING;
+    sd.BindFlags      = 0;
+    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    sd.MiscFlags      = 0;
+    ID3D11Device* dev = nullptr;
+    m_real->GetDevice(&dev);
+    if (!dev) return;
+    ID3D11Buffer* sl = nullptr;
+    ID3D11Buffer* sr = nullptr;
+    dev->CreateBuffer(&sd, nullptr, &sl);
+    dev->CreateBuffer(&sd, nullptr, &sr);
+    dev->Release();
+    if (sl && sr)
+    {
+        m_real->CopyResource(sl, l);
+        m_real->CopyResource(sr, r);
+        D3D11_MAPPED_SUBRESOURCE ml = {}, mr = {};
+        if (SUCCEEDED(m_real->Map(sl, 0, D3D11_MAP_READ, 0, &ml)) &&
+            SUCCEEDED(m_real->Map(sr, 0, D3D11_MAP_READ, 0, &mr)))
+        {
+            const float* fl = (const float*)ml.pData;
+            const float* fr = (const float*)mr.pData;
+            DDILog("  [cbprobe] vs-cb0 L=%p R=%p wvp %s | L row0 %.4f %.4f %.4f %.4f"
+                   " | R row0 %.4f %.4f %.4f %.4f\n",
+                   (void*)l, (void*)r,
+                   memcmp(fl, fr, 64) == 0 ? "IDENTICAL" : "DIFFERS",
+                   fl[0], fl[1], fl[2], fl[3], fr[0], fr[1], fr[2], fr[3]);
+        }
+        if (ml.pData) m_real->Unmap(sl, 0);
+        if (mr.pData) m_real->Unmap(sr, 0);
+    }
+    if (sl) sl->Release();
+    if (sr) sr->Release();
 }
 
 void Context11Proxy::EndRightEyeDraw()
@@ -1743,6 +1805,31 @@ static inline bool NeedsRightMirror(ID3D11Resource* pDst, bool pickRight)
            UnwrapResourceForEye(pDst, true) != UnwrapResourceForEye(pDst, false);
 }
 
+// Samples stereo-dst copy/resolve mirrors: a mono src into a full-screen dst
+// is the op that flattens both eyes into one image (BC2: right BB
+// byte-identical to left while its sibling CBs carry the eye shift).
+static void LogMirrorOp(const char* op, ID3D11Resource* dst, ID3D11Resource* src)
+{
+    if (s_mirrorLogBudget <= 0) return;
+    --s_mirrorLogBudget;
+    const bool srcStereo =
+        UnwrapResourceForEye(src, true) != UnwrapResourceForEye(src, false);
+    UINT w = 0, h = 0;
+    if (dst)
+    {
+        D3D11_RESOURCE_DIMENSION dim;
+        dst->GetType(&dim);
+        if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
+        {
+            D3D11_TEXTURE2D_DESC td = {};
+            static_cast<ID3D11Texture2D*>(dst)->GetDesc(&td);
+            w = td.Width; h = td.Height;
+        }
+    }
+    DDILog("  [mirror] %s dst=%p %ux%u srcStereo=%d src=%p\n",
+           op, (void*)dst, w, h, (int)srcStereo, (void*)src);
+}
+
 void STDMETHODCALLTYPE Context11Proxy::GenerateMips(ID3D11ShaderResourceView* pShaderResourceView)
 {
     bool pickRight = (m_activeEye == Eye::Right);
@@ -1760,8 +1847,11 @@ void Context11Proxy::DoCopyResource(
     m_real->CopyResource(UnwrapResourceForEye(pDstResource, pickRight),
                          UnwrapResourceForEye(pSrcResource, pickRight));
     if (NeedsRightMirror(pDstResource, pickRight))
+    {
+        LogMirrorOp("CopyResource", pDstResource, pSrcResource);
         m_real->CopyResource(UnwrapResourceForEye(pDstResource, true),
                              UnwrapResourceForEye(pSrcResource, true));
+    }
 }
 
 void STDMETHODCALLTYPE Context11Proxy::CopyResource(
@@ -1789,9 +1879,12 @@ void Context11Proxy::DoCopySubresourceRegion(
         UnwrapResourceForEye(pDstResource, pickRight), DstSubresource, DstX, DstY, DstZ,
         UnwrapResourceForEye(pSrcResource, pickRight), SrcSubresource, pSrcBox);
     if (NeedsRightMirror(pDstResource, pickRight))
+    {
+        LogMirrorOp("CopySubresourceRegion", pDstResource, pSrcResource);
         m_real->CopySubresourceRegion(
             UnwrapResourceForEye(pDstResource, true), DstSubresource, DstX, DstY, DstZ,
             UnwrapResourceForEye(pSrcResource, true), SrcSubresource, pSrcBox);
+    }
 }
 
 void STDMETHODCALLTYPE Context11Proxy::CopySubresourceRegion(
@@ -2019,6 +2112,16 @@ static float InverseProductDeviation(const float* c, const float* v, int i, int 
     return fabsf(acc - target) / (1e-4f * mag + 2e-3f);
 }
 
+// NaN poisons the max-accumulated deviation test: every comparison with NaN
+// is false, so a NaN term can never raise `dev` and a garbage block passes
+// (first Far Cry 3 "hit" was a NaN-filled matrix). Reject non-finite blocks.
+static bool AllFinite16(const float* f)
+{
+    for (int i = 0; i < 16; ++i)
+        if (f[i] != f[i] || fabsf(f[i]) > 1e30f) return false;
+    return true;
+}
+
 // Scan the buffer's 4x4 blocks (both storage orders) against the cached
 // forward matrices, newest first. bestMiss tracks the closest failing
 // candidate so a run of zero hits names its margin in the frame log.
@@ -2033,6 +2136,7 @@ static bool DetectInverseInCB(const unsigned char* data, size_t byteCount,
     const float* fbuf = reinterpret_cast<const float*>(data);
     for (size_t reg = 0; reg <= lastReg; ++reg)
     {
+        if (!AllFinite16(fbuf + reg * 4)) continue;
         for (int orient = 0; orient < 2; ++orient)
         {
             float cand[16];
@@ -2072,6 +2176,40 @@ static bool DetectInverseInCB(const unsigned char* data, size_t byteCount,
     return false;
 }
 
+// Re-check a learned inverse each write before trusting it: pooled buffers
+// are reused for unrelated content, and the inverse patch skips every shape
+// guard, so a stale target smears the shear across arbitrary constants
+// (Far Cry 3: white/colorful flashes at ~20k patches per 60 frames). The
+// camera case re-passes trivially — the game rewrites both matrices from the
+// same camera each frame, and its VP re-enters the ring at geometry time
+// before the lighting CB is written.
+static bool VerifyInverseAgainstRing(const float* f, bool transposed)
+{
+    if (!AllFinite16(f)) return false;
+    float cand[16];
+    CanonicalizeMat4(f, transposed, cand);
+    for (unsigned ri = 0; ri < _countof(s_vpRing); ++ri)
+    {
+        const unsigned idx = (s_vpRingNext + _countof(s_vpRing) - 1 - ri)
+                             % _countof(s_vpRing);
+        if (!s_vpRing[idx].valid) continue;
+        const float* v = s_vpRing[idx].m;
+        float dev = InverseProductDeviation(cand, v, 0, 0);
+        const float d01 = InverseProductDeviation(cand, v, 0, 1);
+        if (d01 > dev) dev = d01;
+        if (dev > 1.f) continue;
+        for (int i = 0; i < 4 && dev <= 1.f; ++i)
+            for (int j = 0; j < 4; ++j)
+            {
+                const float d = InverseProductDeviation(cand, v, i, j);
+                if (d > dev) dev = d;
+                if (dev > 1.f) break;
+            }
+        if (dev <= 1.f) return true;
+    }
+    return false;
+}
+
 // outShifted / outRejected / outInvPatched are diagnostic tallies (may be
 // null); they feed the per-frame summary so we can see the guards actually
 // firing.
@@ -2098,6 +2236,12 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         // no ortho / shadow signature to test.
         if (m.matrixIsInverse)
         {
+            if (m.matrixFromLearned && !VerifyInverseAgainstRing(f, transposed))
+            {
+                ++s_invStaleThisFrame;
+                if (outRejected) ++*outRejected;
+                continue;
+            }
             const float s = EyeShiftB(eyeShift);
             if (transposed)
             {
@@ -2534,8 +2678,11 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                 ID3D11Buffer* rightBuf = bp ? bp->GetRealRight() : nullptr;
                 if (rightBuf)
                 {
+                    // DisableBlindCBScan means never guess, including writes
+                    // under no/unparsed VS — those slipped through and were
+                    // heuristically shifted ~138x/frame in Far Cry 3.
                     const bool useBlindNow = targets.empty() &&
-                        !(gInfo.DisableBlindCBScan && analyzerKnows);
+                                             !gInfo.DisableBlindCBScan;
                     if      (!targets.empty()) ++m_cbTargetedThisFrame;
                     else if (useBlindNow)      ++m_cbBlindThisFrame;
                     else                       ++m_cbSkippedThisFrame;
@@ -2574,8 +2721,9 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
             // could not parse, is copied through to the right eye untouched.
             // Legacy behaviour (flag clear) always falls back to the heuristic
             // whole-buffer scan whenever `targets` is empty.
+            // Same never-guess policy as the DuplicateDraws path above.
             const bool useBlind = targets.empty() &&
-                                  !(gInfo.DisableBlindCBScan && analyzerKnows);
+                                  !gInfo.DisableBlindCBScan;
             if      (!targets.empty()) ++m_cbTargetedThisFrame;
             else if (useBlind)         ++m_cbBlindThisFrame;
             else                       ++m_cbSkippedThisFrame;
@@ -2867,9 +3015,12 @@ void Context11Proxy::DoResolveSubresource(
         UnwrapResourceForEye(pDstResource, pickRight), DstSubresource,
         UnwrapResourceForEye(pSrcResource, pickRight), SrcSubresource, Format);
     if (NeedsRightMirror(pDstResource, pickRight))
+    {
+        LogMirrorOp("ResolveSubresource", pDstResource, pSrcResource);
         m_real->ResolveSubresource(
             UnwrapResourceForEye(pDstResource, true), DstSubresource,
             UnwrapResourceForEye(pSrcResource, true), SrcSubresource, Format);
+    }
 }
 
 void STDMETHODCALLTYPE Context11Proxy::ResolveSubresource(
