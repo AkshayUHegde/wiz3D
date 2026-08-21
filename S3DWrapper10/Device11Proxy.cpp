@@ -132,6 +132,7 @@ Device11Proxy::~Device11Proxy()
         m_dxgiDeviceProxy->Release();
         m_dxgiDeviceProxy = nullptr;
     }
+    if (m_ctxProxy) { Context11Proxy* c = m_ctxProxy; m_ctxProxy = nullptr; c->Release(); }
     if (m_real3) { m_real3->Release(); m_real3 = nullptr; }
     if (m_real2) { m_real2->Release(); m_real2 = nullptr; }
     if (m_real1) { m_real1->Release(); m_real1 = nullptr; }
@@ -568,8 +569,16 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateRenderTargetView(
     return hr;
 }
 
+// Real D3D11 keeps the immediate context alive for the device's lifetime no
+// matter what the app does with its own handle. Without this ref, a game that
+// drops the context it got from D3D11CreateDevice (UE3 does, then re-fetches it
+// via GetImmediateContext) destroyed our proxy and the real context under a
+// live device — BioShock Infinite faulted in the driver during device setup.
 void Device11Proxy::SetImmediateContextProxy(Context11Proxy* ctxProxy)
 {
+    if (m_ctxProxy == ctxProxy) return;
+    if (ctxProxy)   ctxProxy->AddRef();
+    if (m_ctxProxy) m_ctxProxy->Release();
     m_ctxProxy = ctxProxy;
 }
 
