@@ -30,6 +30,10 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // see DXGIDeviceProxy.h — bundled
 #include <dxgi1_2.h>
 #include <dxgi1_5.h>   // IDXGISwapChain2/3/4
 
+// SR-Lib (ThirdPartyLibs/SR-Lib_v2.0.0): lightfield weave for Simulated
+// Reality displays. Forward-declared so only the .cpp includes SR.hpp.
+namespace SimulatedReality { class SRInterfaceDX11; }
+
 namespace wiz3d
 {
 
@@ -133,6 +137,23 @@ private:
     void    ReleaseStereoBackBuffer();
     void    ReleaseComposite();
     void    DoComposite();
+    // The composite pass parameterized by destination: the SBS output draws
+    // into the real BB directly; the SR weave path draws the same SBS into
+    // a 2WxH offscreen texture that the weaver consumes.
+    void    DrawCompositePass(ID3D11DeviceContext* ctx,
+                              ID3D11RenderTargetView* rtv,
+                              UINT width, UINT height);
+
+    // Simulated Reality weave output (lightfield displays such as the
+    // SpatialLabs Go), selected by the same <OutputMethodDll> config key the
+    // DX9 path uses for its output plugin. Composite goes to an offscreen
+    // SBS texture and the SR weaver writes the woven result into the real
+    // BB. Any failure is sticky and falls back to plain SBS.
+    bool    WeaveSelected() const;
+    bool    EnsureSRWeaver();
+    HRESULT EnsureSRSBSTexture();
+    bool    RunSRWeave(ID3D11DeviceContext* ctx);
+    void    ReleaseSRWeave(bool releaseWeaver);
 
     IDXGISwapChain*  m_real;     // owned (released in dtor)
     IDXGISwapChain1* m_real1;    // optional, owned, nullable
@@ -168,6 +189,18 @@ private:
     ID3D11RasterizerState*    m_compositeRaster;
     ID3D11BlendState*         m_compositeBlend;
     ID3D11DepthStencilState*  m_compositeDepthStencil;
+
+    // SR weave state. The weaver survives ResizeBuffers (it is bound to the
+    // device context + window, not the BB); the SBS input texture tracks the
+    // BB size/format and is recreated on mismatch.
+    SimulatedReality::SRInterfaceDX11* m_srInterface = nullptr;
+    bool                      m_srFailed  = false;
+    ID3D11Texture2D*          m_srSBSTex  = nullptr;
+    ID3D11RenderTargetView*   m_srSBSRTV  = nullptr;
+    ID3D11ShaderResourceView* m_srSBSSRV  = nullptr;
+    UINT                      m_srSBSW    = 0;
+    UINT                      m_srSBSH    = 0;
+    DXGI_FORMAT               m_srSBSFmt  = DXGI_FORMAT_UNKNOWN;
 };
 
 } // namespace wiz3d

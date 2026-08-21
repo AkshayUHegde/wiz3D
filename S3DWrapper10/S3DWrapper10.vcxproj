@@ -110,6 +110,20 @@
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Final Release|x64'">$(SolutionDir)bin\$(Configuration)\Win64\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Final Release|x64'">Win64\$(Configuration)\</IntDir>
   </PropertyGroup>
+  <!-- SR-Lib weave (SwapChain11Proxy): the SR runtime DLLs must be delay-loaded
+       by the consumer of the static lib (see SR.hpp); names are arch-suffixed. -->
+  <ItemDefinitionGroup Condition="'$(Platform)'=='Win32'">
+    <Link>
+      <AdditionalDependencies>delayimp.lib;$(SRLib);%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>SimulatedRealityCore32.dll;SimulatedRealityDirectX32.dll;SimulatedRealityOpenGL32.dll;opencv_world343.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <Link>
+      <AdditionalDependencies>delayimp.lib;$(SRLib);%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>SimulatedRealityCore.dll;SimulatedRealityDirectX.dll;SimulatedRealityOpenGL.dll;opencv_world343.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;S3DWRAPPER10_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>

@@ -10,6 +10,7 @@
 #include "..\S3DAPI\ReadData.h"      // WriteInputData — persist hotkey-tuned stereo
 #include "..\S3DAPI\KeyboardHook.h"  // gKbdHook — the DX9 paths' hotkey thread
 #include <d3dcompiler.h>
+#include "SR.hpp"                    // Simulated Reality weave (delay-loaded runtime)
 
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -74,6 +75,7 @@ SwapChain11Proxy::~SwapChain11Proxy()
     // teardown, but the COM-wrap path never did, so tuning died with the run.
     WriteInputData(&gInfo.Input);
     gKbdHook.clear();
+    ReleaseSRWeave(true);
     ReleaseStereoBackBuffer();
     ReleaseComposite();
     if (m_real4)  { m_real4->Release();  m_real4  = nullptr; }
@@ -404,10 +406,9 @@ void SwapChain11Proxy::ReleaseComposite()
 
 void SwapChain11Proxy::DoComposite()
 {
-    // Stage 4d: bind real BB as RT, LEFT + RIGHT wiz3D BB siblings as
-    // PS SRVs, fullscreen triangle, draw. State the game has set is
-    // clobbered; the recorded command stream replays per-eye state for
-    // the next frame's draws so anything important gets re-issued.
+    // Stage 4d: state the game has set is clobbered by the output pass; the
+    // recorded command stream replays per-eye state for the next frame's
+    // draws so anything important gets re-issued.
     if (!m_parent || !m_realBBRTV || !m_leftSRV || !m_rightSRV) return;
     if (FAILED(EnsureComposite())) return;
 
@@ -415,16 +416,29 @@ void SwapChain11Proxy::DoComposite()
     m_parent->GetReal()->GetImmediateContext(&ctx);
     if (!ctx) return;
 
+    if (WeaveSelected() && RunSRWeave(ctx))
+    {
+        ctx->Release();
+        return;
+    }
+    DrawCompositePass(ctx, m_realBBRTV, m_bbWidth, m_bbHeight);
+    ctx->Release();
+}
+
+void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
+                                         ID3D11RenderTargetView* rtv,
+                                         UINT width, UINT height)
+{
     // Unbind any SRVs that might collide with t0/t1 (the game's PSSet
     // probably already has shader inputs there). Cheap defensive clear.
     ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
     ctx->PSSetShaderResources(0, 2, nullSRVs);
 
     // Composite pass setup.
-    ctx->OMSetRenderTargets(1, &m_realBBRTV, nullptr);
+    ctx->OMSetRenderTargets(1, &rtv, nullptr);
     D3D11_VIEWPORT vp = {};
-    vp.Width    = (float)m_bbWidth;
-    vp.Height   = (float)m_bbHeight;
+    vp.Width    = (float)width;
+    vp.Height   = (float)height;
     vp.MinDepth = 0.f;
     vp.MaxDepth = 1.f;
     ctx->RSSetViewports(1, &vp);
@@ -463,8 +477,126 @@ void SwapChain11Proxy::DoComposite()
     // Unbind our SRVs so the game's next OMSetRenderTargets binding the
     // wrapped BB-RTV doesn't trip a D3D11 read/write hazard warning.
     ctx->PSSetShaderResources(0, 2, nullSRVs);
+}
 
-    ctx->Release();
+// Same config key the DX9 wrapper uses to pick its output plugin.
+bool SwapChain11Proxy::WeaveSelected() const
+{
+    return _tcsicmp(gInfo.OutputMethodDll, _T("SimulatedRealityWeaveOutput")) == 0;
+}
+
+bool SwapChain11Proxy::EnsureSRWeaver()
+{
+    if (m_srFailed) return false;
+    if (m_srInterface) return true;
+    if (!m_parent || !m_real) return false;
+
+    DXGI_SWAP_CHAIN_DESC scDesc = {};
+    if (FAILED(m_real->GetDesc(&scDesc))) { m_srFailed = true; return false; }
+
+    ID3D11Device* dev = m_parent->GetReal();
+    if (!dev) { m_srFailed = true; return false; }
+    ID3D11DeviceContext* immCtx = nullptr;
+    dev->GetImmediateContext(&immCtx);
+    if (!immCtx) { m_srFailed = true; return false; }
+
+    // E_NOINTERFACE when the delay-loaded SR runtime is absent.
+    SimulatedReality::SRInterfaceDX11* sr = nullptr;
+    HRESULT hr = SimulatedReality::CreateSRInterfaceDX11(immCtx, scDesc.OutputWindow, &sr);
+    immCtx->Release();
+    if (FAILED(hr) || !sr)
+    {
+        DDILog("SwapChain11Proxy::EnsureSRWeaver: CreateSRInterfaceDX11 failed"
+               " 0x%08lX (hWnd=%p) -- falling back to SBS for this session\n",
+               hr, (void*)scDesc.OutputWindow);
+        m_srFailed = true;
+        return false;
+    }
+    m_srInterface = sr;
+    DDILog("SwapChain11Proxy::EnsureSRWeaver: ready (hWnd=%p sr=%p)\n",
+           (void*)scDesc.OutputWindow, (void*)sr);
+    return true;
+}
+
+HRESULT SwapChain11Proxy::EnsureSRSBSTexture()
+{
+    const UINT        wantW   = m_bbWidth * 2;
+    const UINT        wantH   = m_bbHeight;
+    const DXGI_FORMAT wantFmt = m_bbFormat;
+    if (!wantW || !wantH || wantFmt == DXGI_FORMAT_UNKNOWN) return E_FAIL;
+    if (m_srSBSTex && m_srSBSW == wantW && m_srSBSH == wantH && m_srSBSFmt == wantFmt)
+        return S_OK;
+
+    ReleaseSRWeave(false);
+
+    ID3D11Device* dev = m_parent ? m_parent->GetReal() : nullptr;
+    if (!dev) return E_FAIL;
+
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width            = wantW;
+    td.Height           = wantH;
+    td.MipLevels        = 1;
+    td.ArraySize        = 1;
+    td.Format           = wantFmt;
+    td.SampleDesc.Count = 1;
+    td.Usage            = D3D11_USAGE_DEFAULT;
+    td.BindFlags        = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    HRESULT hr = dev->CreateTexture2D(&td, nullptr, &m_srSBSTex);
+    if (FAILED(hr)) return hr;
+    hr = dev->CreateRenderTargetView(m_srSBSTex, nullptr, &m_srSBSRTV);
+    if (FAILED(hr)) { ReleaseSRWeave(false); return hr; }
+    hr = dev->CreateShaderResourceView(m_srSBSTex, nullptr, &m_srSBSSRV);
+    if (FAILED(hr)) { ReleaseSRWeave(false); return hr; }
+
+    m_srSBSW = wantW; m_srSBSH = wantH; m_srSBSFmt = wantFmt;
+
+    // Bind the weave input once per texture creation, not per frame.
+    if (m_srInterface) m_srInterface->SetInputTexture(m_srSBSSRV);
+
+    DDILog("SwapChain11Proxy::EnsureSRSBSTexture: %ux%u fmt=%d tex=%p\n",
+           wantW, wantH, (int)wantFmt, (void*)m_srSBSTex);
+    return S_OK;
+}
+
+bool SwapChain11Proxy::RunSRWeave(ID3D11DeviceContext* ctx)
+{
+    if (!EnsureSRWeaver()) return false;
+    if (FAILED(EnsureSRSBSTexture())) return false;
+
+    DrawCompositePass(ctx, m_srSBSRTV, m_srSBSW, m_srSBSH);
+
+    // Weave() reads the registered input SRV and writes into the bound RT.
+    ctx->OMSetRenderTargets(1, &m_realBBRTV, nullptr);
+    D3D11_VIEWPORT vp = {};
+    vp.Width    = (float)m_bbWidth;
+    vp.Height   = (float)m_bbHeight;
+    vp.MinDepth = 0.f;
+    vp.MaxDepth = 1.f;
+    ctx->RSSetViewports(1, &vp);
+    m_srInterface->Weave();
+
+    static int s_logged = 0;
+    if (s_logged < 3)
+    {
+        ++s_logged;
+        DDILog("SwapChain11Proxy::RunSRWeave: weave OK (%ux%u -> %ux%u)\n",
+               m_srSBSW, m_srSBSH, m_bbWidth, m_bbHeight);
+    }
+    return true;
+}
+
+void SwapChain11Proxy::ReleaseSRWeave(bool releaseWeaver)
+{
+    if (m_srSBSSRV) { m_srSBSSRV->Release(); m_srSBSSRV = nullptr; }
+    if (m_srSBSRTV) { m_srSBSRTV->Release(); m_srSBSRTV = nullptr; }
+    if (m_srSBSTex) { m_srSBSTex->Release(); m_srSBSTex = nullptr; }
+    m_srSBSW = m_srSBSH = 0;
+    m_srSBSFmt = DXGI_FORMAT_UNKNOWN;
+    if (releaseWeaver && m_srInterface)
+    {
+        m_srInterface->Delete();
+        m_srInterface = nullptr;
+    }
 }
 
 HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetBuffer(UINT Buffer, REFIID riid, void** ppSurface)
@@ -509,6 +641,63 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetBuffer(UINT Buffer, REFIID riid, 
 
 static int s_FramePresentCounter = 0;
 
+// Every 60th Present: readback both BB siblings and compare bytes. Splits the
+// "right eye shows the left image" space in two — identical bytes means the
+// right-eye draws painted left content (hunt upstream), differing bytes means
+// the composite sampled the wrong SRV (hunt here).
+static void CompareEyeBackBuffers(ID3D11Device* dev, ID3D11DeviceContext* ctx,
+                                  ID3D11Texture2D* leftBB, ID3D11Texture2D* rightBB)
+{
+    static int s_count = 0;
+    if (!gInfo.CollectDebugInformation) return;
+    if (!dev || !ctx || !leftBB || !rightBB) return;
+    // Every ~5s, uncapped: a front-loaded budget spent itself entirely on the
+    // menu, whose identical eyes are expected, and never sampled gameplay.
+    if ((s_count++ % 300) != 0) return;
+
+    D3D11_TEXTURE2D_DESC td = {};
+    leftBB->GetDesc(&td);
+    td.Usage          = D3D11_USAGE_STAGING;
+    td.BindFlags      = 0;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    td.MiscFlags      = 0;
+    ID3D11Texture2D* stgL = nullptr;
+    ID3D11Texture2D* stgR = nullptr;
+    if (FAILED(dev->CreateTexture2D(&td, nullptr, &stgL)) ||
+        FAILED(dev->CreateTexture2D(&td, nullptr, &stgR)))
+    {
+        if (stgL) stgL->Release();
+        if (stgR) stgR->Release();
+        return;
+    }
+    ctx->CopyResource(stgL, leftBB);
+    ctx->CopyResource(stgR, rightBB);
+    D3D11_MAPPED_SUBRESOURCE mapL = {}, mapR = {};
+    if (SUCCEEDED(ctx->Map(stgL, 0, D3D11_MAP_READ, 0, &mapL)) &&
+        SUCCEEDED(ctx->Map(stgR, 0, D3D11_MAP_READ, 0, &mapR)))
+    {
+        size_t diffRows = 0, firstDiffRow = (size_t)-1;
+        const size_t rowBytes = (size_t)td.Width * 4;
+        for (UINT y = 0; y < td.Height; y += 8)
+        {
+            const BYTE* l = (const BYTE*)mapL.pData + (size_t)y * mapL.RowPitch;
+            const BYTE* r = (const BYTE*)mapR.pData + (size_t)y * mapR.RowPitch;
+            if (memcmp(l, r, rowBytes) != 0)
+            {
+                ++diffRows;
+                if (firstDiffRow == (size_t)-1) firstDiffRow = y;
+            }
+        }
+        DDILog("  [eyecmp] present#%d: %s (sampled rows differing=%zu/%u firstDiffRow=%zd)\n",
+               s_count - 1, diffRows ? "DIFFERENT" : "IDENTICAL",
+               diffRows, (td.Height + 7) / 8, (ptrdiff_t)firstDiffRow);
+    }
+    ctx->Unmap(stgL, 0);
+    ctx->Unmap(stgR, 0);
+    stgL->Release();
+    stgR->Release();
+}
+
 void SwapChain11Proxy::OnPresentBoundaryPre()
 {
     if (FrameTraceActive())
@@ -536,6 +725,18 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
 
     if (FrameTraceActive())
         FrameTrace("--- composite start ---\n");
+
+    if (m_parent && m_leftBB && m_rightBB)
+    {
+        ID3D11DeviceContext* imm = nullptr;
+        m_parent->GetReal()->GetImmediateContext(&imm);
+        if (imm)
+        {
+            CompareEyeBackBuffers(m_parent->GetReal(), imm, m_leftBB, m_rightBB);
+            imm->Release();
+        }
+        m_parent->SurveyStereoTextures();
+    }
 
     // Stage 4d: composite the left + right BB siblings into the real BB.
     // Coupled to UseCOMWrapReplay because without the replay there's no
@@ -587,6 +788,7 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::ResizeBuffers(
     // matching the new BB dims/format.
     DDILog("SwapChain11Proxy::ResizeBuffers: count=%u %ux%u fmt=%d flags=0x%X\n",
            BufferCount, Width, Height, (int)NewFormat, SwapChainFlags);
+    ReleaseSRWeave(false);
     ReleaseStereoBackBuffer();
     HRESULT hr = m_real->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
     DDILog("SwapChain11Proxy::ResizeBuffers -> hr=0x%08lX\n", hr);
@@ -607,6 +809,7 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::ResizeBuffers1(
     }
     DDILog("SwapChain11Proxy::ResizeBuffers1: count=%u %ux%u fmt=%d flags=0x%X\n",
            BufferCount, Width, Height, (int)Format, SwapChainFlags);
+    ReleaseSRWeave(false);
     ReleaseStereoBackBuffer();
     HRESULT hr = m_real3->ResizeBuffers1(BufferCount, Width, Height, Format,
                                          SwapChainFlags, pCreationNodeMask, ppPresentQueue);
