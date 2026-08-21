@@ -1716,6 +1716,24 @@
 			</Preset>
 		</Presets>
 	</Profile>
+	<Profile Name="Battlefield 3">
+		<File Name="bf3.exe" />
+		<!-- Deferred lighting reconstructs position from an inverse view-projection
+		     held in pixel-shader constant buffers; the numeric inverse hunt keeps
+		     right-eye lighting on right-eye geometry. -->
+		<DetectInverseMatrix Value="1"/>
+	</Profile>
+	<Profile Name="Far Cry 3">
+		<File Name="farcry3_d3d11.exe" />
+		<DetectInverseMatrix Value="1"/>
+	</Profile>
+	<Profile Name="Far Cry 4">
+		<File Name="FarCry4.exe" />
+		<!-- Its InvProjection shares a buffer with a Projection no shader uses for
+		     position, so the inverse verified only intermittently and flickered
+		     lighting on hair, props and glass; lighting is correct without it. -->
+		<DetectInverseMatrix Value="0"/>
+	</Profile>
 	<Profile Name="Battlefield Bad Company 2">
 		<File Name="BFBC2Game.exe" />
 		<SeparationScale Value="0.01"/>
