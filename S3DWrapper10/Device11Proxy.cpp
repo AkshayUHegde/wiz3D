@@ -195,7 +195,7 @@ void Device11Proxy::SurveyStereoTextures()
         if (!l || !r) continue;
         D3D11_TEXTURE2D_DESC td = {};
         l->GetDesc(&td);
-        if (td.Width < 800 || td.SampleDesc.Count > 1) continue;
+        if (td.Width < 800 || td.SampleDesc.Count > 1 || td.ArraySize != 1) continue;
 
         D3D11_TEXTURE2D_DESC sd = td;
         sd.Usage          = D3D11_USAGE_STAGING;
@@ -222,11 +222,18 @@ void Device11Proxy::SurveyStereoTextures()
             const UINT rowL = td.Height / 2;
             size_t n = (ml.RowPitch < mr.RowPitch) ? ml.RowPitch : mr.RowPitch;
             if (n > 8192) n = 8192;
-            const BYTE* bl = (const BYTE*)ml.pData + (size_t)rowL * ml.RowPitch;
-            const BYTE* br = (const BYTE*)mr.pData + (size_t)rowL * mr.RowPitch;
-            DDILog("  [texsurvey] tex=%p %ux%u fmt=%d bind=0x%X %s\n",
-                   (void*)tp, td.Width, td.Height, (int)td.Format, td.BindFlags,
-                   memcmp(bl, br, n) == 0 ? "IDENTICAL" : "DIFFERS");
+            const size_t offL = (size_t)rowL * ml.RowPitch;
+            const size_t offR = (size_t)rowL * mr.RowPitch;
+            // Stay inside what Map handed back (FC4 crashed on an array/mip
+            // layout whose row math overran the staging copy).
+            if (offL + n <= ml.DepthPitch && offR + n <= mr.DepthPitch)
+            {
+                const BYTE* bl = (const BYTE*)ml.pData + offL;
+                const BYTE* br = (const BYTE*)mr.pData + offR;
+                DDILog("  [texsurvey] tex=%p %ux%u fmt=%d bind=0x%X %s\n",
+                       (void*)tp, td.Width, td.Height, (int)td.Format, td.BindFlags,
+                       memcmp(bl, br, n) == 0 ? "IDENTICAL" : "DIFFERS");
+            }
         }
         if (ml.pData) ctx->Unmap(sl, 0);
         if (mr.pData) ctx->Unmap(sr, 0);
