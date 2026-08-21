@@ -21,6 +21,7 @@
 #include <dxgi.h>
 #include <dxgi1_2.h>
 #include <dxgi1_3.h>
+#include <d3dcompiler.h>
 
 #pragma comment(lib, "dxguid.lib")
 
@@ -167,6 +168,75 @@ Texture2D11Proxy* Device11Proxy::LookupProxyByReal(void* realLeft) const
     return p;
 }
 
+// BC2: right CBs are provably shifted at duplicated draws, yet the BB
+// siblings stay byte-identical — some pass flattens the chain. Compare every
+// large stereo texture's siblings at Present; the DIFFERS/IDENTICAL boundary
+// names the flattening pass.
+void Device11Proxy::SurveyStereoTextures()
+{
+    static int s_budget = 4;
+    static int s_present = 0;
+    if (!gInfo.CollectDebugInformation) return;
+    if (s_budget <= 0 || (s_present++ % 600) != 0) return;
+    --s_budget;
+
+    ID3D11DeviceContext* ctx = nullptr;
+    m_real->GetImmediateContext(&ctx);
+    if (!ctx) return;
+
+    EnterCriticalSection(&m_realToProxyLock);
+    DDILog("  [texsurvey] --- %zu registered textures ---\n", m_realToProxy.size());
+    for (auto& kv : m_realToProxy)
+    {
+        Texture2D11Proxy* tp = kv.second;
+        if (!tp || !tp->IsStereo()) continue;
+        ID3D11Texture2D* l = tp->GetReal();
+        ID3D11Texture2D* r = tp->GetRealRight();
+        if (!l || !r) continue;
+        D3D11_TEXTURE2D_DESC td = {};
+        l->GetDesc(&td);
+        if (td.Width < 800 || td.SampleDesc.Count > 1) continue;
+
+        D3D11_TEXTURE2D_DESC sd = td;
+        sd.Usage          = D3D11_USAGE_STAGING;
+        sd.BindFlags      = 0;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        sd.MiscFlags      = 0;
+        sd.MipLevels      = 1;
+        sd.ArraySize      = 1;
+        ID3D11Texture2D* sl = nullptr;
+        ID3D11Texture2D* sr = nullptr;
+        if (FAILED(m_real->CreateTexture2D(&sd, nullptr, &sl)) ||
+            FAILED(m_real->CreateTexture2D(&sd, nullptr, &sr)))
+        {
+            if (sl) sl->Release();
+            if (sr) sr->Release();
+            continue;
+        }
+        ctx->CopySubresourceRegion(sl, 0, 0, 0, 0, l, 0, nullptr);
+        ctx->CopySubresourceRegion(sr, 0, 0, 0, 0, r, 0, nullptr);
+        D3D11_MAPPED_SUBRESOURCE ml = {}, mr = {};
+        if (SUCCEEDED(ctx->Map(sl, 0, D3D11_MAP_READ, 0, &ml)) &&
+            SUCCEEDED(ctx->Map(sr, 0, D3D11_MAP_READ, 0, &mr)))
+        {
+            const UINT rowL = td.Height / 2;
+            size_t n = (ml.RowPitch < mr.RowPitch) ? ml.RowPitch : mr.RowPitch;
+            if (n > 8192) n = 8192;
+            const BYTE* bl = (const BYTE*)ml.pData + (size_t)rowL * ml.RowPitch;
+            const BYTE* br = (const BYTE*)mr.pData + (size_t)rowL * mr.RowPitch;
+            DDILog("  [texsurvey] tex=%p %ux%u fmt=%d bind=0x%X %s\n",
+                   (void*)tp, td.Width, td.Height, (int)td.Format, td.BindFlags,
+                   memcmp(bl, br, n) == 0 ? "IDENTICAL" : "DIFFERS");
+        }
+        if (ml.pData) ctx->Unmap(sl, 0);
+        if (mr.pData) ctx->Unmap(sr, 0);
+        sl->Release();
+        sr->Release();
+    }
+    LeaveCriticalSection(&m_realToProxyLock);
+    ctx->Release();
+}
+
 void Device11Proxy::StoreShaderProjection(void* shaderPtr, const ShaderAnalysis11Result& info)
 {
     if (!shaderPtr) return;
@@ -260,6 +330,29 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateVertexShader(
         },
         pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
 
+    // CRC-named so a shader seen in the frame trace (vs=0x...) can be pulled
+    // by filename; BC2's scene VSes need reading to find where the real
+    // transform lives (suspected instance data, not the CB matrices we shift).
+    if (gInfo.DumpModifiedShaders && SUCCEEDED(hr) && ppVertexShader && *ppVertexShader)
+    {
+        if (const ShaderAnalysis11Result* info = LookupShaderProjection(*ppVertexShader))
+        {
+            ID3DBlob* dis = nullptr;
+            if (SUCCEEDED(D3DDisassemble(pShaderBytecode, BytecodeLength, 0, nullptr, &dis)) && dis)
+            {
+                char path[MAX_PATH];
+                sprintf_s(path, "wiz3D_vs_%08lX.txt", info->crc32);
+                FILE* f = nullptr;
+                if (fopen_s(&f, path, "wb") == 0 && f)
+                {
+                    fprintf(f, "%s\n", (const char*)dis->GetBufferPointer());
+                    fclose(f);
+                }
+                dis->Release();
+            }
+        }
+    }
+
     if (gInfo.ModifyShadersDX11 && SUCCEEDED(hr) && ppVertexShader && *ppVertexShader)
         TryBuildModifiedVS(pShaderBytecode, BytecodeLength, pClassLinkage, *ppVertexShader);
     return hr;
@@ -281,7 +374,8 @@ void Device11Proxy::TryBuildModifiedVS(const void* bytecode, SIZE_T byteLength,
     if (!TryModifyShaderForStereo(bytecode, byteLength, info->posRegister, false, blob, mdata))
     {
         ++m_vsModFailed;
-        NVDM_TRACE_FIRST_N(8, "  TryBuildModifiedVS: CRC=0x%08lX modify FAILED\n", info->crc32);
+        NVDM_TRACE_FIRST_N(8, "  TryBuildModifiedVS: CRC=0x%08lX modify FAILED"
+                              " (posRegister=%u)\n", info->crc32, info->posRegister);
         return;
     }
 
@@ -775,7 +869,19 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateTexture2D(
     ID3D11Texture2D* realLeft  = *ppTexture2D;
     ID3D11Texture2D* realRight = nullptr;
 
-    if (ShouldDoubleTexture2D(pDesc, pBBSize))
+    const char* monoReason = "";
+    const bool doubleIt = ShouldDoubleTexture2D(pDesc, pBBSize,
+                                                pInitialData != nullptr, &monoReason);
+    // Every RT/DS-capable or doubled create, uncapped: one mono link in the
+    // visible chain collapses the whole output to the left eye (BC2), and
+    // the capped generic trace below never reaches the level-load creates.
+    if (pDesc && (doubleIt ||
+                  (pDesc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL))))
+        DDILog("  [texcreate] %ux%u fmt=%d bind=0x%X stereo=%d%s%s\n",
+               pDesc->Width, pDesc->Height, (int)pDesc->Format, pDesc->BindFlags,
+               (int)doubleIt, doubleIt ? "" : " reason=", doubleIt ? "" : monoReason);
+
+    if (doubleIt)
     {
         HRESULT hr2 = m_real->CreateTexture2D(pDesc, nullptr, &realRight);
         if (FAILED(hr2))

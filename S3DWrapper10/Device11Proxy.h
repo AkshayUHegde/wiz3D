@@ -182,6 +182,7 @@ public:
     // the map when the IID probe fails. Closes the De Blob right-eye bypass
     // confirmed via per-frame trace 2026-05-17.
     void RegisterRealToProxy(void* realLeft, Texture2D11Proxy* proxy);
+    void SurveyStereoTextures();
     void UnregisterRealToProxy(void* realLeft);
     Texture2D11Proxy* LookupProxyByReal(void* realLeft) const;
 
