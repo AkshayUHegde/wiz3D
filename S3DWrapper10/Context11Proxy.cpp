@@ -237,6 +237,9 @@ static int s_matDumpShifted  = 0;
 static int s_mirrorLogBudget = 40;   // [mirror] copy/resolve samples, same refill
 static int s_cbProbeBudget   = 2;    // [cbprobe] right-CB readback at dup draws
 
+// Learned-target rejections by reason, per report window.
+static unsigned s_rejUnitW = 0, s_rejBasis = 0, s_rejGuardLearned = 0;
+
 // Present counter, so a buffer's last eye-shift can be dated against the frame
 // being drawn rather than only "ever shifted at some point".
 static unsigned s_frameId = 0;
@@ -429,6 +432,10 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     m_drawsVSNeverShiftedThisFrame = 0;
     m_drawsVSStaleShiftThisFrame   = 0;
     m_drawsVSNoSiblingCBThisFrame  = 0;
+
+    DDILog("  [frame %u] learnedRej: unitW=%u basis=%u guard=%u\n",
+           s_frame, s_rejUnitW, s_rejBasis, s_rejGuardLearned);
+    s_rejUnitW = s_rejBasis = s_rejGuardLearned = 0;
 
     if (gInfo.DetectInverseMatrix)
     {
@@ -2016,6 +2023,17 @@ static void MatrixBasisNorms(const float* f, bool transposed, float& xn, float& 
     wn = sqrtf(w0 * w0 + w1 * w1 + w2 * w2);
 }
 
+// |cos| between the x and w bases; a camera (or rigid WVP) keeps them
+// orthogonal, a block of unrelated float4s does not.
+static bool BasesOrthogonal(const float* f, bool transposed, float xn, float wn)
+{
+    float x0, x1, x2, w0, w1, w2;
+    if (transposed) { x0 = f[0]; x1 = f[1]; x2 = f[2];  w0 = f[12]; w1 = f[13]; w2 = f[14]; }
+    else            { x0 = f[0]; x1 = f[4]; x2 = f[8];  w0 = f[3];  w1 = f[7];  w2 = f[11]; }
+    const float cosXW = (x0 * w0 + x1 * w1 + x2 * w2) / (xn * wn + 1e-12f);
+    return fabsf(cosXW) <= 0.2f;
+}
+
 // Camera _11. Both stereo terms are world-matrix independent, so _11 is the only
 // per-matrix unknown -- and xn/wn only recovers it when the object scale is
 // uniform. Trust the ratio when |w basis| is unit, else reuse the last matrix
@@ -2122,7 +2140,11 @@ static float InverseProductDeviation(const float* c, const float* v, int i, int 
         mag += fabsf(t);
     }
     const float target = (i == j) ? 1.f : 0.f;
-    return fabsf(acc - target) / (1e-4f * mag + 2e-3f);
+    // Bound doubled from the Frostbite-tuned 1e-4/2e-3: UE3's screen-to-world
+    // folds viewport terms into the inverse and sat at bestMiss=1.00-1.01
+    // (BioShock Infinite), just outside. True pairs score far below 1, junk
+    // far above, so the margin is wide.
+    return fabsf(acc - target) / (2e-4f * mag + 4e-3f);
 }
 
 // NaN poisons the max-accumulated deviation test: every comparison with NaN
@@ -2285,12 +2307,25 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
             if (fabsf(lwn - 1.f) >= 0.05f)
             {
                 if (outRejected) ++*outRejected;
+                ++s_rejUnitW;
+                continue;
+            }
+            // A rigid WVP's x and w bases are the camera's right and forward
+            // axes — orthogonal. A material block {color, normalized dir}
+            // passes the unit-w test but not this one; UE3 reuses one buffer
+            // per slot for every draw, so the learned register lands on such
+            // blocks constantly (BioShock Infinite: white-flashing textures).
+            if (!BasesOrthogonal(f, transposed, lxn, lwn))
+            {
+                if (outRejected) ++*outRejected;
+                ++s_rejBasis;
                 continue;
             }
         }
         if (ShouldSkipProjectionMatrix(f, transposed))
         {
             if (outRejected) ++*outRejected;
+            if (m.matrixFromLearned) ++s_rejGuardLearned;
             if (s_matDumpRejected > 0)
             {
                 --s_matDumpRejected;
@@ -2310,7 +2345,10 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         // light projection can poison the value the rest of the frame reuses.
         float basisXn, basisWn;
         MatrixBasisNorms(f, transposed, basisXn, basisWn);
-        if (basisWn > 1e-6f && fabsf(basisWn - 1.f) < 0.05f)
+        // Orthogonal bases too: UE3 material blocks with a unit vector poisoned
+        // the cache (BioShock Infinite read projXScale=0.0679, no camera's).
+        if (basisWn > 1e-6f && fabsf(basisWn - 1.f) < 0.05f &&
+            BasesOrthogonal(f, transposed, basisXn, basisWn))
         {
             s_projXScale = basisXn / basisWn;
             // Pre-shift values: the game derives its inverse from these.
@@ -2519,6 +2557,44 @@ HRESULT STDMETHODCALLTYPE Context11Proxy::Map(
     return hr;
 }
 
+// Analyzer targets for a CB write: the registers the bound VS reads as
+// projection matrices at the slot(s) this buffer occupies. boundToVS reports
+// that the buffer is bound to that VS at all — then the verdict is final even
+// when it is "no matrix here", and learned registers must not override it:
+// UE3 reuses one buffer per slot for every draw, so a register taught for one
+// layout lands on another's parameters (BioShock Infinite: white flashes).
+static void AnalyzerTargetsForCB(Device11Proxy* parent, void* boundVS,
+                                 ID3D11Buffer* const* boundVSCBs,
+                                 ID3D11Resource* pResource,
+                                 std::vector<EyeShiftMatrix>& targets,
+                                 bool& analyzerKnows, bool& boundToVS)
+{
+    analyzerKnows = false;
+    boundToVS = false;
+    if (!boundVS || !parent) return;
+    const ShaderAnalysis11Result* info = parent->LookupShaderProjection(boundVS);
+    if (!info || !info->parsed) return;
+    analyzerKnows = true;
+    // Only a shader that has projection matrices somewhere is authoritative
+    // about a buffer it binds but does not use for projection; a matrix-less
+    // (UI, post) shader bound at write time knows nothing about the buffer,
+    // and the shared view buffer is routinely written under one (FC4).
+    const bool vsHasMatrices = !info->projection.matrixData.cb.empty();
+    for (UINT slot = 0; slot < Context11Proxy::kMaxCBs; ++slot)   // == kMaxVSCBSlots
+    {
+        if (static_cast<ID3D11Resource*>(boundVSCBs[slot]) != pResource) continue;
+        if (vsHasMatrices) boundToVS = true;
+        auto cbIt = info->projection.matrixData.cb.find(slot);
+        if (cbIt == info->projection.matrixData.cb.end()) continue;
+        for (const auto& pmd : cbIt->second)
+        {
+            if (pmd.incorrectProjection) continue;
+            EyeShiftMatrix em = { pmd.matrixRegister, pmd.matrixIsTransposed, FALSE, FALSE };
+            targets.push_back(em);
+        }
+    }
+}
+
 void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Subresource)
 {
     Buffer11Proxy*    buf = TryUnwrapBuffer(pResource);
@@ -2573,32 +2649,9 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
             // analyzerKnows: the analyzer successfully parsed the bound VS, so
             // an empty `targets` is a positive "this buffer holds no projection
             // matrix" rather than "we have no idea".
-            bool analyzerKnows = false;
-            if (m_boundVS && m_parent)
-            {
-                const ShaderAnalysis11Result* info =
-                    m_parent->LookupShaderProjection(m_boundVS);
-                if (info && info->parsed)
-                {
-                    analyzerKnows = true;
-                    for (UINT slot = 0; slot < kMaxVSCBSlots; ++slot)
-                    {
-                        if (m_boundVSCBs[slot] != pResource) continue;
-                        auto cbIt = info->projection.matrixData.cb.find(slot);
-                        if (cbIt == info->projection.matrixData.cb.end()) continue;
-                        for (const auto& pmd : cbIt->second)
-                        {
-                            if (pmd.incorrectProjection) continue;
-                            EyeShiftMatrix em;
-                            em.matrixRegister     = pmd.matrixRegister;
-                            em.matrixIsTransposed = pmd.matrixIsTransposed;
-                            em.matrixIsInverse    = FALSE;
-                            em.matrixFromLearned  = FALSE;
-                            targets.push_back(em);
-                        }
-                    }
-                }
-            }
+            bool analyzerKnows = false, boundToVS = false;
+            AnalyzerTargetsForCB(m_parent, m_boundVS, m_boundVSCBs, pResource,
+                                 targets, analyzerKnows, boundToVS);
 
             // Profile-declared matrices, added on top of whatever the analyzer
             // found. A profile hit also counts as knowing this buffer.
@@ -2639,7 +2692,10 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                         lb->LearnMatrix(mt);
                     }
                 }
-                else
+                // Learned registers fill the attribution gap (buffer written
+                // before its consumer is bound); they never override a parsed
+                // VS that has this buffer bound and says "no matrix here".
+                else if (!(analyzerKnows && boundToVS))
                 {
                     const std::vector<Buffer11Proxy::MatrixTarget>& mem = lb->LearnedMatrices();
                     for (size_t ti = 0; ti < mem.size(); ++ti)
@@ -2655,7 +2711,9 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
             // Stage 4e.3: still unidentified. Deferred lighting keeps its
             // inverse view-projection in PS-only buffers that no shader
             // analysis reaches, so test the bytes numerically.
-            if (targets.empty() && gInfo.DetectInverseMatrix && bytes.size() >= 64)
+            Buffer11Proxy* scanBp = TryUnwrapBuffer(pResource);
+            if (targets.empty() && gInfo.DetectInverseMatrix && bytes.size() >= 64 &&
+                scanBp && scanBp->ShouldScanForInverse())
             {
                 ++m_invScansThisFrame;
                 DWORD ireg; BOOL itr;
@@ -2815,16 +2873,36 @@ void Context11Proxy::DoUpdateSubresource(
                 std::vector<unsigned char> tmp(bd.ByteWidth);
                 memcpy(tmp.data(), pSrcData, bd.ByteWidth);
 
+                // Same attribution as the Map path: the bound VS first (UE3
+                // commits CBs right before the draw that consumes them), learned
+                // registers only where no parsed VS has this buffer bound.
                 std::vector<EyeShiftMatrix> targets;
-                const std::vector<Buffer11Proxy::MatrixTarget>& mem = bp->LearnedMatrices();
-                for (size_t ti = 0; ti < mem.size(); ++ti)
+                bool analyzerKnows = false, boundToVS = false;
+                AnalyzerTargetsForCB(m_parent, m_boundVS, m_boundVSCBs, pDstResource,
+                                     targets, analyzerKnows, boundToVS);
+                if (!targets.empty())
                 {
-                    EyeShiftMatrix e = { mem[ti].reg, mem[ti].transposed,
-                                         mem[ti].inverse, TRUE };
-                    targets.push_back(e);
-                    if (mem[ti].inverse) ++m_invLearnedThisFrame;
+                    for (size_t ti = 0; ti < targets.size(); ++ti)
+                    {
+                        Buffer11Proxy::MatrixTarget mt = { targets[ti].matrixRegister,
+                                                           targets[ti].matrixIsTransposed,
+                                                           targets[ti].matrixIsInverse };
+                        bp->LearnMatrix(mt);
+                    }
                 }
-                if (targets.empty() && gInfo.DetectInverseMatrix && bd.ByteWidth >= 64)
+                else if (!(analyzerKnows && boundToVS))
+                {
+                    const std::vector<Buffer11Proxy::MatrixTarget>& mem = bp->LearnedMatrices();
+                    for (size_t ti = 0; ti < mem.size(); ++ti)
+                    {
+                        EyeShiftMatrix e = { mem[ti].reg, mem[ti].transposed,
+                                             mem[ti].inverse, TRUE };
+                        targets.push_back(e);
+                        if (mem[ti].inverse) ++m_invLearnedThisFrame;
+                    }
+                }
+                if (targets.empty() && gInfo.DetectInverseMatrix && bd.ByteWidth >= 64 &&
+                    bp->ShouldScanForInverse())
                 {
                     ++m_invScansThisFrame;
                     DWORD ireg; BOOL itr;
