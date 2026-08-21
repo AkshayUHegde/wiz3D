@@ -377,6 +377,10 @@ public:
 	// Deferred lighting keeps them in pixel-shader-only buffers no SV_Position
 	// analysis reaches (BF3: lighting offset by a constant at every depth).
 	bool		DetectInverseMatrix;
+	// DX10\11 COM-wrap: give SRV-only scene-sized textures a right sibling.
+	// They are resolve/copy destinations — BC2's MSAA resolve into a mono one
+	// flattened both eyes to the left image for the whole post chain.
+	bool		DoubleResolveTargets;
 	// DX10\11 COM-wrap: modify vertex shaders so they shift their own output
 	// position, instead of patching a projection matrix in a constant buffer.
 	bool		ModifyShadersDX11;
@@ -527,6 +531,7 @@ public:
 		DisableBlindCBScan = true;    // Never guess: the blind scan corrupted cascade transforms.
 		FullColumnEyeShift = true;    // Real 1/z parallax; false = legacy single-element shift.
 		DetectInverseMatrix = false;  // Off until a game's config opts in (deferred-lighting titles).
+		DoubleResolveTargets = true;  // Mono resolve destinations flatten stereo (BC2 with MSAA).
 		ModifyShadersDX11  = false;   // false = constant-buffer patching only.
 		ModifyShadersMaxCount = 0;    // 0 = modify every eligible shader.
 		DumpModifiedShaders = 0;      // 1 = write per-shader before/after disassembly.
