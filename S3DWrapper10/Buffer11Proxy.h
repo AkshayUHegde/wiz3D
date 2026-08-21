@@ -79,11 +79,22 @@ public:
 
     struct MatrixTarget { DWORD reg; BOOL transposed; BOOL inverse; };
     const std::vector<MatrixTarget>& LearnedMatrices() const { return m_learned; }
+    // Cap raised from 8: UE3's view buffer holds a dozen projective matrices,
+    // and teaching filled the slots before the inverse could be retained —
+    // it was detected, dropped and re-detected every write (BioShock Infinite).
     void LearnMatrix(const MatrixTarget& t)
     {
         for (size_t i = 0; i < m_learned.size(); ++i)
             if (m_learned[i].reg == t.reg) return;
-        if (m_learned.size() < 8) m_learned.push_back(t);
+        if (m_learned.size() < 24) m_learned.push_back(t);
+    }
+
+    // Inverse-detection backoff: a buffer that keeps scanning clean is
+    // rescanned only sparsely (~1,500 full scans/frame in BioShock Infinite).
+    bool ShouldScanForInverse()
+    {
+        const unsigned n = m_invScans++;
+        return n < 16 || (n % 64) == 0;
     }
 
 private:
@@ -94,6 +105,7 @@ private:
     bool           m_vsBound;
     bool           m_everShifted = false;
     unsigned       m_shiftedFrame = 0;
+    unsigned       m_invScans = 0;
     std::vector<MatrixTarget> m_learned;
 };
 
