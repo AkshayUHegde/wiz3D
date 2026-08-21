@@ -1727,6 +1727,13 @@
 		<File Name="farcry3_d3d11.exe" />
 		<DetectInverseMatrix Value="1"/>
 	</Profile>
+	<Profile Name="BioShock Infinite">
+		<File Name="BioShockInfinite.exe" />
+		<!-- Deferred lights and decals reconstruct from depth; per-object
+		     shadows are perspective projections that must not be shifted. -->
+		<DetectInverseMatrix Value="1"/>
+		<CheckShadowMatrix Value="1"/>
+	</Profile>
 	<Profile Name="Far Cry 4">
 		<File Name="FarCry4.exe" />
 		<!-- Its InvProjection shares a buffer with a Projection no shader uses for
