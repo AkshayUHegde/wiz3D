@@ -798,6 +798,8 @@ void ReadProfilePart2Data(TiXmlNode* node)
 		DECLARE_BVALUE(CheckShadowMatrix),
 		DECLARE_BVALUE(CheckInverseLR),
 		DECLARE_BVALUE(FixNone16x9TextPosition),
+		// Per-game: deferred titles need the inverse hunt, others can be hurt by it.
+		DECLARE_BVALUE(DetectInverseMatrix),
 		DECLARE_FVALUE(SeparationScale),
 		DECLARE_FVALUE(ScaleSeparationForSmallViewPorts),
 		DECLARE_IVALUE(SearchFrameSizeX),
