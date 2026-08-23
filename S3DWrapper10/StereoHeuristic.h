@@ -43,12 +43,8 @@ inline bool IsLessThanBB_Stage3(UINT Width, UINT Height, const SIZE* pBBSize)
     return f >= 0.01f;
 }
 
-// A shadow atlas is a depth target whose SHAPE is unrelated to the screen: a
-// cascade strip (GTA V: 1024x4096) or a square page. Comparing against a
-// multiple of the backbuffer AREA made the answer depend on the monitor -- GTA
-// V's 4.2 Mpx atlas is oversized at 1080p (4xBB = 8.3 Mpx) but not at 4K
-// (33 Mpx) -- so the same game doubled ~793 depth-only draws/frame on a bigger
-// display. Aspect ratio carries the intent without the resolution dependence.
+// A shadow atlas is a depth target whose shape is unrelated to the screen. The
+// old backbuffer-AREA test answered differently at 1080p and 4K for one atlas.
 inline bool IsShadowAtlasShape(UINT Width, UINT Height, const SIZE* pBBSize)
 {
     if (!pBBSize || pBBSize->cx <= 0 || pBBSize->cy <= 0) return false;

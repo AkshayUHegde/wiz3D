@@ -399,13 +399,16 @@ public:
 	// time. Far Cry 4 needs it -- its job renderer fills CBs long before binding
 	// the consumer, so no write is ever attributed. Bisected as the cause of Far
 	// Cry 3's soft right eye (074dafe5); 0 restores the picture before it.
+	// DX10	 COM-wrap: patch the right eye's constants at DRAW time, for the
+	// shader about to consume them, not at write time for whichever was bound.
+	bool		PatchConstantsAtDraw;
+	// DX10	 COM-wrap: only cache view-projections into the detector ring from
+	// buffers written a few times a frame. A per-object CB is rewritten per
+	// draw and flushed the ring before the deferred write arrived.
+	bool		RingFromRareWritesOnly;
 	bool		TeachMatricesAtDraw;
 	bool		LegacyForwardVPRing;
 	bool		SkipUnprojectionPrefilter;
-	// DX10\11 COM-wrap: skip the right-eye replay of draws that cannot differ --
-	// no constants shifted this frame, no per-eye SRV, no injected VS. GTA V's
-	// cascade pass is ~793 such draws/frame, about half of what it duplicates.
-	bool		SkipEyeInvariantDraws;
 	// DX10\11: identify a shadow atlas by SHAPE, not by a multiple of backbuffer
 	// area -- the area test answers differently at 1080p and 4K for one atlas.
 	bool		ShadowAtlasByShape;
@@ -566,10 +569,11 @@ public:
 			ExactInverseConvergence = true;  // Invert the convergence term too; 0 = old shear-only arithmetic.
 			DetectComposedMatrix = false;    // Per-game opt-in, like DetectInverseMatrix.
 			PatchAllInverses = false;        // First match only; the rest can be reprojection matrices.
+			PatchConstantsAtDraw = false;      // Per-game opt-in; changes how every patch lands.
+			RingFromRareWritesOnly = false;    // Per-game opt-in.
 			TeachMatricesAtDraw = true;        // Far Cry 4 needs it; Far Cry 3 sets 0.
 			LegacyForwardVPRing = false;       // Bisect switch, see above.
 			SkipUnprojectionPrefilter = false; // Bisect switch, see above.
-			SkipEyeInvariantDraws = false;   // Perf; off until measured against a known-good picture.
 			ShadowAtlasByShape = false;      // Perf; makes strictly more depth targets mono.
 		DoubleResolveTargets = true;  // Mono resolve destinations flatten stereo (BC2 with MSAA).
 		ModifyShadersDX11  = false;   // false = constant-buffer patching only.

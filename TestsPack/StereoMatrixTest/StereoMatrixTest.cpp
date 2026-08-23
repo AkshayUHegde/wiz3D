@@ -1,4 +1,4 @@
-/* wiz3D - offline proof of the inverse-matrix correction in Shared/StereoMatrix.h.
+﻿/* wiz3D - offline proof of the inverse-matrix correction in Shared/StereoMatrix.h.
  *
  * PatchInverse claims to produce P_r^-1 from P^-1, where P_r is the right-eye
  * matrix the forward path builds. That claim is checkable without a GPU: build
@@ -675,7 +675,9 @@ static void TestMovingCamera()
     Invert(oldV, oldInv);
     if (!st.VerifyInverseAgainstRing(oldInv, false))
         Fail("moving camera", "the just-written camera failed to verify");
-    st.frameId = 1004;                    // four frames later, never re-written
+    // Past the ageing window (which counts PRESENTS, and is wide enough for a
+    // game that presents twice per frame), never re-written.
+    st.frameId = 1000 + StereoMatrixState::kMaxAge + 1;
     ++g_checks;
     if (st.VerifyInverseAgainstRing(oldInv, false))
         Fail("moving camera", "a stale camera still confirms targets");
