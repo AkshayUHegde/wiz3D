@@ -1,4 +1,4 @@
-/* 
+﻿/* 
 * Project : iZ3D Stereo Driver
 * Copyright (C) iZ3D Inc. 2002 - 2010
 */
@@ -377,6 +377,38 @@ public:
 	// Deferred lighting keeps them in pixel-shader-only buffers no SV_Position
 	// analysis reaches (BF3: lighting offset by a constant at every depth).
 	bool		DetectInverseMatrix;
+	// DX10\11 COM-wrap: invert the whole forward shift x += sep*(w - conv), not
+	// just its sep*w shear. Dropping the convergence term displaced every
+	// right-eye screen-space reconstruction by one interaxial separation at
+	// every depth. Clear for the old arithmetic (A/B).
+	bool		ExactInverseConvergence;
+	// DX10\11 COM-wrap: also accept a composed screen-to-light matrix
+	// (invViewProj * lightViewProj), identified by the light transform left
+	// behind when a cached view-projection divides out. Off by default -- a
+	// false positive patches an unrelated constant with no shape guard.
+	bool		DetectComposedMatrix;
+	// DX10\11 COM-wrap: patch every inverse-shaped block in a constant buffer,
+	// not just the first. Off by default -- a CB can hold a previous-frame
+	// reprojection matrix beside the current inverse.
+	bool		PatchAllInverses;
+	// DX10\11 COM-wrap, bisect switches. LegacyForwardVPRing restores the
+	// round-robin 32-entry cache with no ageing; SkipUnprojectionPrefilter
+	// bypasses the structural gate. Together they reproduce the detector as it
+	// was before 2026-08-22, so a regression can be attributed without a build.
+	// DX10\11 COM-wrap: teach a constant buffer its matrix registers at DRAW
+	// time. Far Cry 4 needs it -- its job renderer fills CBs long before binding
+	// the consumer, so no write is ever attributed. Bisected as the cause of Far
+	// Cry 3's soft right eye (074dafe5); 0 restores the picture before it.
+	bool		TeachMatricesAtDraw;
+	bool		LegacyForwardVPRing;
+	bool		SkipUnprojectionPrefilter;
+	// DX10\11 COM-wrap: skip the right-eye replay of draws that cannot differ --
+	// no constants shifted this frame, no per-eye SRV, no injected VS. GTA V's
+	// cascade pass is ~793 such draws/frame, about half of what it duplicates.
+	bool		SkipEyeInvariantDraws;
+	// DX10\11: identify a shadow atlas by SHAPE, not by a multiple of backbuffer
+	// area -- the area test answers differently at 1080p and 4K for one atlas.
+	bool		ShadowAtlasByShape;
 	// DX10\11 COM-wrap: give SRV-only scene-sized textures a right sibling.
 	// They are resolve/copy destinations — BC2's MSAA resolve into a mono one
 	// flattened both eyes to the left image for the whole post chain.
@@ -531,6 +563,14 @@ public:
 		DisableBlindCBScan = true;    // Never guess: the blind scan corrupted cascade transforms.
 		FullColumnEyeShift = true;    // Real 1/z parallax; false = legacy single-element shift.
 		DetectInverseMatrix = false;  // Off until a game's config opts in (deferred-lighting titles).
+			ExactInverseConvergence = true;  // Invert the convergence term too; 0 = old shear-only arithmetic.
+			DetectComposedMatrix = false;    // Per-game opt-in, like DetectInverseMatrix.
+			PatchAllInverses = false;        // First match only; the rest can be reprojection matrices.
+			TeachMatricesAtDraw = true;        // Far Cry 4 needs it; Far Cry 3 sets 0.
+			LegacyForwardVPRing = false;       // Bisect switch, see above.
+			SkipUnprojectionPrefilter = false; // Bisect switch, see above.
+			SkipEyeInvariantDraws = false;   // Perf; off until measured against a known-good picture.
+			ShadowAtlasByShape = false;      // Perf; makes strictly more depth targets mono.
 		DoubleResolveTargets = true;  // Mono resolve destinations flatten stereo (BC2 with MSAA).
 		ModifyShadersDX11  = false;   // false = constant-buffer patching only.
 		ModifyShadersMaxCount = 0;    // 0 = modify every eligible shader.

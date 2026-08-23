@@ -1,4 +1,4 @@
-/* wiz3D - ID3D11DeviceContext proxy implementation (Option B Stage 2)
+﻿/* wiz3D - ID3D11DeviceContext proxy implementation (Option B Stage 2)
  *
  * Pure passthrough port of NvDirectMode/d3d11/Context11Proxy. The stage-3 BB
  * tracking and stage-4 magic-header capture were stripped for the MVP — the
@@ -172,6 +172,7 @@ void Context11Proxy::ClearFrameCommands()
 // to watch the ratio hold (or not) across a long session. DDILog + a modest
 // interval keeps the log small.
 static float EyeShiftB(float eyeShift);   // defined with the CB-patch helpers below
+static float StereoConvergence();         // likewise
 
 // The modified shader computes x += sep * (w - conv), so we only need those two
 // values. Rebuilt when separation changes, which is rare — binding is otherwise
@@ -181,8 +182,7 @@ bool Context11Proxy::EnsureStereoShiftCBs()
     // Must match the CB-patch path exactly or geometry corrected by the two
     // mechanisms lands at different depths: sep*w - sep*conv == b*w + m41.
     const float sep  = EyeShiftB(wiz3D_GetEffectiveEyeShift());
-    const CameraPreset* p = gInfo.Input.GetActivePreset();
-    const float conv = (p && p->One_div_ZPS != 0.f) ? 1.f / p->One_div_ZPS : 0.f;
+    const float conv = StereoConvergence();
 
     if (m_stereoCBLeft && m_stereoCBRight && sep == m_stereoCBSep && conv == m_stereoCBConv)
         return true;
@@ -241,6 +241,31 @@ static int s_cbProbeBudget   = 2;    // [cbprobe] right-CB readback at dup draws
 // Learned-target rejections by reason, per report window.
 static unsigned s_rejUnitW = 0, s_rejBasis = 0, s_rejGuardLearned = 0;
 
+
+// Inverse patches that went through the composed screen-to-light path, so the
+// frame log separates them from bare inverse view-projections.
+static unsigned s_invComposedPatched = 0;
+
+// Per-buffer inverse tally. A buffer patched on only some of its writes is what
+// renders as geometry flashing between two positions, and a whole-frame ratio
+// cannot show that -- one buffer at 60% hides behind a dozen at 0% that are
+// pooled and legitimately hold no matrix.
+struct InvBufStat { const void* buf; unsigned patched; unsigned stale; unsigned shape; };
+static InvBufStat s_invBufStats[16] = {};
+static void NoteInvBuffer(const void* buf, bool patched, bool shapeReject)
+{
+    InvBufStat* slot = nullptr;
+    for (unsigned i = 0; i < 16; ++i)
+    {
+        if (s_invBufStats[i].buf == buf) { slot = &s_invBufStats[i]; break; }
+        if (!s_invBufStats[i].buf && !slot) slot = &s_invBufStats[i];
+    }
+    if (!slot) return;
+    slot->buf = buf;
+    if (patched) ++slot->patched;
+    else { ++slot->stale; if (shapeReject) ++slot->shape; }
+}
+
 // Present counter, so a buffer's last eye-shift can be dated against the frame
 // being drawn rather than only "ever shifted at some point".
 static unsigned s_frameId = 0;
@@ -255,6 +280,39 @@ static float s_wnMax = 0.f;
 
 static int      s_invDumpBudget = 8;
 
+// Budgeted sample of buffers a draw consumed that never had a matrix patched.
+static int      s_neverShiftedLogBudget = 60;
+
+// The same buffers, watched through their next writes: "learned target exists
+// but nothing is ever patched" is either the learned path not being consulted
+// or a guard refusing it, and only the write decision separates those.
+static const void* s_watchBufs[4] = {};
+static int         s_watchWriteBudget = 80;
+static void WatchBuffer(const void* b)
+{
+    for (unsigned i = 0; i < 4; ++i)
+    {
+        if (s_watchBufs[i] == b) return;
+        if (!s_watchBufs[i]) { s_watchBufs[i] = b; return; }
+    }
+}
+static bool IsWatched(const void* b)
+{
+    for (unsigned i = 0; i < 4; ++i) if (s_watchBufs[i] == b) return true;
+    return false;
+}
+static int s_monoDrawLogBudget = 8;
+static int s_watchGuardBudget = 60;
+static void WatchGuardLog(const void* res, DWORD reg, const char* why, float wn)
+{
+    if (!res || s_watchGuardBudget <= 0) return;
+    Buffer11Proxy* bp = TryUnwrapBuffer(
+        static_cast<ID3D11Resource*>(const_cast<void*>(res)));
+    if (!bp || !IsWatched(bp)) return;
+    --s_watchGuardBudget;
+    DDILog("  [watch] buf=%p reg=%u REFUSED by %s (|w|=%.4f)\n", bp, reg, why, wn);
+}
+
 // Classifies each logical draw by whether its geometry could have reached the
 // right eye corrected: no parsed VS, a VS the analyzer found no matrix in, or a
 // VS with a matrix whose constant buffers have never once been shifted. Any of
@@ -267,14 +325,14 @@ static DWORD BoundShaderCRC(Device11Proxy* parent, void* shader);
 void Context11Proxy::BeginDraw(UINT vertexCount)
 {
     ++m_drawsThisFrame;
-    TallyDrawCoverage();
+    const bool screenSpace = (vertexCount <= 6);
+    TallyDrawCoverage(screenSpace);
     if (!m_modVSShader) return;
     if (m_activeEye != Eye::Right) ++m_modVSDraws[BoundShaderCRC(m_parent, m_boundVS)];
-    const bool screenSpace = (vertexCount <= 6);
     BindStereoShiftCB(m_activeEye == Eye::Right && !screenSpace);
 }
 
-void Context11Proxy::TallyDrawCoverage()
+void Context11Proxy::TallyDrawCoverage(bool screenSpace)
 {
     if (m_activeEye == Eye::Right) return;
     if (!m_boundVS || !m_parent) return;
@@ -305,6 +363,12 @@ void Context11Proxy::TallyDrawCoverage()
         // long before binding the consumer, so not one write was ever
         // targeted. Here both sides are certain — teach the buffer so later
         // writes hit the learned path (unit-w guarded).
+        //
+        // Never from a fullscreen pass. Teaching every draw softened Far Cry 3's
+        // right eye (bisected to 074dafe5); a screen-space quad's matrices are
+        // not the camera projection, and the same <=6-vertex rule already keeps
+        // the modified-shader path from sliding those quads sideways.
+        if (gInfo.TeachMatricesAtDraw && !screenSpace)
         for (const auto& pmd : it->second)
         {
             if (pmd.incorrectProjection) continue;
@@ -312,7 +376,28 @@ void Context11Proxy::TallyDrawCoverage()
                                                pmd.matrixIsTransposed, FALSE };
             b->LearnMatrix(mt);
         }
-        if (!b->EverShifted()) continue;
+        if (!b->EverShifted())
+        {
+            // Why did this buffer never get a matrix patched? Usage says whether
+            // a write path can even reach it (IMMUTABLE is written once, at
+            // creation, where the sibling is filled from the same initial data
+            // and nothing shifts it); vsBound says whether the Map recorder
+            // accepted it; learned says whether teaching reached it.
+            WatchBuffer(b);
+            if (s_neverShiftedLogBudget > 0)
+            {
+                --s_neverShiftedLogBudget;
+                D3D11_BUFFER_DESC bd = {};
+                if (ID3D11Buffer* rb = b->GetReal()) rb->GetDesc(&bd);
+                DDILog("  [neverShifted] crc=0x%08lX slot=%u buf=%p usage=%d cpuAccess=0x%X"
+                       " bytes=%u vsBound=%d learned=%zu sibling=%d\n",
+                       BoundShaderCRC(m_parent, m_boundVS), (unsigned)slot, b,
+                       (int)bd.Usage, bd.CPUAccessFlags, bd.ByteWidth,
+                       (int)b->IsVSBound(), b->LearnedMatrices().size(),
+                       b->GetRealRight() ? 1 : 0);
+            }
+            continue;
+        }
         anyEver = true;
         if (b->ShiftedFrame() > newest) newest = b->ShiftedFrame();
     }
@@ -365,6 +450,11 @@ void Context11Proxy::LogAndResetFrameDrawStats()
 {
     ++s_frameId;
     const unsigned s_frame = s_frameId;
+    // The detector ages its cached view-projections by this, so a camera that
+    // has moved on can no longer confirm a learned target.
+    s_mat.frameId = s_frameId;
+    s_mat.legacyRing    = gInfo.LegacyForwardVPRing != 0;
+    s_mat.skipPrefilter = gInfo.SkipUnprojectionPrefilter != 0;
     // Publish before any reset so the trace gate sees this frame's real count.
     if ((int)m_drawsThisFrame > g_FrameTraceLastFrameDraws)
         g_FrameTraceLastFrameDraws = (int)m_drawsThisFrame;
@@ -384,7 +474,7 @@ void Context11Proxy::LogAndResetFrameDrawStats()
                " | matrices: shifted=%u guardRejected=%u"
                " | dynBuf: replayed=%u skipped=%u"
                " | dup: duplicated=%u mono=%u uavSkip=%u uavDup=%u monoDSV=%u noRightRTV=%u"
-               " depthOnly=%u noRightTarget=%u dispDup=%u"
+               " depthOnly=%u eyeInvariantSkipped=%u noRightTarget=%u dispDup=%u"
                " (DuplicateDraws=%d DisableBlindCBScan=%d ortho=%d shadow=%d)%s\n",
                s_frame, this, m_drawsThisFrame, m_dispatchesThisFrame,
                m_cmdListsThisFrame, m_frameCommands.size(),
@@ -395,7 +485,8 @@ void Context11Proxy::LogAndResetFrameDrawStats()
                m_drawsUavSkippedThisFrame, m_drawsUavDupThisFrame,
                m_drawsMonoDsvThisFrame,
                m_drawsNoRightRTVThisFrame,
-               m_drawsDepthOnlyThisFrame, m_drawsNoRightTargetThisFrame,
+               m_drawsDepthOnlyThisFrame, m_drawsEyeInvariantThisFrame,
+               m_drawsNoRightTargetThisFrame,
                m_dispatchesDuplicatedThisFrame,
                (int)gInfo.DuplicateDraws,
                (int)gInfo.DisableBlindCBScan,
@@ -427,8 +518,10 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     m_drawsVSStaleShiftThisFrame   = 0;
     m_drawsVSNoSiblingCBThisFrame  = 0;
 
-    DDILog("  [frame %u] learnedRej: unitW=%u basis=%u guard=%u\n",
-           s_frame, s_rejUnitW, s_rejBasis, s_rejGuardLearned);
+    DDILog("  [frame %u] learnedRej: unitW=%u basis=%u guard=%u taughtAtDraw=%d"
+           "\n",
+           s_frame, s_rejUnitW, s_rejBasis, s_rejGuardLearned,
+           (int)gInfo.TeachMatricesAtDraw);
     s_rejUnitW = s_rejBasis = s_rejGuardLearned = 0;
 
     if (gInfo.DetectInverseMatrix)
@@ -440,16 +533,43 @@ void Context11Proxy::LogAndResetFrameDrawStats()
         ringValid = s_mat.RingValid();
         const float bestMiss =
             (m_invBestMissThisFrame < 1e29f) ? m_invBestMissThisFrame : -1.f;
-        DDILog("  [frame %u] invDetect: ring=%u ringInserts=%u scans=%u hits=%u"
+        // turnover = inserts per ring slot per window; above ~1 the ring cannot
+        // hold a VP long enough to match, so hits=0 says nothing about whether
+        // the game has an inverse to find. fresh=0 with ring full is the same
+        // failure by age.
+        const float turnover = s_mat.ringInsertsThisFrame /
+                               (float)wiz3d::StereoMatrixState::kRing;
+        DDILog("  [frame %u] invDetect: ring=%u fresh=%u ringInserts=%u turnover=%.1f"
+               " evictedHot=%u scans=%u hits=%u"
                " patched=%u stale=%u learnedReplay=%u updCB=%u updCBPatched=%u"
                " bestMiss=%.2f\n",
-               s_frame, ringValid, s_mat.ringInsertsThisFrame,
+               s_frame, ringValid, s_mat.RingFresh(), s_mat.ringInsertsThisFrame, turnover,
+               s_mat.evictedHotThisFrame,
                m_invScansThisFrame, m_invHitsThisFrame, m_invPatchedThisFrame,
                s_mat.invStaleThisFrame, m_invLearnedThisFrame, m_updCBWritesThisFrame,
                m_updCBPatchedThisFrame, bestMiss);
+        // staleShape = the block was not unprojection-shaped (a pooled buffer
+        // now holding something else); the remainder were shaped but no cached
+        // camera inverted them, which is a ring problem, not a guard one.
+        DDILog("  [frame %u] invBuffers: staleShape=%u staleNoMatch=%u composed=%u\n",
+               s_frame, s_mat.invStaleShapeThisFrame,
+               s_mat.invStaleThisFrame - s_mat.invStaleShapeThisFrame,
+               s_invComposedPatched);
+        for (unsigned i = 0; i < 16; ++i)
+        {
+            const InvBufStat& b = s_invBufStats[i];
+            if (!b.buf) continue;
+            const unsigned tot = b.patched + b.stale;
+            DDILog("      buf=%p patched=%u/%u (%.0f%%) shapeRejected=%u\n",
+                   b.buf, b.patched, tot, tot ? 100.0 * b.patched / tot : 0.0, b.shape);
+        }
     }
+    if (report) memset(s_invBufStats, 0, sizeof(s_invBufStats));
     s_mat.invStaleThisFrame      = 0;
+    s_mat.invStaleShapeThisFrame = 0;
+    s_invComposedPatched         = 0;
     s_mat.ringInsertsThisFrame   = 0;
+    s_mat.evictedHotThisFrame    = 0;
     m_invScansThisFrame       = 0;
     m_invHitsThisFrame        = 0;
     m_invPatchedThisFrame     = 0;
@@ -508,6 +628,12 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     s_matDumpShifted  = 3;
     if (s_mirrorLogBudget < 4) s_mirrorLogBudget = 4;
     if (s_cbProbeBudget < 2) s_cbProbeBudget = 2;
+    // Same refill for the never-shifted / watched-buffer samples: one-shot
+    // budgets burn on the loading screen and never see the scene the bug is in.
+    if (s_neverShiftedLogBudget < 3) s_neverShiftedLogBudget = 3;
+    if (s_watchWriteBudget      < 3) s_watchWriteBudget      = 3;
+    if (s_watchGuardBudget      < 3) s_watchGuardBudget      = 3;
+    if (s_monoDrawLogBudget     < 4) s_monoDrawLogBudget     = 4;
 
     m_drawsThisFrame          = 0;
     m_dispatchesThisFrame     = 0;
@@ -526,6 +652,7 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     m_drawsMonoDsvThisFrame    = 0;
     m_drawsNoRightRTVThisFrame = 0;
     m_drawsDepthOnlyThisFrame     = 0;
+    m_drawsEyeInvariantThisFrame  = 0;
     m_drawsNoRightTargetThisFrame = 0;
     m_dispatchesDuplicatedThisFrame = 0;
 }
@@ -600,16 +727,19 @@ void Context11Proxy::TrackCBs(StageIdx stage, UINT StartSlot, UINT NumBuffers,
         ID3D11Buffer* p = ppCBs ? ppCBs[i] : nullptr;
         ID3D11Buffer* left  = p;
         ID3D11Buffer* right = p;
+        Buffer11Proxy* proxy = nullptr;
         if (p)
         {
             if (auto* bp = TryUnwrapBuffer(static_cast<ID3D11Resource*>(p)))
             {
+                proxy = bp;
                 left  = bp->GetReal();
                 right = bp->GetRealRight() ? bp->GetRealRight() : left;
             }
         }
         s.left[slot]  = left;
         s.right[slot] = right;
+        s.proxy[slot] = proxy;
         s.first[slot] = pFirst ? pFirst[i] : 0;
         s.num[slot]   = pNum ? pNum[i] : 0;
         s.size[slot]  = 0;
@@ -1004,12 +1134,40 @@ void Context11Proxy::ClearOmUavRefs()
     m_omUavCount = 0;
 }
 
+// Only three things carry an eye difference into a draw: constants we shifted,
+// a per-eye SRV, and the injected VS (which shifts from its own CB). A draw with
+// none of them re-renders identical content into the sibling. GTA V's cascade
+// pass is ~793 such depth-only draws per frame -- its light matrices are
+// orthographic, so the ortho guard never shifts them.
+bool Context11Proxy::DrawCanDifferPerEye() const
+{
+    if (m_modVSShader) return true;               // geometry shifted by the shader itself
+    for (UINT st = 0; st < ST_COUNT; ++st)
+    {
+        if (m_srvSlots[st].anyStereo) return true;
+        const CBEyeSlots& cb = m_cbSlots[st];
+        for (UINT i = 0; i < cb.high; ++i)
+        {
+            const Buffer11Proxy* bp = cb.proxy[i];
+            // Shifted THIS frame: a buffer patched earlier and since rewritten
+            // with unshifted content must not keep the draw alive forever.
+            if (bp && bp->EverShifted() && bp->ShiftedFrame() == s_frameId) return true;
+        }
+    }
+    return false;
+}
+
 bool Context11Proxy::BeginRightEyeDraw()
 {
     if (!gInfo.DuplicateDraws) return false;
     // Stereo toggled off: skip the whole right-eye pass, not just the shift.
     if (!gInfo.Input.StereoActive) return false;
     if (m_activeEye != Eye::Left) return false;
+    if (gInfo.SkipEyeInvariantDraws && !DrawCanDifferPerEye())
+    {
+        ++m_drawsEyeInvariantThisFrame;
+        return false;
+    }
     // Skipping UAV draws outright left GTA V's bloom bright-pass RTV black in
     // the right eye — its histogram UAVs are shared, so demand only stereo RTs.
     if (m_omHasUAVs)
@@ -1021,7 +1179,23 @@ bool Context11Proxy::BeginRightEyeDraw()
         }
         ++m_drawsUavDupThisFrame;
     }
-    else if (!m_omAnyStereo) { ++m_drawsMonoThisFrame; return false; }
+    else if (!m_omAnyStereo)
+    {
+        ++m_drawsMonoThisFrame;
+        // A draw the right eye never gets. Deferred light volumes land here if
+        // their accumulation target is not doubled, and the light is then simply
+        // absent from that eye rather than misplaced (Battlefield 3: a flickering
+        // light that never lights anything in the right eye).
+        if (s_monoDrawLogBudget > 0)
+        {
+            --s_monoDrawLogBudget;
+            DDILog("  [monoDraw] vs=0x%08lX ps=0x%08lX numRTVs=%u rtv0=%p dsv=%p\n",
+                   BoundShaderCRC(m_parent, m_boundVS),
+                   BoundShaderCRC(m_parent, m_boundPS),
+                   m_numRTVs, m_numRTVs ? m_rtvLeft[0] : nullptr, m_dsvLeft);
+        }
+        return false;
+    }
     ++m_drawsDuplicatedThisFrame;
     if (m_omMonoDSV) ++m_drawsMonoDsvThisFrame;
     // Duplicated, but every right-eye RTV is null: the second draw writes
@@ -2158,14 +2332,21 @@ using wiz3d::MatrixBasisNorms;
 using wiz3d::BasesOrthogonal;
 static float ProjXScaleFromMatrix(const float* f, bool transposed) { return s_mat.ProjXScaleFromMatrix(f, transposed); }
 
+// Zero-parallax distance in world units. The forward model is x += sep*(w - conv),
+// so the injected shader's CB, the forward patch and the inverse patch must all
+// read conv from here or they desync. Zero when convergence is disabled.
+static float StereoConvergence()
+{
+    const CameraPreset* p = gInfo.Input.GetActivePreset();
+    return (p && p->One_div_ZPS != 0.f) ? 1.f / p->One_div_ZPS : 0.f;
+}
+
 // DX9 shears view space by x' = x + m31*z + m41 (BaseStereoRenderer-inl.h:141).
 // eyeShift is m31, which only re-centres; m41 is the eye offset whose 1/z
 // falloff is the entire depth cue. A = -B * One_div_ZPS relates the two.
 static float EyeOffsetM41(float eyeShift)
 {
-    const CameraPreset* p = gInfo.Input.GetActivePreset();
-    const float invZPS = p ? p->One_div_ZPS : 0.f;
-    return (invZPS != 0.f) ? (-eyeShift / invZPS) : 0.f;
+    return -eyeShift * StereoConvergence();
 }
 
 static bool ShouldSkipProjectionMatrix(const float* f, bool transposed)
@@ -2204,14 +2385,19 @@ static bool ShouldSkipProjectionMatrix(const float* f, bool transposed)
 // ---------------------------------------------------------------------------
 static void CacheForwardVP(const float* f, bool transposed) { s_mat.CacheForwardVP(f, transposed); }
 
-static bool DetectInverseInCB(const unsigned char* data, size_t byteCount,
-                              DWORD& outReg, BOOL& outTransposed, float& bestMiss)
+// The caller only rescans a buffer while it has no targets, so the first hit
+// used to suppress every other matrix in that buffer permanently.
+static constexpr unsigned kMaxInverseHitsPerCB = 8;
+
+static unsigned DetectInversesInCB(const unsigned char* data, size_t byteCount,
+                                   wiz3d::StereoMatrixState::DetectedInverse* out,
+                                   float& bestMiss)
 {
-    unsigned reg = 0; bool tr = false;
-    if (!s_mat.DetectInverse(data, byteCount, reg, tr, bestMiss)) return false;
-    outReg = (DWORD)reg;
-    outTransposed = tr ? TRUE : FALSE;
-    return true;
+    // Off by default: a buffer can hold a PREVIOUS-frame reprojection matrix
+    // beside the current inverse, and patching both smears the right eye.
+    const unsigned cap = gInfo.PatchAllInverses ? kMaxInverseHitsPerCB : 1u;
+    return s_mat.DetectInverses(data, byteCount, gInfo.DetectComposedMatrix != 0,
+                                out, cap, bestMiss);
 }
 
 static bool VerifyInverseAgainstRing(const float* f, bool transposed) { return s_mat.VerifyInverseAgainstRing(f, transposed); }
@@ -2224,7 +2410,8 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
                                       const std::vector<EyeShiftMatrix>& matrices,
                                       unsigned* outShifted = nullptr,
                                       unsigned* outRejected = nullptr,
-                                      unsigned* outInvPatched = nullptr)
+                                      unsigned* outInvPatched = nullptr,
+                                      const void* srcBuffer = nullptr)
 {
     if (eyeShift == 0.f || matrices.empty()) return;
     constexpr size_t kRegBytes  = 16;
@@ -2236,19 +2423,34 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         float* f = reinterpret_cast<float*>(data + base);
         const bool transposed = (m.matrixIsTransposed != 0);
 
-        // Inverse (unprojection) matrices. The forward path is P' = P*T with
-        // T = I except T._41 = b, so the corrected inverse is T^-1 * P^-1.
-        // NB: none of the guards below apply — an inverse view-projection has
-        // no ortho / shadow signature to test.
+        // Inverse (unprojection) matrices: corrected by the exact inverse of the
+        // whole forward shift (see PatchInverse). None of the guards below apply
+        // — an unprojection has no ortho / shadow signature — so the ring
+        // re-verification carries the whole burden.
         if (m.matrixIsInverse)
         {
-            if (m.matrixFromLearned && !VerifyInverseAgainstRing(f, transposed))
+            wiz3d::StereoMatrixState::InverseMatch match;
+            bool shapeReject = false;
+            const bool matched = s_mat.VerifyInverseAgainstRing(
+                f, transposed, gInfo.DetectComposedMatrix, &match, &shapeReject);
+            // Only LEARNED targets need confirming. A profile-declared inverse is
+            // hand-authored, so it stays trusted even in a frame where the ring
+            // holds no matching view-projection -- as before.
+            if (m.matrixFromLearned && !matched)
             {
                 ++s_mat.invStaleThisFrame;
+                if (shapeReject) ++s_mat.invStaleShapeThisFrame;
                 if (outRejected) ++*outRejected;
+                NoteInvBuffer(srcBuffer, false, shapeReject);
                 continue;
             }
-            s_mat.PatchInverse(f, transposed, eyeShift);
+            NoteInvBuffer(srcBuffer, true, false);
+            // conv = 0 reproduces the pre-2026-08-22 arithmetic exactly (shear
+            // only, eye translation dropped), so the flag is a true A/B.
+            s_mat.PatchInverse(f, transposed, eyeShift,
+                               gInfo.ExactInverseConvergence ? StereoConvergence() : 0.f,
+                               (matched && match.composed) ? match.basis : nullptr);
+            if (matched && match.composed) ++s_invComposedPatched;
             if (outShifted) ++*outShifted;
             if (outInvPatched) ++*outInvPatched;
             continue;
@@ -2263,10 +2465,15 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         {
             float lxn, lwn;
             MatrixBasisNorms(f, transposed, lxn, lwn);
+            // A scaled WVP is still a real matrix -- ProjXScaleFromMatrix already
+            // falls back to the cached camera _11 when |w| is not unit. But a
+            // near-zero |w| is effectively orthographic (HUD/UI), and shifting
+            // that destroys the overlay in one eye, so the floor stays.
             if (fabsf(lwn - 1.f) >= 0.05f)
             {
                 if (outRejected) ++*outRejected;
                 ++s_rejUnitW;
+                WatchGuardLog(srcBuffer, m.matrixRegister, "unitW", lwn);
                 continue;
             }
             // A rigid WVP's x and w bases are the camera's right and forward
@@ -2278,6 +2485,7 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
             {
                 if (outRejected) ++*outRejected;
                 ++s_rejBasis;
+                WatchGuardLog(srcBuffer, m.matrixRegister, "basis", lwn);
                 continue;
             }
         }
@@ -2285,6 +2493,7 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         {
             if (outRejected) ++*outRejected;
             if (m.matrixFromLearned) ++s_rejGuardLearned;
+            WatchGuardLog(srcBuffer, m.matrixRegister, "orthoOrShadow", 0.f);
             if (s_matDumpRejected > 0)
             {
                 --s_matDumpRejected;
@@ -2665,6 +2874,15 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                     }
                     if (!targets.empty()) analyzerKnows = true;
                 }
+                if (IsWatched(lb) && s_watchWriteBudget > 0)
+                {
+                    --s_watchWriteBudget;
+                    DDILog("  [watch] buf=%p write: vs=0x%08lX analyzerKnows=%d boundToVS=%d"
+                           " targets=%zu learned=%zu bytes=%zu\n",
+                           lb, BoundShaderCRC(m_parent, m_boundVS), (int)analyzerKnows,
+                           (int)boundToVS, targets.size(), lb->LearnedMatrices().size(),
+                           bytes.size());
+                }
             }
 
             // Stage 4e.3: still unidentified. Deferred lighting keeps its
@@ -2675,11 +2893,14 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                 scanBp && scanBp->ShouldScanForInverse())
             {
                 ++m_invScansThisFrame;
-                DWORD ireg; BOOL itr;
-                if (DetectInverseInCB(bytes.data(), bytes.size(), ireg, itr,
-                                      m_invBestMissThisFrame))
+                wiz3d::StereoMatrixState::DetectedInverse hits[kMaxInverseHitsPerCB];
+                const unsigned n = DetectInversesInCB(bytes.data(), bytes.size(), hits,
+                                                      m_invBestMissThisFrame);
+                for (unsigned hi = 0; hi < n; ++hi)
                 {
                     ++m_invHitsThisFrame;
+                    const DWORD ireg = (DWORD)hits[hi].reg;
+                    const BOOL  itr  = hits[hi].transposed ? TRUE : FALSE;
                     EyeShiftMatrix em = { ireg, itr, TRUE, FALSE };
                     targets.push_back(em);
                     if (Buffer11Proxy* ib = TryUnwrapBuffer(pResource))
@@ -2690,8 +2911,8 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                     if (s_invDumpBudget > 0)
                     {
                         --s_invDumpBudget;
-                        DDILog("  invDetect: HIT buf=%p bytes=%zu reg=%u transposed=%d\n",
-                               pResource, bytes.size(), ireg, (int)itr);
+                        DDILog("  invDetect: HIT buf=%p bytes=%zu reg=%u transposed=%d composed=%d\n",
+                               pResource, bytes.size(), ireg, (int)itr, (int)hits[hi].composed);
                         DumpMatrix("inverse-hit",
                                    reinterpret_cast<const float*>(bytes.data()) + ireg * 4,
                                    ireg, itr != FALSE);
@@ -2731,7 +2952,7 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                                 static_cast<unsigned char*>(mapped.pData),
                                 bytes.size(), eyeShift, targets,
                                 &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame,
-                                &m_invPatchedThisFrame);
+                                &m_invPatchedThisFrame, pResource);
                             if (m_cbMatShiftedThisFrame != before) bp->MarkShifted(s_frameId);
                         }
                         else if (useBlindNow)
@@ -2780,7 +3001,7 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                             static_cast<unsigned char*>(mapped.pData),
                             bytes.size(), eyeShift, targets,
                             &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame,
-                            &m_invPatchedThisFrame);
+                            &m_invPatchedThisFrame, gameRes);
                     }
                     else if (useBlind)
                     {
@@ -2864,11 +3085,14 @@ void Context11Proxy::DoUpdateSubresource(
                     bp->ShouldScanForInverse())
                 {
                     ++m_invScansThisFrame;
-                    DWORD ireg; BOOL itr;
-                    if (DetectInverseInCB(tmp.data(), bd.ByteWidth, ireg, itr,
-                                          m_invBestMissThisFrame))
+                    wiz3d::StereoMatrixState::DetectedInverse hits[kMaxInverseHitsPerCB];
+                    const unsigned n = DetectInversesInCB(tmp.data(), bd.ByteWidth, hits,
+                                                          m_invBestMissThisFrame);
+                    for (unsigned hi = 0; hi < n; ++hi)
                     {
                         ++m_invHitsThisFrame;
+                        const DWORD ireg = (DWORD)hits[hi].reg;
+                        const BOOL  itr  = hits[hi].transposed ? TRUE : FALSE;
                         EyeShiftMatrix em = { ireg, itr, TRUE, FALSE };
                         targets.push_back(em);
                         Buffer11Proxy::MatrixTarget mt = { ireg, itr, TRUE };
@@ -2877,8 +3101,9 @@ void Context11Proxy::DoUpdateSubresource(
                         {
                             --s_invDumpBudget;
                             DDILog("  invDetect: HIT-updSub buf=%p bytes=%u reg=%u"
-                                   " transposed=%d\n",
-                                   pDstResource, bd.ByteWidth, ireg, (int)itr);
+                                   " transposed=%d composed=%d\n",
+                                   pDstResource, bd.ByteWidth, ireg, (int)itr,
+                                   (int)hits[hi].composed);
                             DumpMatrix("inverse-hit",
                                        reinterpret_cast<const float*>(tmp.data()) + ireg * 4,
                                        ireg, itr != FALSE);
@@ -2893,7 +3118,7 @@ void Context11Proxy::DoUpdateSubresource(
                     ApplyTargetedEyeShiftToCB(tmp.data(), bd.ByteWidth, eyeShift,
                                               targets, &m_cbMatShiftedThisFrame,
                                               &m_cbMatRejectedThisFrame,
-                                              &m_invPatchedThisFrame);
+                                              &m_invPatchedThisFrame, pDstResource);
                     if (m_cbMatShiftedThisFrame != before) bp->MarkShifted(s_frameId);
                     m_real->UpdateSubresource(bp->GetRealRight(), DstSubresource,
                                               nullptr, tmp.data(), 0, 0);

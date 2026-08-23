@@ -43,6 +43,26 @@ inline bool IsLessThanBB_Stage3(UINT Width, UINT Height, const SIZE* pBBSize)
     return f >= 0.01f;
 }
 
+// A shadow atlas is a depth target whose SHAPE is unrelated to the screen: a
+// cascade strip (GTA V: 1024x4096) or a square page. Comparing against a
+// multiple of the backbuffer AREA made the answer depend on the monitor -- GTA
+// V's 4.2 Mpx atlas is oversized at 1080p (4xBB = 8.3 Mpx) but not at 4K
+// (33 Mpx) -- so the same game doubled ~793 depth-only draws/frame on a bigger
+// display. Aspect ratio carries the intent without the resolution dependence.
+inline bool IsShadowAtlasShape(UINT Width, UINT Height, const SIZE* pBBSize)
+{
+    if (!pBBSize || pBBSize->cx <= 0 || pBBSize->cy <= 0) return false;
+    if (Height == 0) return false;
+    if (Width == (UINT)pBBSize->cx && Height == (UINT)pBBSize->cy) return false;
+    const float aRT = (float)Width / (float)Height;
+    const float aBB = (float)pBBSize->cx / (float)pBBSize->cy;
+    const float ratio = (aRT > aBB) ? aRT / aBB : aBB / aRT;
+    // 1.5 clears a square page against any widescreen backbuffer (16:9 gives
+    // 1.78) while leaving scene-shaped targets -- full, half or quarter res --
+    // well inside.
+    return ratio >= 1.5f;
+}
+
 inline bool IsShadowFormat_Stage3(DXGI_FORMAT Format)
 {
     switch (Format)
@@ -91,10 +111,14 @@ inline bool ShouldDoubleDepthStencilTexture(UINT Width, UINT Height, const SIZE*
         case 0: reason = "mode0"; result = false; break;
         case 1: result = true; break;
         default:
-            // Oversized depth targets are shadow atlases; their light-camera
-            // constants never shift, so a sibling is identical (GTA V: ~450 draws/frame).
-            if (pBBSize && (ULONGLONG)Width * Height >=
-                           4ull * (ULONGLONG)pBBSize->cx * (ULONGLONG)pBBSize->cy)
+            // Shadow atlases: light-camera constants never shift, so a sibling
+            // is identical (GTA V: ~450 draws/frame). ShadowAtlasByShape is off
+            // until measured -- it makes strictly MORE depth targets mono, and a
+            // wrong call there flattens a real per-eye buffer.
+            if (gInfo.ShadowAtlasByShape
+                    ? IsShadowAtlasShape(Width, Height, pBBSize)
+                    : (pBBSize && (ULONGLONG)Width * Height >=
+                                  4ull * (ULONGLONG)pBBSize->cx * (ULONGLONG)pBBSize->cy))
                 { reason = "shadowAtlas"; result = false; }
             else if (gInfo.MonoDepthStencilTextures)                                                                            { reason = "monoDSFlag"; result = false; }
             else if (gInfo.CreateSquareDSInMono && IsSquareSize_Stage3(Width, Height, gInfo.CreateBigSquareDSInStereo, pBBSize)) { reason = "squareDS";   result = false; }
