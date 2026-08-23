@@ -22,6 +22,9 @@
 #include <dxgi1_2.h>
 #include <dxgi1_3.h>
 #include <d3dcompiler.h>
+#include <madCHook.h>
+#include <mutex>
+#include <unordered_map>
 
 #pragma comment(lib, "dxguid.lib")
 
@@ -53,6 +56,140 @@ static DWORD GetVendorIdFromDevice(ID3D11Device* dev)
     return vendor;
 }
 
+// ---------------------------------------------------------------------------
+// Real-device bypass. Objects we hand out unwrapped (shaders, state objects)
+// answer GetDevice() with the REAL device, and an engine that fetches its
+// context from there draws past the proxy: Mass Effect Andromeda rendered
+// its whole scene that way (120 proxied draws, 0 dispatches, right eye never
+// written). Detouring the real vtable's GetImmediateContext* hands such
+// callers the context proxy; CreateDeferredContext is only reported.
+// ---------------------------------------------------------------------------
+static std::mutex s_realDevLock;
+static std::unordered_map<ID3D11Device*, Device11Proxy*> s_realToDevice;
+
+static Device11Proxy* FindDeviceByReal(ID3D11Device* real)
+{
+    std::lock_guard<std::mutex> g(s_realDevLock);
+    auto it = s_realToDevice.find(real);
+    return it == s_realToDevice.end() ? nullptr : it->second;
+}
+
+typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext)(ID3D11Device*, ID3D11DeviceContext**);
+typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext1)(ID3D11Device1*, ID3D11DeviceContext1**);
+typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext2)(ID3D11Device2*, ID3D11DeviceContext2**);
+typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext3)(ID3D11Device3*, ID3D11DeviceContext3**);
+typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext)(ID3D11Device*, UINT, ID3D11DeviceContext**);
+static PFN_GetImmediateContext  s_origGetImmediateContext  = nullptr;
+static PFN_GetImmediateContext1 s_origGetImmediateContext1 = nullptr;
+static PFN_GetImmediateContext2 s_origGetImmediateContext2 = nullptr;
+static PFN_GetImmediateContext3 s_origGetImmediateContext3 = nullptr;
+static PFN_CreateDeferredContext s_origCreateDeferredContext = nullptr;
+
+static void STDMETHODCALLTYPE Hook_RealGetImmediateContext(ID3D11Device* self, ID3D11DeviceContext** pp)
+{
+    Device11Proxy* dp = FindDeviceByReal(self);
+    if (dp && pp && dp->GetContextProxy())
+    {
+        NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext bypass caught -> context proxy\n");
+        dp->GetImmediateContext(pp);
+        return;
+    }
+    s_origGetImmediateContext(self, pp);
+}
+
+static void STDMETHODCALLTYPE Hook_RealGetImmediateContext1(ID3D11Device1* self, ID3D11DeviceContext1** pp)
+{
+    Device11Proxy* dp = FindDeviceByReal(static_cast<ID3D11Device*>(self));
+    if (dp && pp && dp->GetContextProxy())
+    {
+        NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext1 bypass caught -> context proxy\n");
+        dp->GetImmediateContext1(pp);
+        return;
+    }
+    s_origGetImmediateContext1(self, pp);
+}
+
+static void STDMETHODCALLTYPE Hook_RealGetImmediateContext2(ID3D11Device2* self, ID3D11DeviceContext2** pp)
+{
+    Device11Proxy* dp = FindDeviceByReal(static_cast<ID3D11Device*>(self));
+    if (dp && pp && dp->GetContextProxy())
+    {
+        NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext2 bypass caught -> context proxy\n");
+        dp->GetImmediateContext2(pp);
+        return;
+    }
+    s_origGetImmediateContext2(self, pp);
+}
+
+static void STDMETHODCALLTYPE Hook_RealGetImmediateContext3(ID3D11Device3* self, ID3D11DeviceContext3** pp)
+{
+    Device11Proxy* dp = FindDeviceByReal(static_cast<ID3D11Device*>(self));
+    if (dp && pp && dp->GetContextProxy())
+    {
+        NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext3 bypass caught -> context proxy\n");
+        dp->GetImmediateContext3(pp);
+        return;
+    }
+    s_origGetImmediateContext3(self, pp);
+}
+
+static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext(ID3D11Device* self, UINT flags, ID3D11DeviceContext** pp)
+{
+    HRESULT hr = s_origCreateDeferredContext(self, flags, pp);
+    if (FindDeviceByReal(self))
+        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
+    return hr;
+}
+
+typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext1)(ID3D11Device1*, UINT, ID3D11DeviceContext1**);
+typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext2)(ID3D11Device2*, UINT, ID3D11DeviceContext2**);
+typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext3)(ID3D11Device3*, UINT, ID3D11DeviceContext3**);
+static PFN_CreateDeferredContext1 s_origCreateDeferredContext1 = nullptr;
+static PFN_CreateDeferredContext2 s_origCreateDeferredContext2 = nullptr;
+static PFN_CreateDeferredContext3 s_origCreateDeferredContext3 = nullptr;
+
+static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext1(ID3D11Device1* self, UINT flags, ID3D11DeviceContext1** pp)
+{
+    HRESULT hr = s_origCreateDeferredContext1(self, flags, pp);
+    if (FindDeviceByReal(static_cast<ID3D11Device*>(self)))
+        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext1 bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext2(ID3D11Device2* self, UINT flags, ID3D11DeviceContext2** pp)
+{
+    HRESULT hr = s_origCreateDeferredContext2(self, flags, pp);
+    if (FindDeviceByReal(static_cast<ID3D11Device*>(self)))
+        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext2 bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext3(ID3D11Device3* self, UINT flags, ID3D11DeviceContext3** pp)
+{
+    HRESULT hr = s_origCreateDeferredContext3(self, flags, pp);
+    if (FindDeviceByReal(static_cast<ID3D11Device*>(self)))
+        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext3 bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
+    return hr;
+}
+
+// ID3D11Device vtable: GetImmediateContext is slot 40, CreateDeferredContext
+// 27; Device1 adds GetImmediateContext1 at 43, Device2 GetImmediateContext2
+// at 50, Device3 GetImmediateContext3 at 61. Runtime vtables are shared by
+// every device, so the detours are installed once.
+static void InstallRealDeviceHooks(ID3D11Device* real, ID3D11Device1* real1, ID3D11Device2* real2, ID3D11Device3* real3)
+{
+    static bool s_done = false;
+    if (s_done || !real) return;
+    s_done = true;
+    void** vt = *reinterpret_cast<void***>(real);
+    HookCode(vt[40], Hook_RealGetImmediateContext, (PVOID*)&s_origGetImmediateContext, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK);
+    HookCode(vt[27], Hook_RealCreateDeferredContext, (PVOID*)&s_origCreateDeferredContext, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK);
+    if (real1) { void** vt1 = *reinterpret_cast<void***>(real1); HookCode(vt1[43], Hook_RealGetImmediateContext1, (PVOID*)&s_origGetImmediateContext1, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); HookCode(vt1[44], Hook_RealCreateDeferredContext1, (PVOID*)&s_origCreateDeferredContext1, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
+    if (real2) { void** vt2 = *reinterpret_cast<void***>(real2); HookCode(vt2[50], Hook_RealGetImmediateContext2, (PVOID*)&s_origGetImmediateContext2, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); HookCode(vt2[51], Hook_RealCreateDeferredContext2, (PVOID*)&s_origCreateDeferredContext2, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
+    if (real3) { void** vt3 = *reinterpret_cast<void***>(real3); HookCode(vt3[61], Hook_RealGetImmediateContext3, (PVOID*)&s_origGetImmediateContext3, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); HookCode(vt3[62], Hook_RealCreateDeferredContext3, (PVOID*)&s_origCreateDeferredContext3, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
+    DDILog("  Real device vtable detours installed (GetImmediateContext 0..3, CreateDeferredContext 0..3)\n");
+}
+
 Device11Proxy::Device11Proxy(ID3D11Device* real)
     : m_real(real)
     , m_real1(nullptr)
@@ -78,6 +215,11 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
         if (FAILED(m_real->QueryInterface(__uuidof(ID3D11Device3), reinterpret_cast<void**>(&m_real3)))) m_real3 = nullptr;
         LOG_VERBOSE("  Device11Proxy ctor: real=%p real1=%p real2=%p real3=%p\n",
                     m_real, m_real1, m_real2, m_real3);
+        {
+            std::lock_guard<std::mutex> g(s_realDevLock);
+            s_realToDevice[m_real] = this;
+        }
+        InstallRealDeviceHooks(m_real, m_real1, m_real2, m_real3);
     }
 
     // Populate g_ProfileData. Only D3DDeviceWrapper (legacy DDI) and DX9 ever
@@ -123,6 +265,10 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
 
 Device11Proxy::~Device11Proxy()
 {
+    {
+        std::lock_guard<std::mutex> g(s_realDevLock);
+        s_realToDevice.erase(m_real);
+    }
     if (m_dxgiDeviceProxy)
     {
         // Detach parent first so any outstanding game-held refs on the
@@ -1052,7 +1198,20 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateUnorderedAccessView(
                                              : nullptr;
 
     HRESULT hr = m_real->CreateUnorderedAccessView(realLeftRes, pDesc, ppUAView);
-    if (FAILED(hr) || !ppUAView || !*ppUAView) return hr;
+    if (FAILED(hr))
+    {
+        D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+        if (realLeftRes) realLeftRes->GetType(&dim);
+        D3D11_TEXTURE2D_DESC td = {};
+        if (tex2Proxy) tex2Proxy->GetDesc(&td);
+        DDILog("  Device11Proxy::CreateUnorderedAccessView FAILED hr=0x%08lX res=%p proxy=%s dim=%d"
+               " view(fmt=%d dim=%d) tex2(%ux%u fmt=%d bind=0x%X misc=0x%X mips=%u array=%u) right=%p\n",
+               hr, pResource, tex2Proxy ? "tex2" : tex1Proxy ? "tex1" : tex3Proxy ? "tex3" : bufProxy ? "buf" : "none",
+               (int)dim, pDesc ? (int)pDesc->Format : -1, pDesc ? (int)pDesc->ViewDimension : -1,
+               td.Width, td.Height, (int)td.Format, td.BindFlags, td.MiscFlags, td.MipLevels, td.ArraySize, realRightRes);
+        return hr;
+    }
+    if (!ppUAView || !*ppUAView) return hr;
 
     ID3D11UnorderedAccessView* realRightUAV = nullptr;
     if (realRightRes)

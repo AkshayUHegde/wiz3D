@@ -9,6 +9,7 @@
 
 #include "StdAfx.h"
 #include "Context11Proxy.h"
+#include "../Shared/StereoMatrix.h"
 #include "Device11Proxy.h"
 #include "Texture2D11Proxy.h"
 #include "RTV11Proxy.h"
@@ -244,21 +245,14 @@ static unsigned s_rejUnitW = 0, s_rejBasis = 0, s_rejGuardLearned = 0;
 // being drawn rather than only "ever shifted at some point".
 static unsigned s_frameId = 0;
 
-// Camera projection _11, cached from the last clean view-projection seen.
-static float s_projXScale = 0.f;
+// Detector state (projXScale, forward-VP ring) shared with the Vulkan layer.
+static wiz3d::StereoMatrixState s_mat;
 
 // Spread of |w basis| across shifted matrices: 1.0 everywhere means every
 // targeted matrix is a clean VP, anything else means scaled WVPs are in play.
 static float s_wnMin = 1e30f;
 static float s_wnMax = 0.f;
 
-// Ring of pre-shift (mono) perspective matrices the forward path corrected,
-// canonical row-vector layout; DetectInverseInCB tests candidates against it.
-struct CachedForwardVP { float m[16]; bool valid; };
-static CachedForwardVP s_vpRing[32];
-static unsigned s_vpRingNext = 0;
-static unsigned s_vpRingInsertsThisFrame = 0;   // churn indicator for the log
-static unsigned s_invStaleThisFrame = 0;        // learned inverses failing re-verify
 static int      s_invDumpBudget = 8;
 
 // Classifies each logical draw by whether its geometry could have reached the
@@ -423,7 +417,7 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     DDILog("  [frame %u] basis |w|: min=%.4f max=%.4f projXScale=%.4f"
            " | uncorrected draws: vsUnparsed=%u vsNoMatrix=%u cbNeverShifted=%u"
            " cbStale=%u noSiblingCB=%u\n",
-           s_frame, s_wnMin, s_wnMax, s_projXScale,
+           s_frame, s_wnMin, s_wnMax, s_mat.projXScale,
            m_drawsVSUnparsedThisFrame, m_drawsVSNoMatrixThisFrame,
            m_drawsVSNeverShiftedThisFrame, m_drawsVSStaleShiftThisFrame,
            m_drawsVSNoSiblingCBThisFrame);
@@ -443,20 +437,19 @@ void Context11Proxy::LogAndResetFrameDrawStats()
         // cached to compare against; scans without hits report the closest
         // miss as a ratio of the pass bound (1.0 would have passed).
         unsigned ringValid = 0;
-        for (unsigned i = 0; i < _countof(s_vpRing); ++i)
-            if (s_vpRing[i].valid) ++ringValid;
+        ringValid = s_mat.RingValid();
         const float bestMiss =
             (m_invBestMissThisFrame < 1e29f) ? m_invBestMissThisFrame : -1.f;
         DDILog("  [frame %u] invDetect: ring=%u ringInserts=%u scans=%u hits=%u"
                " patched=%u stale=%u learnedReplay=%u updCB=%u updCBPatched=%u"
                " bestMiss=%.2f\n",
-               s_frame, ringValid, s_vpRingInsertsThisFrame,
+               s_frame, ringValid, s_mat.ringInsertsThisFrame,
                m_invScansThisFrame, m_invHitsThisFrame, m_invPatchedThisFrame,
-               s_invStaleThisFrame, m_invLearnedThisFrame, m_updCBWritesThisFrame,
+               s_mat.invStaleThisFrame, m_invLearnedThisFrame, m_updCBWritesThisFrame,
                m_updCBPatchedThisFrame, bestMiss);
     }
-    s_invStaleThisFrame       = 0;
-    s_vpRingInsertsThisFrame  = 0;
+    s_mat.invStaleThisFrame      = 0;
+    s_mat.ringInsertsThisFrame   = 0;
     m_invScansThisFrame       = 0;
     m_invHitsThisFrame        = 0;
     m_invPatchedThisFrame     = 0;
@@ -596,7 +589,7 @@ void Context11Proxy::TrackSRVs(StageIdx stage, UINT StartSlot, UINT NumViews,
 }
 
 void Context11Proxy::TrackCBs(StageIdx stage, UINT StartSlot, UINT NumBuffers,
-                              ID3D11Buffer* const* ppCBs)
+                              ID3D11Buffer* const* ppCBs, const UINT* pFirst, const UINT* pNum)
 {
     if (!gInfo.DuplicateDraws || stage >= ST_COUNT) return;
     CBEyeSlots& s = m_cbSlots[stage];
@@ -617,11 +610,24 @@ void Context11Proxy::TrackCBs(StageIdx stage, UINT StartSlot, UINT NumBuffers,
         }
         s.left[slot]  = left;
         s.right[slot] = right;
+        s.first[slot] = pFirst ? pFirst[i] : 0;
+        s.num[slot]   = pNum ? pNum[i] : 0;
+        s.size[slot]  = 0;
+        if (left)
+        {
+            D3D11_BUFFER_DESC bd = {};
+            left->GetDesc(&bd);
+            s.size[slot] = bd.ByteWidth / 16;
+        }
         if (slot + 1 > s.high) s.high = slot + 1;
     }
     s.anyStereo = false;
+    s.anyRange = false;
     for (UINT i = 0; i < s.high; ++i)
-        if (s.left[i] != s.right[i]) { s.anyStereo = true; break; }
+    {
+        if (s.left[i] != s.right[i]) s.anyStereo = true;
+        if (s.num[i]) s.anyRange = true;
+    }
 }
 
 void Context11Proxy::TrackOM(UINT NumViews, ID3D11RenderTargetView* const* ppRTVs,
@@ -781,6 +787,29 @@ void Context11Proxy::BindStageCBs(StageIdx stage, bool right)
 {
     CBEyeSlots& s = m_cbSlots[stage];
     ID3D11Buffer* const* v = right ? s.right : s.left;
+    if (s.anyRange && m_real1)
+    {
+        // A partial bind must be re-issued through the 11.1 entry; slots
+        // bound whole spell out their full size (4096 constants max).
+        UINT first[kMaxCBs], num[kMaxCBs];
+        for (UINT i = 0; i < s.high; ++i)
+        {
+            first[i] = s.num[i] ? s.first[i] : 0;
+            num[i]   = s.num[i] ? s.num[i] : (s.size[i] > 4096 ? 4096 : s.size[i]);
+            if (!num[i]) num[i] = 16;
+        }
+        switch (stage)
+        {
+        case ST_VS: m_real1->VSSetConstantBuffers1(0, s.high, v, first, num); break;
+        case ST_PS: m_real1->PSSetConstantBuffers1(0, s.high, v, first, num); break;
+        case ST_GS: m_real1->GSSetConstantBuffers1(0, s.high, v, first, num); break;
+        case ST_HS: m_real1->HSSetConstantBuffers1(0, s.high, v, first, num); break;
+        case ST_DS: m_real1->DSSetConstantBuffers1(0, s.high, v, first, num); break;
+        case ST_CS: m_real1->CSSetConstantBuffers1(0, s.high, v, first, num); break;
+        default: break;
+        }
+        return;
+    }
     switch (stage)
     {
     case ST_VS: m_real->VSSetConstantBuffers(0, s.high, v); break;
@@ -791,6 +820,124 @@ void Context11Proxy::BindStageCBs(StageIdx stage, bool right)
     case ST_CS: m_real->CSSetConstantBuffers(0, s.high, v); break;
     default: break;
     }
+}
+
+// D3D11.1 partial constant-buffer binds. Same unwrap and per-eye tracking as
+// the 11.0 setters, with the constant range kept so BindEye can re-issue it.
+#define STEREO_SET_CBS1(STAGE_PREFIX, STAGE_IDX)                                                         \
+void STDMETHODCALLTYPE Context11Proxy::STAGE_PREFIX##SetConstantBuffers1(                                 \
+    UINT StartSlot, UINT NumBuffers, ID3D11Buffer* const* ppConstantBuffers,                             \
+    const UINT* pFirstConstant, const UINT* pNumConstants)                                               \
+{                                                                                                        \
+    TrackCBs(STAGE_IDX, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants);        \
+    ID3D11Buffer* rawCBs[kMaxCBs] = { 0 };                                                               \
+    UINT cap = NumBuffers <= kMaxCBs ? NumBuffers : kMaxCBs;                                             \
+    for (UINT i = 0; i < cap; ++i)                                                                       \
+    {                                                                                                    \
+        ID3D11Buffer* p = ppConstantBuffers ? ppConstantBuffers[i] : nullptr;                            \
+        UINT slot = StartSlot + i;                                                                       \
+        if (STAGE_IDX == ST_VS && slot < kMaxVSCBSlots) m_boundVSCBs[slot] = p;                          \
+        if (STAGE_IDX == ST_PS && slot < kMaxPSCBSlots) m_boundPSCBs[slot] = p;                          \
+        if (p)                                                                                           \
+        {                                                                                                \
+            if (auto* bp = wiz3d::TryUnwrapBuffer(static_cast<ID3D11Resource*>(p)))                      \
+            {                                                                                            \
+                if (STAGE_IDX != ST_PS && STAGE_IDX != ST_CS) bp->TagVSBound();                          \
+                rawCBs[i] = bp->GetReal();                                                               \
+            }                                                                                            \
+            else rawCBs[i] = p;                                                                          \
+        }                                                                                                \
+    }                                                                                                    \
+    if (m_real1)                                                                                         \
+        m_real1->STAGE_PREFIX##SetConstantBuffers1(StartSlot, NumBuffers,                                \
+            ppConstantBuffers ? rawCBs : nullptr, pFirstConstant, pNumConstants);                        \
+    if (STAGE_IDX == ST_VS && m_modVSShader && m_modVSCBIndex >= StartSlot &&                            \
+        m_modVSCBIndex < StartSlot + NumBuffers)                                                         \
+        BindStereoShiftCB(m_activeEye == Eye::Right);                                                    \
+}
+STEREO_SET_CBS1(VS, ST_VS)
+STEREO_SET_CBS1(HS, ST_HS)
+STEREO_SET_CBS1(DS, ST_DS)
+STEREO_SET_CBS1(GS, ST_GS)
+STEREO_SET_CBS1(PS, ST_PS)
+STEREO_SET_CBS1(CS, ST_CS)
+#undef STEREO_SET_CBS1
+
+// D3D11.1 resource/view entry points. Each unwraps to the real object and,
+// for stereo resources, applies to both eyes. The 11.1 copy flags are hints
+// and are dropped so the copies take the eye-aware 11.0 paths.
+static ID3D11View* UnwrapViewForEye(ID3D11View* p, bool pickRight)
+{
+    if (!p) return nullptr;
+    if (auto* r = wiz3d::TryUnwrapRTV(static_cast<ID3D11RenderTargetView*>(p)))
+        return (pickRight && r->GetRealRight()) ? r->GetRealRight() : r->GetReal();
+    if (auto* d = wiz3d::TryUnwrapDSV(static_cast<ID3D11DepthStencilView*>(p)))
+        return (pickRight && d->GetRealRight()) ? d->GetRealRight() : d->GetReal();
+    if (auto* sv = wiz3d::TryUnwrapSRV(static_cast<ID3D11ShaderResourceView*>(p)))
+        return (pickRight && sv->GetRealRight()) ? sv->GetRealRight() : sv->GetReal();
+    if (auto* u = wiz3d::TryUnwrapUAV(static_cast<ID3D11UnorderedAccessView*>(p)))
+        return (pickRight && u->GetRealRight()) ? u->GetRealRight() : u->GetReal();
+    return p;
+}
+
+void STDMETHODCALLTYPE Context11Proxy::SetResourceMinLOD(ID3D11Resource* pResource, FLOAT MinLOD)
+{
+    ID3D11Resource* l = UnwrapResourceForEye(pResource, false);
+    ID3D11Resource* r = UnwrapResourceForEye(pResource, true);
+    m_real->SetResourceMinLOD(l, MinLOD);
+    if (r != l) m_real->SetResourceMinLOD(r, MinLOD);
+}
+
+void STDMETHODCALLTYPE Context11Proxy::CopySubresourceRegion1(
+    ID3D11Resource* pDstResource, UINT DstSubresource, UINT DstX, UINT DstY, UINT DstZ,
+    ID3D11Resource* pSrcResource, UINT SrcSubresource, const D3D11_BOX* pSrcBox, UINT CopyFlags)
+{
+    (void)CopyFlags;
+    CopySubresourceRegion(pDstResource, DstSubresource, DstX, DstY, DstZ, pSrcResource, SrcSubresource, pSrcBox);
+}
+
+void STDMETHODCALLTYPE Context11Proxy::UpdateSubresource1(
+    ID3D11Resource* pDstResource, UINT DstSubresource, const D3D11_BOX* pDstBox,
+    const void* pSrcData, UINT SrcRowPitch, UINT SrcDepthPitch, UINT CopyFlags)
+{
+    (void)CopyFlags;
+    UpdateSubresource(pDstResource, DstSubresource, pDstBox, pSrcData, SrcRowPitch, SrcDepthPitch);
+}
+
+void STDMETHODCALLTYPE Context11Proxy::DiscardResource(ID3D11Resource* pResource)
+{
+    if (!m_real1) return;
+    ID3D11Resource* l = UnwrapResourceForEye(pResource, false);
+    ID3D11Resource* r = UnwrapResourceForEye(pResource, true);
+    m_real1->DiscardResource(l);
+    if (r != l) m_real1->DiscardResource(r);
+}
+
+void STDMETHODCALLTYPE Context11Proxy::DiscardView(ID3D11View* pResourceView)
+{
+    if (!m_real1) return;
+    ID3D11View* l = UnwrapViewForEye(pResourceView, false);
+    ID3D11View* r = UnwrapViewForEye(pResourceView, true);
+    m_real1->DiscardView(l);
+    if (r != l) m_real1->DiscardView(r);
+}
+
+void STDMETHODCALLTYPE Context11Proxy::DiscardView1(ID3D11View* pResourceView, const D3D11_RECT* pRects, UINT NumRects)
+{
+    if (!m_real1) return;
+    ID3D11View* l = UnwrapViewForEye(pResourceView, false);
+    ID3D11View* r = UnwrapViewForEye(pResourceView, true);
+    m_real1->DiscardView1(l, pRects, NumRects);
+    if (r != l) m_real1->DiscardView1(r, pRects, NumRects);
+}
+
+void STDMETHODCALLTYPE Context11Proxy::ClearView(ID3D11View* pView, const FLOAT Color[4], const D3D11_RECT* pRect, UINT NumRects)
+{
+    if (!m_real1) return;
+    ID3D11View* l = UnwrapViewForEye(pView, false);
+    ID3D11View* r = UnwrapViewForEye(pView, true);
+    m_real1->ClearView(l, Color, pRect, NumRects);
+    if (r != l) m_real1->ClearView(r, Color, pRect, NumRects);
 }
 
 void Context11Proxy::BindEye(bool right)
@@ -2005,48 +2152,11 @@ static void DumpMatrix(const char* tag, const float* f, DWORD reg, bool transpos
            f[12], f[13], f[14], f[15]);
 }
 
-// Right-eye clip-space x shift per unit w. The forward and inverse paths
-// describe the same transform T, so both must use this same value.
-static float EyeShiftB(float eyeShift)
-{
-    return eyeShift * (s_projXScale != 0.f ? s_projXScale : 1.f);
-}
-
-// 3x3 norms of the x and w bases. |w basis| is 1 for a clean view-projection
-// (the camera forward axis is unit) and carries the object scale for a WVP.
-static void MatrixBasisNorms(const float* f, bool transposed, float& xn, float& wn)
-{
-    float x0, x1, x2, w0, w1, w2;
-    if (transposed) { x0 = f[0]; x1 = f[1]; x2 = f[2];  w0 = f[12]; w1 = f[13]; w2 = f[14]; }
-    else            { x0 = f[0]; x1 = f[4]; x2 = f[8];  w0 = f[3];  w1 = f[7];  w2 = f[11]; }
-    xn = sqrtf(x0 * x0 + x1 * x1 + x2 * x2);
-    wn = sqrtf(w0 * w0 + w1 * w1 + w2 * w2);
-}
-
-// |cos| between the x and w bases; a camera (or rigid WVP) keeps them
-// orthogonal, a block of unrelated float4s does not.
-static bool BasesOrthogonal(const float* f, bool transposed, float xn, float wn)
-{
-    float x0, x1, x2, w0, w1, w2;
-    if (transposed) { x0 = f[0]; x1 = f[1]; x2 = f[2];  w0 = f[12]; w1 = f[13]; w2 = f[14]; }
-    else            { x0 = f[0]; x1 = f[4]; x2 = f[8];  w0 = f[3];  w1 = f[7];  w2 = f[11]; }
-    const float cosXW = (x0 * w0 + x1 * w1 + x2 * w2) / (xn * wn + 1e-12f);
-    return fabsf(cosXW) <= 0.2f;
-}
-
-// Camera _11. Both stereo terms are world-matrix independent, so _11 is the only
-// per-matrix unknown -- and xn/wn only recovers it when the object scale is
-// uniform. Trust the ratio when |w basis| is unit, else reuse the last matrix
-// that was, so a non-uniformly scaled mesh cannot displace itself.
-static float ProjXScaleFromMatrix(const float* f, bool transposed)
-{
-    float xn, wn;
-    MatrixBasisNorms(f, transposed, xn, wn);
-    if (wn <= 1e-6f) return s_projXScale;
-    const float ratio = xn / wn;
-    if (fabsf(wn - 1.f) < 0.05f) return ratio;
-    return (s_projXScale != 0.f) ? s_projXScale : ratio;
-}
+// Matrix helpers live in Shared/StereoMatrix.h; these keep the call sites.
+static float EyeShiftB(float eyeShift) { return s_mat.EyeShiftB(eyeShift); }
+using wiz3d::MatrixBasisNorms;
+using wiz3d::BasesOrthogonal;
+static float ProjXScaleFromMatrix(const float* f, bool transposed) { return s_mat.ProjXScaleFromMatrix(f, transposed); }
 
 // DX9 shears view space by x' = x + m31*z + m41 (BaseStereoRenderer-inl.h:141).
 // eyeShift is m31, which only re-centres; m41 is the eye offset whose 1/z
@@ -2089,161 +2199,22 @@ static bool ShouldSkipProjectionMatrix(const float* f, bool transposed)
 }
 
 // ---------------------------------------------------------------------------
-// Numeric inverse-matrix detection (DetectInverseMatrix=1).
-//
-// Deferred renderers reconstruct position in screen-space pixel-shader passes
-// from an inverse view-projection living in a PS-only constant buffer. Shader
-// analysis anchors on SV_Position and never reaches pixel shaders (every
-// CreatePixelShader logs parsed=0), so those buffers land in the `skipped`
-// bucket and the right eye's lighting is computed with the left eye's
-// matrices — a screen-space offset that is constant at all depths.
-//
-// Instead of analysing PS dataflow, identify the matrix numerically: cache
-// the pre-shift (mono) values of every perspective matrix the forward path
-// shifts, then test 4x4 blocks of otherwise-unidentified CB writes for
-// C * V == I. A hit is learned on the buffer like any other target and
-// corrected through the existing matrixIsInverse branch below.
+// Numeric inverse-matrix detection (DetectInverseMatrix=1): see
+// Shared/StereoMatrix.h for the method and its tuning history.
 // ---------------------------------------------------------------------------
-// f interpreted per `transposed` into canonical row-vector layout (the
-// w-producing column at m[3], m[7], m[11], m[15]).
-static void CanonicalizeMat4(const float* f, bool transposed, float* out)
-{
-    if (!transposed) { memcpy(out, f, 16 * sizeof(float)); return; }
-    for (int r = 0; r < 4; ++r)
-        for (int c = 0; c < 4; ++c)
-            out[r * 4 + c] = f[c * 4 + r];
-}
+static void CacheForwardVP(const float* f, bool transposed) { s_mat.CacheForwardVP(f, transposed); }
 
-static void CacheForwardVP(const float* f, bool transposed)
-{
-    float canon[16];
-    CanonicalizeMat4(f, transposed, canon);
-    for (unsigned i = 0; i < _countof(s_vpRing); ++i)
-        if (s_vpRing[i].valid && memcmp(s_vpRing[i].m, canon, sizeof(canon)) == 0)
-            return;
-    memcpy(s_vpRing[s_vpRingNext].m, canon, sizeof(canon));
-    s_vpRing[s_vpRingNext].valid = true;
-    s_vpRingNext = (s_vpRingNext + 1) % _countof(s_vpRing);
-    ++s_vpRingInsertsThisFrame;
-}
-
-// One product element with a cancellation-aware tolerance: |acc - target|
-// must stay under 1e-4 * (sum of |term|) + 2e-3. Returned as a ratio of that
-// bound, so <= 1 passes and the frame log can report the closest miss.
-static float InverseProductDeviation(const float* c, const float* v, int i, int j)
-{
-    float acc = 0.f, mag = 0.f;
-    for (int k = 0; k < 4; ++k)
-    {
-        const float t = c[i * 4 + k] * v[k * 4 + j];
-        acc += t;
-        mag += fabsf(t);
-    }
-    const float target = (i == j) ? 1.f : 0.f;
-    // Bound doubled from the Frostbite-tuned 1e-4/2e-3: UE3's screen-to-world
-    // folds viewport terms into the inverse and sat at bestMiss=1.00-1.01
-    // (BioShock Infinite), just outside. True pairs score far below 1, junk
-    // far above, so the margin is wide.
-    return fabsf(acc - target) / (2e-4f * mag + 4e-3f);
-}
-
-// NaN poisons the max-accumulated deviation test: every comparison with NaN
-// is false, so a NaN term can never raise `dev` and a garbage block passes
-// (first Far Cry 3 "hit" was a NaN-filled matrix). Reject non-finite blocks.
-static bool AllFinite16(const float* f)
-{
-    for (int i = 0; i < 16; ++i)
-        if (f[i] != f[i] || fabsf(f[i]) > 1e30f) return false;
-    return true;
-}
-
-// Scan the buffer's 4x4 blocks (both storage orders) against the cached
-// forward matrices, newest first. bestMiss tracks the closest failing
-// candidate so a run of zero hits names its margin in the frame log.
 static bool DetectInverseInCB(const unsigned char* data, size_t byteCount,
                               DWORD& outReg, BOOL& outTransposed, float& bestMiss)
 {
-    const size_t regCount = byteCount / 16;
-    if (regCount < 4) return false;
-    // A real layout keeps invVP near the front; cap the scan so one large
-    // material buffer cannot make every write O(buffer size).
-    const size_t lastReg = (regCount > 128 ? 128 : regCount) - 4;
-    const float* fbuf = reinterpret_cast<const float*>(data);
-    for (size_t reg = 0; reg <= lastReg; ++reg)
-    {
-        if (!AllFinite16(fbuf + reg * 4)) continue;
-        for (int orient = 0; orient < 2; ++orient)
-        {
-            float cand[16];
-            CanonicalizeMat4(fbuf + reg * 4, orient == 1, cand);
-            for (unsigned ri = 0; ri < _countof(s_vpRing); ++ri)
-            {
-                const unsigned idx = (s_vpRingNext + _countof(s_vpRing) - 1 - ri)
-                                     % _countof(s_vpRing);
-                if (!s_vpRing[idx].valid) continue;
-                const float* v = s_vpRing[idx].m;
-                // Two-element prefilter before paying for the full product.
-                float dev = InverseProductDeviation(cand, v, 0, 0);
-                const float d01 = InverseProductDeviation(cand, v, 0, 1);
-                if (d01 > dev) dev = d01;
-                if (dev > 1.f)
-                {
-                    if (dev < bestMiss) bestMiss = dev;
-                    continue;
-                }
-                for (int i = 0; i < 4 && dev <= 1.f; ++i)
-                    for (int j = 0; j < 4; ++j)
-                    {
-                        const float d = InverseProductDeviation(cand, v, i, j);
-                        if (d > dev) dev = d;
-                        if (dev > 1.f) break;
-                    }
-                if (dev <= 1.f)
-                {
-                    outReg = (DWORD)reg;
-                    outTransposed = (orient == 1) ? TRUE : FALSE;
-                    return true;
-                }
-                if (dev < bestMiss) bestMiss = dev;
-            }
-        }
-    }
-    return false;
+    unsigned reg = 0; bool tr = false;
+    if (!s_mat.DetectInverse(data, byteCount, reg, tr, bestMiss)) return false;
+    outReg = (DWORD)reg;
+    outTransposed = tr ? TRUE : FALSE;
+    return true;
 }
 
-// Re-check a learned inverse each write before trusting it: pooled buffers
-// are reused for unrelated content, and the inverse patch skips every shape
-// guard, so a stale target smears the shear across arbitrary constants
-// (Far Cry 3: white/colorful flashes at ~20k patches per 60 frames). The
-// camera case re-passes trivially — the game rewrites both matrices from the
-// same camera each frame, and its VP re-enters the ring at geometry time
-// before the lighting CB is written.
-static bool VerifyInverseAgainstRing(const float* f, bool transposed)
-{
-    if (!AllFinite16(f)) return false;
-    float cand[16];
-    CanonicalizeMat4(f, transposed, cand);
-    for (unsigned ri = 0; ri < _countof(s_vpRing); ++ri)
-    {
-        const unsigned idx = (s_vpRingNext + _countof(s_vpRing) - 1 - ri)
-                             % _countof(s_vpRing);
-        if (!s_vpRing[idx].valid) continue;
-        const float* v = s_vpRing[idx].m;
-        float dev = InverseProductDeviation(cand, v, 0, 0);
-        const float d01 = InverseProductDeviation(cand, v, 0, 1);
-        if (d01 > dev) dev = d01;
-        if (dev > 1.f) continue;
-        for (int i = 0; i < 4 && dev <= 1.f; ++i)
-            for (int j = 0; j < 4; ++j)
-            {
-                const float d = InverseProductDeviation(cand, v, i, j);
-                if (d > dev) dev = d;
-                if (dev > 1.f) break;
-            }
-        if (dev <= 1.f) return true;
-    }
-    return false;
-}
+static bool VerifyInverseAgainstRing(const float* f, bool transposed) { return s_mat.VerifyInverseAgainstRing(f, transposed); }
 
 // outShifted / outRejected / outInvPatched are diagnostic tallies (may be
 // null); they feed the per-frame summary so we can see the guards actually
@@ -2273,23 +2244,11 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         {
             if (m.matrixFromLearned && !VerifyInverseAgainstRing(f, transposed))
             {
-                ++s_invStaleThisFrame;
+                ++s_mat.invStaleThisFrame;
                 if (outRejected) ++*outRejected;
                 continue;
             }
-            const float s = EyeShiftB(eyeShift);
-            if (transposed)
-            {
-                // stored = Q^T, so the update is column 4 -= s * column 1.
-                f[3] -= s * f[0];   f[7]  -= s * f[4];
-                f[11] -= s * f[8];  f[15] -= s * f[12];
-            }
-            else
-            {
-                // T^-1 touches row 4 only: row4 -= s * row1.
-                f[12] -= s * f[0];  f[13] -= s * f[1];
-                f[14] -= s * f[2];  f[15] -= s * f[3];
-            }
+            s_mat.PatchInverse(f, transposed, eyeShift);
             if (outShifted) ++*outShifted;
             if (outInvPatched) ++*outInvPatched;
             continue;
@@ -2350,7 +2309,7 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         if (basisWn > 1e-6f && fabsf(basisWn - 1.f) < 0.05f &&
             BasesOrthogonal(f, transposed, basisXn, basisWn))
         {
-            s_projXScale = basisXn / basisWn;
+            s_mat.projXScale = basisXn / basisWn;
             // Pre-shift values: the game derives its inverse from these.
             if (gInfo.DetectInverseMatrix) CacheForwardVP(f, transposed);
         }

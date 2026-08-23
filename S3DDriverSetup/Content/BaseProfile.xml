@@ -1723,6 +1723,22 @@
 		     right-eye lighting on right-eye geometry. -->
 		<DetectInverseMatrix Value="1"/>
 	</Profile>
+	<Profile Name="Mass Effect Andromeda">
+		<File Name="MassEffectAndromeda.exe" />
+		<!-- Frostbite 3, same deferred lighting as Battlefield 3. -->
+		<DetectInverseMatrix Value="1"/>
+	</Profile>
+	<Profile Name="Red Dead Redemption 2">
+		<File Name="RDR2.exe" />
+		<!-- Vulkan. Keeps view and projection as separate matrices (camera-
+		     relative); the inverse-matrix scan found no usable pair. Off. -->
+		<DetectInverseMatrix Value="0"/>
+	</Profile>
+	<Profile Name="DOOM (2016)">
+		<File Name="DOOMx64vk.exe" />
+		<!-- Vulkan. Forward-shifted geometry is enough; no inverse-matrix scan. -->
+		<DetectInverseMatrix Value="0"/>
+	</Profile>
 	<Profile Name="Far Cry 3">
 		<File Name="farcry3_d3d11.exe" />
 		<DetectInverseMatrix Value="1"/>

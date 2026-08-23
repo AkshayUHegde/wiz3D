@@ -230,8 +230,11 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
     td.SampleDesc.Count = 1;
     td.Usage            = D3D11_USAGE_DEFAULT;
     // RT so the game (left) + replay (right) can draw into them, SRV so
-    // the composite pass can sample them. UAV not needed.
+    // the composite pass can sample them. UAV when the game asked the swap
+    // chain for it (Frostbite 3 writes its final pass through a UAV on the
+    // back buffer; Mass Effect Andromeda aborts on CreateUnorderedAccessView).
     td.BindFlags        = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    if (desc.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) td.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
     HRESULT hrL = dev->CreateTexture2D(&td, nullptr, &m_leftBB);
     HRESULT hrR = dev->CreateTexture2D(&td, nullptr, &m_rightBB);
