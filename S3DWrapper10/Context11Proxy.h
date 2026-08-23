@@ -1,4 +1,4 @@
-/* NvDirectMode - ID3D11DeviceContext proxy
+﻿/* NvDirectMode - ID3D11DeviceContext proxy
  *
  * Stage 1b-i: passthrough wrapper. Stage 1b-iv hooks OMSetRenderTargets +
  * OMSetRenderTargetsAndUnorderedAccessViews to redirect viewport per active
@@ -63,6 +63,7 @@ struct ComRefHolder
 };
 
 class Device11Proxy;
+class Buffer11Proxy;
 
 class Context11Proxy : public ID3D11DeviceContext3
 {
@@ -374,6 +375,10 @@ private:
     {
         ID3D11Buffer* left[kMaxCBs];
         ID3D11Buffer* right[kMaxCBs];
+        // The wrapper behind left[]/right[], so a draw can ask whether the
+        // constants it is about to consume were actually eye-shifted. Not
+        // AddRef'd, same as left/right: the game holds the binding.
+        Buffer11Proxy* proxy[kMaxCBs];
         // D3D11.1 partial binds (*SetConstantBuffers1): constant range per
         // slot, num 0 = whole buffer; size is the buffer's constant count so
         // a rebind through the 11.1 entry can spell out whole-buffer slots.
@@ -428,6 +433,7 @@ private:
 
     // Bracket a duplicated draw. Begin returns false when duplication is off,
     // the targets are mono, or we are already inside the right-eye pass.
+    bool DrawCanDifferPerEye() const;
     bool BeginRightEyeDraw();
     void EndRightEyeDraw();
     void ProbeRightCB();
@@ -456,6 +462,7 @@ private:
     // any kind — the latter is the one that means content is actually lost.
     unsigned m_dispatchesDuplicatedThisFrame = 0;
     unsigned m_drawsDepthOnlyThisFrame     = 0;
+    unsigned m_drawsEyeInvariantThisFrame  = 0;
     unsigned m_drawsNoRightTargetThisFrame = 0;
 
     ID3D11DeviceContext* m_real;
@@ -505,7 +512,7 @@ private:
     unsigned             m_drawsVSNoSiblingCBThisFrame  = 0;
     // Draws per VS CRC for geometry that reached the right eye uncorrected.
     std::map<DWORD, unsigned> m_uncorrectedVSDraws;
-    void TallyDrawCoverage();
+    void TallyDrawCoverage(bool screenSpace);
     void BeginDraw(UINT vertexCount);
     // Draws per modified-shader CRC, so the ones the scene really uses are known.
     std::map<DWORD, unsigned> m_modVSDraws;

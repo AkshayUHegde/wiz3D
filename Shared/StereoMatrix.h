@@ -102,6 +102,96 @@ inline bool AllFinite16(const float* f)
     return true;
 }
 
+// Row-major 4x4 product, row-vector convention: out = a * b.
+inline void MulMat4(const float* a, const float* b, float* out)
+{
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+        {
+            float acc = 0.f;
+            for (int k = 0; k < 4; ++k) acc += a[r * 4 + k] * b[k * 4 + c];
+            out[r * 4 + c] = acc;
+        }
+}
+
+// Gauss-Jordan in double; D3DXMatrixInverse is unavailable in this shared header.
+inline bool InvertMat4(const float* m, float* out)
+{
+    double a[4][8];
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int c = 0; c < 4; ++c) a[r][c] = m[r * 4 + c];
+        for (int c = 0; c < 4; ++c) a[r][4 + c] = (r == c) ? 1.0 : 0.0;
+    }
+    for (int col = 0; col < 4; ++col)
+    {
+        int piv = col;
+        for (int r = col + 1; r < 4; ++r)
+            if (fabs(a[r][col]) > fabs(a[piv][col])) piv = r;
+        if (fabs(a[piv][col]) < 1e-12) return false;
+        if (piv != col)
+            for (int c = 0; c < 8; ++c) { const double t = a[col][c]; a[col][c] = a[piv][c]; a[piv][c] = t; }
+        const double d = a[col][col];
+        for (int c = 0; c < 8; ++c) a[col][c] /= d;
+        for (int r = 0; r < 4; ++r)
+        {
+            if (r == col) continue;
+            const double f = a[r][col];
+            if (f == 0.0) continue;
+            for (int c = 0; c < 8; ++c) a[r][c] -= f * a[col][c];
+        }
+    }
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) out[r * 4 + c] = (float)a[r][4 + c];
+    return AllFinite16(out);
+}
+
+// Cheap gate before any ring work: an unprojection cannot reintroduce a
+// perspective divide on x or y, so P^-1 -- and P^-1 * L, since L's first three
+// rows carry w = 0 -- has zeroes at [0][3] and [1][3]. Bounded relative to each
+// row's magnitude so off-axis and TAA-jittered projections still pass.
+inline bool LooksLikeUnprojection(const float* canon)
+{
+    for (int r = 0; r < 2; ++r)
+    {
+        const float* row = canon + r * 4;
+        const float n = fabsf(row[0]) + fabsf(row[1]) + fabsf(row[2]) + fabsf(row[3]);
+        if (!(n > 1e-20f)) return false;              // an all-zero row is not a matrix
+        if (fabsf(row[3]) > 1e-2f * n) return false;  // a real w term: not an unprojection
+    }
+    return true;
+}
+
+// Is M a light view-projection -- what remains when P^-1 divides out of a
+// composed screen-to-light matrix? A CSM light is orthographic (no w column)
+// and its 3x3 is R * diag(s), whose COLUMNS are orthogonal, not its rows. A
+// folded-in texture bias is diagonal, so it preserves that.
+inline bool IsLightTransform(const float* M)
+{
+    if (!AllFinite16(M)) return false;
+    if (fabsf(M[3]) > 1e-4f || fabsf(M[7]) > 1e-4f || fabsf(M[11]) > 1e-4f) return false;
+    if (fabsf(M[15] - 1.f) > 1e-3f) return false;     // also rejects an all-zero product
+
+    const float col[3][3] = {
+        { M[0], M[4], M[8]  },
+        { M[1], M[5], M[9]  },
+        { M[2], M[6], M[10] },
+    };
+    float n[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        n[i] = sqrtf(col[i][0] * col[i][0] + col[i][1] * col[i][1] + col[i][2] * col[i][2]);
+        if (!(n[i] > 1e-12f)) return false;
+    }
+    for (int i = 0; i < 3; ++i)
+        for (int j = i + 1; j < 3; ++j)
+        {
+            const float d = col[i][0] * col[j][0] + col[i][1] * col[j][1] + col[i][2] * col[j][2];
+            if (fabsf(d) > 0.02f * n[i] * n[j]) return false;
+        }
+    return true;
+}
+
 // Full C * V == I test of one canonical candidate against one cached VP.
 // Returns the max deviation ratio (<= 1 is a match).
 inline float InverseDeviation(const float* cand, const float* v)
@@ -120,6 +210,20 @@ inline float InverseDeviation(const float* cand, const float* v)
     return dev;
 }
 
+// FNV-1a over a canonical 4x4: a memcmp per ring entry per insert is the one
+// dedup cost that scales with a game's draw count.
+inline unsigned long long HashMat4(const float* m)
+{
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(m);
+    unsigned long long h = 1469598103934665603ULL;
+    for (int i = 0; i < 64; ++i)
+    {
+        h ^= (unsigned long long)p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 struct StereoMatrixState
 {
     // Camera projection _11, cached from the last clean view-projection seen.
@@ -127,18 +231,65 @@ struct StereoMatrixState
 
     // Ring of pre-shift (mono) perspective matrices the forward path corrected,
     // canonical row-vector layout; DetectInverse tests candidates against it.
-    struct CachedForwardVP { float m[16]; bool valid; };
-    CachedForwardVP ring[32] = {};
-    unsigned ringNext = 0;
+    //
+    // A rigid per-object WVP passes the test that gates caching and RAGE writes
+    // one per draw, so GTA V evicted the camera VP ~5x per frame (hits=0).
+    // Admission stays immediate anyway: requiring a repeat stalled BF3, whose
+    // moving camera writes a unique VP once per frame. Repetition drives only
+    // eviction, and age overrides it -- a moved-on camera confirming a learned
+    // target is the same intermittent patching by another route.
+    struct CachedForwardVP
+    {
+        float              m[16];
+        unsigned long long hash;
+        unsigned           hits;       // identical re-sightings; eviction tiebreak
+        unsigned           lastFrame;  // when last sighted; dominates eviction
+        unsigned           serial;     // insert order, final tiebreak
+        bool               valid;
+    };
+    // 64, not 32: BF3 writes its deferred CB after a run of per-object matrices.
+    // Depth is cheap now LooksLikeUnprojection gates the walk.
+    CachedForwardVP ring[64] = {};
+    unsigned ringSerial = 0;
+    unsigned ringMRU = 0;                // scanned first: most likely to match
     unsigned ringInsertsThisFrame = 0;   // churn indicator for the log
+    unsigned evictedHotThisFrame = 0;    // evicted an entry that had re-sightings
     unsigned invStaleThisFrame = 0;      // learned inverses failing re-verify
+    unsigned invStaleShapeThisFrame = 0; // ...of those, not unprojection-shaped
 
-    static const unsigned kRing = 32;
+    // Advanced once per present; entries older than kMaxAge cannot match.
+    unsigned frameId = 0;
+    // Bisect switches, set from config: legacyRing restores round-robin
+    // admission over 32 slots with no ageing, skipPrefilter bypasses the
+    // structural gate. Both reproduce the pre-2026-08-22 detector exactly.
+    bool legacyRing = false;
+    bool skipPrefilter = false;
+    static const unsigned kRing       = 64;
+    static const unsigned kLegacyRing = 32;
+    unsigned RingSlots() const { return legacyRing ? kLegacyRing : kRing; }
+    // One frame of slack: a CB can be written before geometry re-caches the VP.
+    static const unsigned kMaxAge = 1;
+
+    bool EntryUsable(const CachedForwardVP& e, unsigned maxAge) const
+    {
+        if (!e.valid) return false;
+        if (legacyRing) return true;
+        return (frameId - e.lastFrame) <= maxAge;
+    }
 
     unsigned RingValid() const
     {
         unsigned n = 0;
         for (unsigned i = 0; i < kRing; ++i) if (ring[i].valid) ++n;
+        return n;
+    }
+
+    // Young enough to match; a full ring with none of these is what reads as
+    // intermittent patching.
+    unsigned RingFresh() const
+    {
+        unsigned n = 0;
+        for (unsigned i = 0; i < kRing; ++i) if (EntryUsable(ring[i], kMaxAge)) ++n;
         return n;
     }
 
@@ -167,51 +318,173 @@ struct StereoMatrixState
     {
         float canon[16];
         CanonicalizeMat4(f, transposed, canon);
-        for (unsigned i = 0; i < kRing; ++i)
-            if (ring[i].valid && memcmp(ring[i].m, canon, sizeof(canon)) == 0)
-                return;
-        memcpy(ring[ringNext].m, canon, sizeof(canon));
-        ring[ringNext].valid = true;
-        ringNext = (ringNext + 1) % kRing;
+        const unsigned long long h = HashMat4(canon);
+
+        // Re-sighting refreshes age and raises hits: the camera VP recurs, the
+        // per-object WVPs around it do not.
+        const unsigned slots = RingSlots();
+        for (unsigned i = 0; i < slots; ++i)
+        {
+            if (!ring[i].valid || ring[i].hash != h) continue;
+            if (memcmp(ring[i].m, canon, sizeof(canon)) != 0) continue;   // hash collision
+            ++ring[i].hits;
+            ring[i].lastFrame = frameId;
+            ringMRU = i;
+            return;
+        }
+
+        // Free slot, then anything too old to match, then an entry nothing has
+        // repeated (round-robin among those, the original behaviour). GTA V's
+        // WVPs stay at hits == 1, so its flood consumes only its own slots.
+        unsigned slot = 0;
+        bool     found = false;
+        if (legacyRing)
+        {
+            slot = ringSerial % kLegacyRing;    // plain round robin
+            found = true;
+        }
+        for (unsigned i = 0; i < slots && !found; ++i)
+            if (!ring[i].valid) { slot = i; found = true; }
+        if (!found)
+            for (unsigned i = 0; i < slots && !found; ++i)
+                if (!EntryUsable(ring[i], kMaxAge)) { slot = i; found = true; }
+        if (!found)
+        {
+            slot = 0;
+            for (unsigned i = 1; i < slots; ++i)
+            {
+                const CachedForwardVP& a = ring[i];
+                const CachedForwardVP& b = ring[slot];
+                const bool aCold = (a.hits <= 1), bCold = (b.hits <= 1);
+                if (aCold != bCold)           { if (aCold) slot = i; }
+                else if (a.serial < b.serial) slot = i;
+            }
+            if (ring[slot].hits > 1) ++evictedHotThisFrame;
+        }
+        memcpy(ring[slot].m, canon, sizeof(canon));
+        ring[slot].hash      = h;
+        ring[slot].hits      = 1;
+        ring[slot].lastFrame = frameId;
+        ring[slot].serial    = ++ringSerial;
+        ring[slot].valid     = true;
+        ringMRU = slot;
         ++ringInsertsThisFrame;
     }
 
-    // Scan the buffer's 4x4 blocks (both storage orders) against the cached
-    // forward matrices, newest first. bestMiss tracks the closest failing
-    // candidate so a run of zero hits names its margin in the frame log.
-    // outReg is in 16-byte registers from `data`.
-    bool DetectInverse(const unsigned char* data, size_t byteCount,
-                       unsigned& outReg, bool& outTransposed, float& bestMiss) const
+    // Ring slot to test at position `ri`: the most recently touched entry first,
+    // then everything else. The MRU entry is the camera VP in any frame that is
+    // still writing geometry, so a real match usually lands on the first probe.
+    unsigned RingProbeOrder(unsigned ri) const
+    {
+        const unsigned slots = RingSlots();
+        if (ri == 0) return ringMRU < slots ? ringMRU : 0;
+        const unsigned idx = ri - 1;
+        const unsigned mru = ringMRU < slots ? ringMRU : 0;
+        return (idx < mru) ? idx : (idx + 1) % slots;   // skip the slot already probed
+    }
+
+    // The P^-1 the patch needs: the candidate itself for a bare inverse VP, or
+    // the inverse of the ring entry that divided out for a composed one.
+    struct InverseMatch
+    {
+        bool  composed = false;
+        float basis[16] = {};
+    };
+
+    // `allowComposed` is a per-game opt-in: it accepts a wider set, and a false
+    // positive patches an unrelated constant with no shape guard behind it.
+    bool MatchInverse(const float* cand, bool allowComposed,
+                      InverseMatch* out, float* bestMiss,
+                      bool* outShapeReject = nullptr) const
+    {
+        // Split the two ways a match fails: the block is not unprojection-shaped
+        // at all, or it is but no cached camera inverts it. They need opposite
+        // fixes, and the frame log cannot tell them apart otherwise.
+        if (!skipPrefilter && !LooksLikeUnprojection(cand))
+        {
+            if (outShapeReject) *outShapeReject = true;
+            return false;
+        }
+        for (unsigned ri = 0; ri < RingSlots(); ++ri)
+        {
+            const unsigned idx = RingProbeOrder(ri);
+            if (!EntryUsable(ring[idx], kMaxAge)) continue;
+
+            const float dev = InverseDeviation(cand, ring[idx].m);
+            if (dev <= 1.f)
+            {
+                if (out) { out->composed = false; memcpy(out->basis, cand, 16 * sizeof(float)); }
+                return true;
+            }
+            if (bestMiss && dev < *bestMiss) *bestMiss = dev;
+
+            // V * X should leave a light transform behind. The basis this yields
+            // goes straight into the patch, so unlike the pure case it must be
+            // the current frame's VP, not one frame stale.
+            if (!allowComposed || !EntryUsable(ring[idx], 0)) continue;
+            float product[16];
+            MulMat4(ring[idx].m, cand, product);
+            if (!IsLightTransform(product)) continue;
+            if (!out) return true;
+            if (!InvertMat4(ring[idx].m, out->basis)) continue;
+            out->composed = true;
+            return true;
+        }
+        return false;
+    }
+
+    struct DetectedInverse
+    {
+        unsigned reg;
+        bool     transposed;
+        bool     composed;
+    };
+
+    // Every match, not just the first: a deferred pass keeps the inverse VP and
+    // one screen-to-light matrix per cascade in one buffer, and the caller only
+    // rescans while it has no targets, so the rest were never revisited.
+    // `reg` is in 16-byte registers; a hit consumes its four, so one 4x4 cannot
+    // also be reported as three shifted copies of itself.
+    unsigned DetectInverses(const unsigned char* data, size_t byteCount,
+                            bool allowComposed, DetectedInverse* out, unsigned maxOut,
+                            float& bestMiss) const
     {
         const size_t regCount = byteCount / 16;
-        if (regCount < 4) return false;
+        if (regCount < 4 || maxOut == 0) return 0;
         // A real layout keeps invVP near the front; cap the scan so one large
         // material buffer cannot make every write O(buffer size).
         const size_t lastReg = (regCount > 128 ? 128 : regCount) - 4;
         const float* fbuf = reinterpret_cast<const float*>(data);
-        for (size_t reg = 0; reg <= lastReg; ++reg)
+        unsigned found = 0;
+        for (size_t reg = 0; reg <= lastReg && found < maxOut; ++reg)
         {
             if (!AllFinite16(fbuf + reg * 4)) continue;
             for (int orient = 0; orient < 2; ++orient)
             {
                 float cand[16];
                 CanonicalizeMat4(fbuf + reg * 4, orient == 1, cand);
-                for (unsigned ri = 0; ri < kRing; ++ri)
-                {
-                    const unsigned idx = (ringNext + kRing - 1 - ri) % kRing;
-                    if (!ring[idx].valid) continue;
-                    const float dev = InverseDeviation(cand, ring[idx].m);
-                    if (dev <= 1.f)
-                    {
-                        outReg = (unsigned)reg;
-                        outTransposed = (orient == 1);
-                        return true;
-                    }
-                    if (dev < bestMiss) bestMiss = dev;
-                }
+                InverseMatch match;
+                if (!MatchInverse(cand, allowComposed, &match, &bestMiss)) continue;
+                out[found].reg        = (unsigned)reg;
+                out[found].transposed = (orient == 1);
+                out[found].composed   = match.composed;
+                ++found;
+                reg += 3;      // consume this matrix; the loop's ++reg adds the 4th
+                break;
             }
         }
-        return false;
+        return found;
+    }
+
+    // Single-match convenience, kept for callers that only want the first.
+    bool DetectInverse(const unsigned char* data, size_t byteCount,
+                       unsigned& outReg, bool& outTransposed, float& bestMiss) const
+    {
+        DetectedInverse hit;
+        if (DetectInverses(data, byteCount, false, &hit, 1, bestMiss) == 0) return false;
+        outReg = hit.reg;
+        outTransposed = hit.transposed;
+        return true;
     }
 
     // Re-check a learned inverse each write before trusting it: pooled buffers
@@ -221,37 +494,59 @@ struct StereoMatrixState
     // camera case re-passes trivially — the game rewrites both matrices from the
     // same camera each frame, and its VP re-enters the ring at geometry time
     // before the lighting CB is written.
-    bool VerifyInverseAgainstRing(const float* f, bool transposed) const
+    // The basis is re-derived, not remembered with the target: it is P^-1 for
+    // the current camera and would be stale a frame later.
+    bool VerifyInverseAgainstRing(const float* f, bool transposed,
+                                  bool allowComposed = false,
+                                  InverseMatch* out = nullptr,
+                                  bool* outShapeReject = nullptr) const
     {
-        if (!AllFinite16(f)) return false;
+        if (!AllFinite16(f)) { if (outShapeReject) *outShapeReject = true; return false; }
         float cand[16];
         CanonicalizeMat4(f, transposed, cand);
-        for (unsigned ri = 0; ri < kRing; ++ri)
-        {
-            const unsigned idx = (ringNext + kRing - 1 - ri) % kRing;
-            if (!ring[idx].valid) continue;
-            if (InverseDeviation(cand, ring[idx].m) <= 1.f) return true;
-        }
-        return false;
+        return MatchInverse(cand, allowComposed, out, nullptr, outShapeReject);
     }
 
-    // Inverse (unprojection) matrices. The forward path is P' = P*T with
-    // T = I except T._41 = b, so the corrected inverse is T^-1 * P^-1.
-    void PatchInverse(float* f, bool transposed, float eyeShift) const
+    // Exact inverse of the forward shift x += b*w - b*conv. That shift is
+    // P_r = P + w.e0^T with w = b*P[:,3] + m41*e3 (m41 = -b*conv), a rank-1
+    // update of column 0, so by Sherman-Morrison the correction
+    // K = P_r^-1 * P = I - q.e0^T / (1 + q0), q = b*e3 + m41*C[:,3], is a rank-1
+    // update of the identity: subtract a multiple of row 0 from every row.
+    // conv == 0 leaves only c3, the shear-only body this replaced -- dropping
+    // the convergence term displaced every right-eye screen-space
+    // reconstruction by StereoBase at every depth.
+    // K multiplies on the LEFT, so the same rows correct a composed
+    // screen-to-light P^-1 * L given that L's P^-1 in `basis`; `basis` defaults
+    // to the matrix itself, right whenever the stored value IS the inverse VP.
+    void PatchInverse(float* f, bool transposed, float eyeShift, float conv,
+                      const float* basis = nullptr) const
     {
-        const float s = EyeShiftB(eyeShift);
-        if (transposed)
+        const float b = EyeShiftB(eyeShift);
+        float m[16];
+        CanonicalizeMat4(f, transposed, m);
+
+        // q = b*e3 + m41*C[:,3]; the 4th column of C is m[3], m[7], m[11], m[15].
+        const float* C = basis ? basis : m;
+        const float  m41   = -b * conv;
+        const float  denom = 1.f + m41 * C[3];
+        if (!(fabsf(denom) > 1e-4f)) return;   // also rejects a NaN denominator
+        const float c0 = (m41 * C[3])       / denom;
+        const float c1 = (m41 * C[7])       / denom;
+        const float c2 = (m41 * C[11])      / denom;
+        const float c3 = (m41 * C[15] + b)  / denom;
+
+        const float r0[4] = { m[0], m[1], m[2], m[3] };
+        for (int k = 0; k < 4; ++k)
         {
-            // stored = Q^T, so the update is column 4 -= s * column 1.
-            f[3] -= s * f[0];   f[7]  -= s * f[4];
-            f[11] -= s * f[8];  f[15] -= s * f[12];
+            m[k]      -= c0 * r0[k];
+            m[4  + k] -= c1 * r0[k];
+            m[8  + k] -= c2 * r0[k];
+            m[12 + k] -= c3 * r0[k];
         }
-        else
-        {
-            // T^-1 touches row 4 only: row4 -= s * row1.
-            f[12] -= s * f[0];  f[13] -= s * f[1];
-            f[14] -= s * f[2];  f[15] -= s * f[3];
-        }
+        // A degenerate basis can still produce infinities; leave the game's
+        // value alone rather than writing them into a live constant buffer.
+        if (!AllFinite16(m)) return;
+        CanonicalizeMat4(m, transposed, f);
     }
 };
 

@@ -1,4 +1,4 @@
-/* IZ3D_FILE: $Id$ 
+﻿/* IZ3D_FILE: $Id$ 
 *
 * Project : iZ3D Stereo Driver
 * Copyright (C) iZ3D Inc. 2002 - 2010
@@ -292,6 +292,14 @@ bool ReadConfigRouterType()
 			DECLARE_BVALUE(DisableBlindCBScan),
 			DECLARE_BVALUE(FullColumnEyeShift),
 			DECLARE_BVALUE(DetectInverseMatrix),
+			DECLARE_BVALUE(ExactInverseConvergence),
+			DECLARE_BVALUE(DetectComposedMatrix),
+			DECLARE_BVALUE(PatchAllInverses),
+						DECLARE_BVALUE(TeachMatricesAtDraw),
+			DECLARE_BVALUE(LegacyForwardVPRing),
+			DECLARE_BVALUE(SkipUnprojectionPrefilter),
+			DECLARE_BVALUE(SkipEyeInvariantDraws),
+			DECLARE_BVALUE(ShadowAtlasByShape),
 			DECLARE_BVALUE(DoubleResolveTargets),
 			DECLARE_BVALUE(ModifyShadersDX11),
 			DECLARE_IVALUE(ModifyShadersMaxCount),
@@ -800,6 +808,14 @@ void ReadProfilePart2Data(TiXmlNode* node)
 		DECLARE_BVALUE(FixNone16x9TextPosition),
 		// Per-game: deferred titles need the inverse hunt, others can be hurt by it.
 		DECLARE_BVALUE(DetectInverseMatrix),
+		DECLARE_BVALUE(ExactInverseConvergence),
+		DECLARE_BVALUE(DetectComposedMatrix),
+		DECLARE_BVALUE(PatchAllInverses),
+				DECLARE_BVALUE(TeachMatricesAtDraw),
+			DECLARE_BVALUE(LegacyForwardVPRing),
+		DECLARE_BVALUE(SkipUnprojectionPrefilter),
+		DECLARE_BVALUE(SkipEyeInvariantDraws),
+		DECLARE_BVALUE(ShadowAtlasByShape),
 		DECLARE_FVALUE(SeparationScale),
 		DECLARE_FVALUE(ScaleSeparationForSmallViewPorts),
 		DECLARE_IVALUE(SearchFrameSizeX),
