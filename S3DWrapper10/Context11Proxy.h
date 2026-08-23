@@ -433,7 +433,6 @@ private:
 
     // Bracket a duplicated draw. Begin returns false when duplication is off,
     // the targets are mono, or we are already inside the right-eye pass.
-    bool DrawCanDifferPerEye() const;
     bool BeginRightEyeDraw();
     void EndRightEyeDraw();
     void ProbeRightCB();
@@ -462,7 +461,7 @@ private:
     // any kind — the latter is the one that means content is actually lost.
     unsigned m_dispatchesDuplicatedThisFrame = 0;
     unsigned m_drawsDepthOnlyThisFrame     = 0;
-    unsigned m_drawsEyeInvariantThisFrame  = 0;
+    std::vector<unsigned char> m_drawPatchScratch;
     unsigned m_drawsNoRightTargetThisFrame = 0;
 
     ID3D11DeviceContext* m_real;
@@ -513,6 +512,7 @@ private:
     // Draws per VS CRC for geometry that reached the right eye uncorrected.
     std::map<DWORD, unsigned> m_uncorrectedVSDraws;
     void TallyDrawCoverage(bool screenSpace);
+    void PatchBoundCBsForDraw();
     void BeginDraw(UINT vertexCount);
     // Draws per modified-shader CRC, so the ones the scene really uses are known.
     std::map<DWORD, unsigned> m_modVSDraws;

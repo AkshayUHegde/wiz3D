@@ -1,4 +1,4 @@
-/* wiz3D - ID3D11Buffer proxy (Option B Stage 3c.1)
+﻿/* wiz3D - ID3D11Buffer proxy (Option B Stage 3c.1)
  *
  * Passthrough wrap of ID3D11Buffer. Carries a sticky "ever bound to a
  * vertex-pipeline stage" flag the Stage 4c projection-matrix heuristic
@@ -89,6 +89,36 @@ public:
         if (m_learned.size() < 24) m_learned.push_back(t);
     }
 
+    // Last bytes written, and a counter that changes with them. Patching at
+    // DRAW time needs the current contents and a way to tell whether the
+    // sibling is already correct for the shader about to consume it.
+    void SetShadow(const unsigned char* p, size_t n)
+    {
+        if (!p || !n || n > kMaxShadowBytes) return;
+        m_shadow.assign(p, p + n);
+        ++m_writeSeq;
+    }
+
+    // Writes this frame. A per-object buffer is rewritten hundreds of times, the
+    // camera's view buffer once or twice -- the only cheap way to tell a camera
+    // view-projection from the flood of per-object ones feeding the ring.
+    void NoteWriteFrame(unsigned frame)
+    {
+        if (m_writeCountFrame != frame) { m_writeCountFrame = frame; m_writesThisFrame = 0; }
+        ++m_writesThisFrame;
+    }
+    unsigned WritesThisFrame(unsigned frame) const
+    { return m_writeCountFrame == frame ? m_writesThisFrame : 0; }
+    const std::vector<unsigned char>& Shadow() const { return m_shadow; }
+    // The eye offset is baked into the bytes, so the shift itself is part of the
+    // key: without it a buffer the game stops rewriting keeps an old separation
+    // for ever and its lighting slides against everything freshly written.
+    bool NeedsDrawPatch(DWORD crc, float shift) const
+    { return m_patchedSeq != m_writeSeq || m_patchedCRC != crc || m_patchedShift != shift; }
+    void MarkDrawPatched(DWORD crc, float shift)
+    { m_patchedSeq = m_writeSeq; m_patchedCRC = crc; m_patchedShift = shift; }
+    static const size_t kMaxShadowBytes = 64 * 1024;
+
     // Inverse-detection backoff: a buffer that keeps scanning clean is
     // rescanned only sparsely (~1,500 full scans/frame in BioShock Infinite).
     bool ShouldScanForInverse()
@@ -106,6 +136,13 @@ private:
     bool           m_everShifted = false;
     unsigned       m_shiftedFrame = 0;
     unsigned       m_invScans = 0;
+    unsigned       m_writeSeq = 0;
+    unsigned       m_patchedSeq = 0xFFFFFFFFu;
+    DWORD          m_patchedCRC = 0;
+    float          m_patchedShift = 0.f;
+    unsigned       m_writeCountFrame = 0xFFFFFFFFu;
+    unsigned       m_writesThisFrame = 0;
+    std::vector<unsigned char> m_shadow;
     std::vector<MatrixTarget> m_learned;
 };
 

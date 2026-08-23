@@ -146,10 +146,8 @@ inline bool InvertMat4(const float* m, float* out)
     return AllFinite16(out);
 }
 
-// Cheap gate before any ring work: an unprojection cannot reintroduce a
-// perspective divide on x or y, so P^-1 -- and P^-1 * L, since L's first three
-// rows carry w = 0 -- has zeroes at [0][3] and [1][3]. Bounded relative to each
-// row's magnitude so off-axis and TAA-jittered projections still pass.
+// Cheap gate before any ring work: an unprojection has zeroes at [0][3] and
+// [1][3]. Relative to each row, so jittered/off-axis projections still pass.
 inline bool LooksLikeUnprojection(const float* canon)
 {
     for (int r = 0; r < 2; ++r)
@@ -163,9 +161,8 @@ inline bool LooksLikeUnprojection(const float* canon)
 }
 
 // Is M a light view-projection -- what remains when P^-1 divides out of a
-// composed screen-to-light matrix? A CSM light is orthographic (no w column)
-// and its 3x3 is R * diag(s), whose COLUMNS are orthogonal, not its rows. A
-// folded-in texture bias is diagonal, so it preserves that.
+// composed screen-to-light matrix? Ortho, and its 3x3 is R * diag(s), whose
+// COLUMNS are orthogonal, not its rows.
 inline bool IsLightTransform(const float* M)
 {
     if (!AllFinite16(M)) return false;
@@ -232,12 +229,8 @@ struct StereoMatrixState
     // Ring of pre-shift (mono) perspective matrices the forward path corrected,
     // canonical row-vector layout; DetectInverse tests candidates against it.
     //
-    // A rigid per-object WVP passes the test that gates caching and RAGE writes
-    // one per draw, so GTA V evicted the camera VP ~5x per frame (hits=0).
-    // Admission stays immediate anyway: requiring a repeat stalled BF3, whose
-    // moving camera writes a unique VP once per frame. Repetition drives only
-    // eviction, and age overrides it -- a moved-on camera confirming a learned
-    // target is the same intermittent patching by another route.
+    // Admission is immediate (requiring a repeat stalled BF3, whose camera VP is
+    // unique per frame); repetition drives eviction, age overrides it.
     struct CachedForwardVP
     {
         float              m[16];
@@ -267,8 +260,9 @@ struct StereoMatrixState
     static const unsigned kRing       = 64;
     static const unsigned kLegacyRing = 32;
     unsigned RingSlots() const { return legacyRing ? kLegacyRing : kRing; }
-    // One frame of slack: a CB can be written before geometry re-caches the VP.
-    static const unsigned kMaxAge = 1;
+    // Slack is in PRESENTS, and GTA V presents twice per game frame: at 1 its
+    // entries expired mid-frame and verification flipped between writes.
+    static const unsigned kMaxAge = 4;
 
     bool EntryUsable(const CachedForwardVP& e, unsigned maxAge) const
     {
@@ -441,10 +435,8 @@ struct StereoMatrixState
     };
 
     // Every match, not just the first: a deferred pass keeps the inverse VP and
-    // one screen-to-light matrix per cascade in one buffer, and the caller only
-    // rescans while it has no targets, so the rest were never revisited.
-    // `reg` is in 16-byte registers; a hit consumes its four, so one 4x4 cannot
-    // also be reported as three shifted copies of itself.
+    // one screen-to-light matrix per cascade in one buffer. `reg` is in 16-byte
+    // registers; a hit consumes its four.
     unsigned DetectInverses(const unsigned char* data, size_t byteCount,
                             bool allowComposed, DetectedInverse* out, unsigned maxOut,
                             float& bestMiss) const
@@ -507,17 +499,11 @@ struct StereoMatrixState
         return MatchInverse(cand, allowComposed, out, nullptr, outShapeReject);
     }
 
-    // Exact inverse of the forward shift x += b*w - b*conv. That shift is
-    // P_r = P + w.e0^T with w = b*P[:,3] + m41*e3 (m41 = -b*conv), a rank-1
-    // update of column 0, so by Sherman-Morrison the correction
-    // K = P_r^-1 * P = I - q.e0^T / (1 + q0), q = b*e3 + m41*C[:,3], is a rank-1
-    // update of the identity: subtract a multiple of row 0 from every row.
-    // conv == 0 leaves only c3, the shear-only body this replaced -- dropping
-    // the convergence term displaced every right-eye screen-space
-    // reconstruction by StereoBase at every depth.
-    // K multiplies on the LEFT, so the same rows correct a composed
-    // screen-to-light P^-1 * L given that L's P^-1 in `basis`; `basis` defaults
-    // to the matrix itself, right whenever the stored value IS the inverse VP.
+    // Exact inverse of x += b*w - b*conv. P_r = P + w.e0^T is a rank-1 update of
+    // column 0, so by Sherman-Morrison the correction K = P_r^-1 * P is one of
+    // the identity: subtract a multiple of row 0 from every row. conv == 0
+    // leaves only c3, the shear-only body this replaced. K multiplies on the
+    // LEFT, so the same rows correct a composed P^-1 * L given its `basis`.
     void PatchInverse(float* f, bool transposed, float eyeShift, float conv,
                       const float* basis = nullptr) const
     {
