@@ -143,11 +143,12 @@ inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE*
     // one — everything downstream sampled the left scene and the output
     // went byte-identical. Doubling the dst lets the existing Resolve/Copy
     // mirroring route each eye's content through automatically.
+    // MSAA ones too: only a copy can fill them (BF3 copies its MSAA G-buffer depth into one, resolves it for both eyes,
+    // and the right eye lit and ambient-occluded the left eye's depth).
     if (gInfo.DoubleResolveTargets &&
         (pDesc->BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0 &&
         (pDesc->BindFlags & D3D11_BIND_UNORDERED_ACCESS) == 0 &&
         pDesc->Usage == D3D11_USAGE_DEFAULT && !hasInitialData &&
-        pDesc->SampleDesc.Count == 1 &&
         pDesc->Width >= 640 && pDesc->Height >= 360)
         return true;
     // UAV-only textures are deliberately not doubled: NVIDIA's 3D Vision
@@ -172,7 +173,6 @@ inline bool ShouldDoubleTexture2D(const D3D10_TEXTURE2D_DESC* pDesc, const SIZE*
     if (gInfo.DoubleResolveTargets &&
         (pDesc->BindFlags & D3D10_BIND_SHADER_RESOURCE) != 0 &&
         pDesc->Usage == D3D10_USAGE_DEFAULT && !hasInitialData &&
-        pDesc->SampleDesc.Count == 1 &&
         pDesc->Width >= 640 && pDesc->Height >= 360)
         return true;
     return false;

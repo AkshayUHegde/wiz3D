@@ -22,6 +22,9 @@
 #include "proxy_factory.h"     // TryUnwrap* helpers
 #include "AdapterFunctions.h"  // DDILog
 #include "..\S3DAPI\ShaderProfileData.h"  // g_ProfileData matrix declarations
+#include <d3dcompiler.h>       // D3DDisassemble: the UAV slots a compute shader reads
+#include <cctype>
+#include <sstream>
 #include <mutex>
 
 namespace {
@@ -146,6 +149,7 @@ Context11Proxy::~Context11Proxy()
     // ClearFrameCommands; the dtor will route there.
     ClearFrameCommands();
     ReleaseStereoShiftCBs();
+    ReleaseUavTwins(~0u);
     {
         std::lock_guard<std::mutex> g(CtxLock());
         auto& v = CtxList();
@@ -173,6 +177,10 @@ void Context11Proxy::ClearFrameCommands()
 // interval keeps the log small.
 static float EyeShiftB(float eyeShift);   // defined with the CB-patch helpers below
 static float StereoConvergence();         // likewise
+// The scene camera's p00 a profile feature publishes (stereo::PublishCameraP00), 0 = unknown.
+static float s_camP00 = 0.f;
+static unsigned s_scaledByCamera = 0;   // scaled camera matrices shifted with s_camP00, this frame
+static unsigned s_lightOnlyKept = 0;    // light matrices (read only by shadow passes) left unshifted, this frame
 
 // The modified shader computes x += sep * (w - conv), so we only need those two
 // values. Rebuilt when separation changes, which is rare — binding is otherwise
@@ -229,6 +237,257 @@ void Context11Proxy::ReleaseStereoShiftCBs()
 {
     if (m_stereoCBLeft)  { m_stereoCBLeft->Release();  m_stereoCBLeft  = nullptr; }
     if (m_stereoCBRight) { m_stereoCBRight->Release(); m_stereoCBRight = nullptr; }
+}
+
+// The game's per-game features (ProfileFeature.h), built from its profile the first time a draw point needs them.
+ProfileFeatures& Context11Proxy::Features()
+{
+    if (!m_featuresBuilt)
+    {
+        m_featuresBuilt = true;
+        m_features = CreateProfileFeatures();
+        FeatureLog("Context11Proxy %p: %u profile feature(s)\n", this, (unsigned)m_features.size());
+    }
+    return m_features;
+}
+
+void Context11Proxy::NoteRightConstants(Buffer11Proxy* b)
+{
+    if (b) b->NoteRightWrite();
+}
+
+bool Context11Proxy::WriteRightConstants(Buffer11Proxy* b, const unsigned char* data, size_t size, int variant)
+{
+    ID3D11Buffer* r = b ? b->RightCopy(variant) : nullptr;
+    if (!r || !data || !size) return false;
+    D3D11_BUFFER_DESC bd = {};
+    r->GetDesc(&bd);
+    if (bd.ByteWidth != size) return false;
+    D3D11_MAPPED_SUBRESOURCE m = {};
+    if (bd.Usage == D3D11_USAGE_DYNAMIC)
+    {
+        if (FAILED(m_real->Map(r, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)) || !m.pData) return false;
+        memcpy(m.pData, data, size);
+        m_real->Unmap(r, 0);
+    }
+    else if (bd.Usage == D3D11_USAGE_DEFAULT) m_real->UpdateSubresource(r, 0, nullptr, data, 0, 0);
+    else return false;
+    if (variant) b->NoteMovedWrite(); else b->NoteRightWrite();
+    return true;
+}
+
+Buffer11Proxy* Context11Proxy::BoundCB(bool pixel, UINT slot) const
+{
+    return slot < kMaxCBs ? m_cbSlots[pixel ? ST_PS : ST_VS].proxy[slot] : nullptr;
+}
+
+ID3D11ShaderResourceView* Context11Proxy::LeftSRV(bool pixel, UINT slot) const
+{
+    return slot < kMaxSRVs ? m_srvSlots[pixel ? ST_PS : ST_VS].left[slot] : nullptr;
+}
+
+ID3D11ShaderResourceView* Context11Proxy::RightSRV(bool pixel, UINT slot) const
+{
+    return slot < kMaxSRVs ? m_srvSlots[pixel ? ST_PS : ST_VS].right[slot] : nullptr;
+}
+
+void Context11Proxy::BindLeftGeometryConstants()
+{
+    const StageIdx geo[] = { ST_VS, ST_HS, ST_DS, ST_GS };
+    for (StageIdx st : geo) if (m_cbSlots[st].high) BindStageCBs(st, false);
+}
+
+float Context11Proxy::EyeShiftSign() const
+{
+    float s = 1.f;
+    for (const auto& f : m_features) s *= f->EyeShiftSign();
+    return s;
+}
+
+float Context11Proxy::CameraP00() const
+{
+    for (const auto& f : m_features) if (f->CameraP00() > 0.f) return f->CameraP00();
+    return 0.f;
+}
+
+bool Context11Proxy::LightViewPass() const
+{
+    for (const auto& f : m_features) if (f->LightViewPass()) return true;
+    return false;
+}
+
+bool Context11Proxy::BoundCameraMove(CameraMove& out)
+{
+    for (const auto& f : m_features) if (f->BoundCameraMove(*this, out)) return true;
+    return false;
+}
+
+Buffer11Proxy* Context11Proxy::BoundNamedCB(const std::string& cbuffer) const
+{
+    const bool cs = m_editAtDispatch;
+    const ShaderAnalysis11Result* infos[2] = { m_boundInfo[cs ? 2 : 0], cs ? nullptr : m_boundInfo[1] };
+    const StageIdx stages[2] = { cs ? ST_CS : ST_VS, ST_PS };
+    for (int s = 0; s < 2; ++s)
+        if (infos[s])
+            for (const auto& named : infos[s]->rightCBs)
+                if (named.first == cbuffer && (UINT)named.second < kMaxCBs && m_cbSlots[stages[s]].proxy[named.second])
+                    return m_cbSlots[stages[s]].proxy[named.second];
+    return nullptr;
+}
+
+// The pass's output against the presented aspect, so a light's or probe's view is left alone: a draw's first target
+// (or depth), a dispatch's right-eye texture UAVs (a dispatch writing only buffers counts as the scene's).
+bool Context11Proxy::OutputAtPresentAspect(bool compute) const
+{
+    if (!m_parent || !m_parent->GetPresentWidth() || !m_parent->GetPresentHeight()) return false;
+    const float present = (float)m_parent->GetPresentWidth() / m_parent->GetPresentHeight();
+    auto atAspect = [&](ID3D11View* v, bool& isTexture) -> bool
+    {
+        isTexture = false;
+        ID3D11Resource* r = nullptr;
+        if (v) v->GetResource(&r);
+        if (!r) return false;
+        D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+        r->GetType(&dim);
+        D3D11_TEXTURE2D_DESC td = {};
+        if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) static_cast<ID3D11Texture2D*>(r)->GetDesc(&td);
+        r->Release();
+        if (!td.Width || !td.Height) return false;
+        isTexture = true;
+        return fabsf((float)td.Width / td.Height - present) < 0.03f * present;
+    };
+    bool isTexture = false;
+    if (!compute)
+        return atAspect(m_numRTVs && m_rtvLeft[0] ? static_cast<ID3D11View*>(m_rtvLeft[0])
+                                                  : static_cast<ID3D11View*>(m_dsvLeft), isTexture);
+    bool sawTexture = false;
+    for (UINT i = 0; i < m_csUAVSlots.high; ++i)
+    {
+        if (!m_csUAVSlots.right[i] || m_csUAVSlots.right[i] == m_csUAVSlots.left[i]) continue;
+        if (atAspect(m_csUAVSlots.left[i], isTexture)) return true;
+        sawTexture |= isTexture;
+    }
+    return !sawTexture;
+}
+
+// Each feature cbuffer of the bound shaders: the game's bytes plus every feature's edit, written once to the right copy
+// until something changes them; a moved-origin pass reads a second copy, bound for this draw only.
+void Context11Proxy::EditRightCBs(bool compute)
+{
+    if (Features().empty()) return;
+    const ShaderAnalysis11Result* infos[2] = { m_boundInfo[compute ? 2 : 0], compute ? nullptr : m_boundInfo[1] };
+    if (!(infos[0] && !infos[0]->rightCBs.empty()) && !(infos[1] && !infos[1]->rightCBs.empty())) return;
+    const StageIdx stages[2] = { compute ? ST_CS : ST_VS, ST_PS };
+    const float eyeShift = wiz3D_GetEffectiveEyeShift() * EyeShiftSign(), conv = stereo::Convergence();
+    int aspect = -1;   // the output's aspect, read once and only when an edit is due
+    m_editAtDispatch = compute;
+    m_editMovedOrigin = false;
+    for (const auto& f : m_features) m_editMovedOrigin |= f->MovedOriginPass(*this);
+    const int v = m_editMovedOrigin ? 1 : 0;
+    for (int s = 0; s < 2; ++s)
+    {
+        const ShaderAnalysis11Result* info = infos[s];
+        if (!info) continue;
+        for (const auto& named : info->rightCBs)
+        {
+            const UINT slot = (UINT)named.second;
+            Buffer11Proxy* b = slot < kMaxCBs ? m_cbSlots[stages[s]].proxy[slot] : nullptr;
+            if (!b || !b->GetRealRight() || b->Shadow().empty()) continue;
+            ID3D11Buffer* copy = b->RightCopy(v);
+            if (!copy) continue;
+            if (b->NeedsRightEdit(v, eyeShift, conv))
+            {
+                if (aspect < 0) aspect = OutputAtPresentAspect(compute) ? 1 : 0;
+                if (!aspect) return;
+                m_editScratch.assign(b->Shadow().begin(), b->Shadow().end());
+                bool edited = false;
+                m_editRetry = false;
+                m_editShader = info;
+                for (auto& f : m_features)
+                    edited |= f->EditRightConstants(*this, named.first, m_editScratch.data(), m_editScratch.size());
+                m_editShader = nullptr;
+                // The moved copy holds only what is written here, so it is written edited or not.
+                if (edited || v) WriteRightConstants(b, m_editScratch.data(), m_editScratch.size(), v);
+                if (!m_editRetry) b->MarkRightEdited(v, eyeShift, conv);
+            }
+            if (v) BindRightCB(stages[s], slot, copy);
+        }
+    }
+}
+
+ID3D11ShaderResourceView* Context11Proxy::ComputeSRVForRight(UINT slot) const
+{
+    if (slot >= kMaxSRVs) return nullptr;
+    const SRVEyeSlots& v = m_srvSlots[ST_CS];
+    return v.right[slot] ? v.right[slot] : v.left[slot];
+}
+
+void Context11Proxy::SubstituteComputeSRV(UINT slot, ID3D11ShaderResourceView* v)
+{
+    if (slot >= kMaxSRVs) return;
+    m_real->CSSetShaderResources(slot, 1, &v);
+    m_substitutedCSSRVs.push_back(slot);
+}
+
+// After the right eye's binds: the texture slots a feature named (ShaderAnalysis11Result::leftSRVSlots) read the game's
+// (left) copy, for this draw or dispatch only (BindEye(false) puts the left set back anyway).
+void Context11Proxy::BindLeftSRVs(bool compute)
+{
+    const ShaderAnalysis11Result* infos[2] = { m_boundInfo[compute ? 2 : 0], compute ? nullptr : m_boundInfo[1] };
+    const StageIdx stages[2] = { compute ? ST_CS : ST_VS, ST_PS };
+    for (int s = 0; s < 2; ++s)
+    {
+        const ShaderAnalysis11Result* info = infos[s];
+        if (!info || info->leftSRVSlots.empty()) continue;
+        const SRVEyeSlots& v = m_srvSlots[stages[s]];
+        for (int slot : info->leftSRVSlots)
+        {
+            if (slot < 0 || (UINT)slot >= kMaxSRVs || !v.left[slot] || v.left[slot] == v.right[slot]) continue;
+            ID3D11ShaderResourceView* l = v.left[slot];
+            switch (stages[s])
+            {
+            case ST_VS: m_real->VSSetShaderResources(slot, 1, &l); break;
+            case ST_PS: m_real->PSSetShaderResources(slot, 1, &l); break;
+            case ST_CS: m_real->CSSetShaderResources(slot, 1, &l); break;
+            default: break;
+            }
+            ++m_leftSRVsThisFrame;
+        }
+    }
+}
+
+void Context11Proxy::BindRightCB(StageIdx st, UINT slot, ID3D11Buffer* b)
+{
+    const CBEyeSlots& s = m_cbSlots[st];
+    if (s.anyRange && m_real1 && s.num[slot])
+    {
+        const UINT first = s.first[slot], num = s.num[slot];
+        switch (st)
+        {
+        case ST_VS: m_real1->VSSetConstantBuffers1(slot, 1, &b, &first, &num); break;
+        case ST_PS: m_real1->PSSetConstantBuffers1(slot, 1, &b, &first, &num); break;
+        case ST_CS: m_real1->CSSetConstantBuffers1(slot, 1, &b, &first, &num); break;
+        default: break;
+        }
+        return;
+    }
+    switch (st)
+    {
+    case ST_VS: m_real->VSSetConstantBuffers(slot, 1, &b); break;
+    case ST_PS: m_real->PSSetConstantBuffers(slot, 1, &b); break;
+    case ST_CS: m_real->CSSetConstantBuffers(slot, 1, &b); break;
+    default: break;
+    }
+}
+
+bool Context11Proxy::BoundShadersTagged(const std::string& name) const
+{
+    const bool cs = m_editAtDispatch;
+    const ShaderAnalysis11Result* infos[2] = { m_boundInfo[cs ? 2 : 0], cs ? nullptr : m_boundInfo[1] };
+    for (const ShaderAnalysis11Result* info : infos)
+        if (info)
+            for (const std::string& t : info->tags) if (t == name) return true;
+    return false;
 }
 
 // Sampling budget for matrix dumps, refilled at each frame report so the sample
@@ -289,6 +548,7 @@ static unsigned s_drawPatched = 0;
 // the three renders at the left eye's position, which at a 2-unit convergence
 // reads as the object sitting at the screen while its surroundings recede.
 static DWORD BoundShaderCRC(Device11Proxy* parent, void* shader);
+static float ProfileShaderMultiplier(Device11Proxy* parent, void* vs);
 
 // Fullscreen passes (<=6 verts) get zero-shift constants, so a modified shader
 // behaves exactly like the original and the quad is not slid sideways.
@@ -297,6 +557,7 @@ void Context11Proxy::BeginDraw(UINT vertexCount)
     ++m_drawsThisFrame;
     const bool screenSpace = (vertexCount <= 6);
     TallyDrawCoverage(screenSpace);
+    for (auto& f : Features()) f->OnLeftDraw(*this);
     if (!m_modVSShader) return;
     if (m_activeEye != Eye::Right) ++m_modVSDraws[BoundShaderCRC(m_parent, m_boundVS)];
     BindStereoShiftCB(m_activeEye == Eye::Right && !screenSpace);
@@ -328,6 +589,9 @@ void Context11Proxy::TallyDrawCoverage(bool screenSpace)
         anySlot = true;
         Buffer11Proxy* b = TryUnwrapBuffer(m_boundVSCBs[slot]);
         if (!b) continue;
+        if (!screenSpace)
+            for (const auto& pmd : it->second)
+                if (!pmd.incorrectProjection) b->NoteMatrixUse(pmd.matrixRegister, LightViewPass());
         // Draw-time teaching: the write path attributes a CB by the shader
         // bound at write time, but Far Cry 4's job renderer writes its CBs
         // long before binding the consumer, so not one write was ever
@@ -411,6 +675,39 @@ void Context11Proxy::LogAndResetFrameDrawStats()
     // Every 60th frame (~1s at 60fps), plus the first few so a short capture
     // still shows something.
     const bool report = (s_frame <= 3) || (s_frame % 60 == 0);
+
+    // Profile features keep this frame's counts alone (rows, not window sums); rows only with CollectDebugInformation.
+    const bool featureRows = report && gInfo.CollectDebugInformation;
+    for (auto& f : Features()) f->OnFrameEnd(*this, s_frame, featureRows);
+    m_flippedWritesThisFrame = 0;
+    if (featureRows)
+    {
+        std::string byCS;
+        char one[32];
+        for (const auto& c : m_sharedUavByCS)
+        {
+            sprintf_s(one, " %08lX x%u", c.first, c.second);
+            byCS += one;
+        }
+        DDILog("  [frame %u] right dispatches with shared UAVs twinned (this frame): %u (slots %u, copies %u, %.1f MB,"
+               " write-only dropped %u, failed %u, counters unknown %u, twins held %u), by CS:%s\n", s_frame,
+               m_sharedUavDispatchesThisFrame, m_sharedUavSlotsThisFrame, m_twinCopiesThisFrame,
+               m_twinBytesThisFrame / 1048576.0, m_twinWriteOnlyThisFrame, m_twinFailedThisFrame,
+               m_twinCounterUnknownThisFrame, (unsigned)m_uavTwins.size(), byCS.empty() ? " none" : byCS.c_str());
+        DDILog("  [frame %u] left-eye textures read by the right (this frame): %u binds\n", s_frame, m_leftSRVsThisFrame);
+    }
+    m_leftSRVsThisFrame = 0;
+    m_sharedUavDispatchesThisFrame = m_sharedUavSlotsThisFrame = 0;
+    m_sharedUavByCS.clear();
+    m_twinCopiesThisFrame = m_twinFailedThisFrame = m_twinCounterUnknownThisFrame = m_twinWriteOnlyThisFrame = 0;
+    m_twinBytesThisFrame = 0;
+    ReleaseUavTwins(600);
+    const unsigned scaledByCamera = s_scaledByCamera, lightKept = s_lightOnlyKept;
+    s_scaledByCamera = 0;
+    s_lightOnlyKept = 0;
+    if (featureRows && (s_camP00 > 0.f || lightKept))
+        DDILog("  [frame %u] camera (this frame): scaled camera matrices shifted with the camera's p00 %.4f: %u (cache %.4f)"
+               " | light matrices left unshifted %u\n", s_frame, s_camP00, scaledByCamera, s_mat.projXScale, lightKept);
     if (report)
     {
         // Only contexts belonging to a device with a wrapped swap chain reach
@@ -744,6 +1041,8 @@ void Context11Proxy::TrackOM(UINT NumViews, ID3D11RenderTargetView* const* ppRTV
     }
     m_omMonoDSV   = (pDSV != nullptr) && !dsvStereo;
     m_omAnyStereo = anyRTVStereo || dsvStereo;
+
+    for (auto& f : Features()) f->OnTargetsSet(*this);
 }
 
 void Context11Proxy::RecordGameFacingOM(UINT NumViews,
@@ -807,7 +1106,7 @@ void Context11Proxy::BindStageSRVs(StageIdx stage, bool right)
 }
 
 void Context11Proxy::TrackCSUAVs(UINT StartSlot, UINT NumUAVs,
-                                 ID3D11UnorderedAccessView* const* pp)
+                                 ID3D11UnorderedAccessView* const* pp, const UINT* initialCounts)
 {
     UAVEyeSlots& s = m_csUAVSlots;
     for (UINT i = 0; i < NumUAVs; ++i)
@@ -819,6 +1118,8 @@ void Context11Proxy::TrackCSUAVs(UINT StartSlot, UINT NumUAVs,
         s.right[slot] = UnwrapUAVForEye(v, true);
         if (s.left[slot] != s.right[slot]) s.anyStereo = true;
         if (slot + 1 > s.high) s.high = slot + 1;
+        m_csInitCount[slot] = initialCounts ? initialCounts[i] : ~0u;
+        m_csInitFresh[slot] = initialCounts != nullptr;
     }
 }
 
@@ -826,7 +1127,186 @@ void Context11Proxy::BindCSUAVs(bool right)
 {
     UAVEyeSlots& s = m_csUAVSlots;
     if (!s.high) return;
-    m_real->CSSetUnorderedAccessViews(0, s.high, right ? s.right : s.left, nullptr);
+    if (!right)
+    {
+        m_real->CSSetUnorderedAccessViews(0, s.high, s.left, nullptr);
+        return;
+    }
+    // A shared UAV (no right sibling) is its twin, copied before the left dispatch: the right reads what the left read
+    // and its writes stay out of the left eye's buffers.
+    ID3D11UnorderedAccessView* uavs[kMaxUAVs] = {};
+    unsigned shared = 0;
+    for (UINT i = 0; i < s.high; ++i)
+    {
+        const bool isShared = s.left[i] && s.right[i] == s.left[i];
+        uavs[i] = isShared ? (m_csTwinsPrepared ? m_csTwin[i] : nullptr) : s.right[i];
+        if (isShared) ++shared;
+    }
+    if (shared)
+    {
+        ++m_sharedUavDispatchesThisFrame;
+        m_sharedUavSlotsThisFrame += shared;
+        ++m_sharedUavByCS[m_boundInfo[2] ? m_boundInfo[2]->crc32 : 0];
+    }
+    m_real->CSSetUnorderedAccessViews(0, s.high, uavs, m_csTwinsPrepared ? m_csTwinCount : nullptr);
+    m_csTwinsPrepared = false;
+}
+
+// The UAV slots a compute shader reads (loads, or atomics that return the old value), from its disassembly once per CRC;
+// all ones when unknown. A slot it only writes needs no twin copy: the right's writes are dropped (null view).
+static unsigned long long CsUavReadMask(const ShaderAnalysis11Result* info)
+{
+    if (!info) return ~0ull;
+    static std::mutex s_lock;
+    static std::map<DWORD, unsigned long long> s_masks;
+    {
+        std::lock_guard<std::mutex> g(s_lock);
+        auto it = s_masks.find(info->crc32);
+        if (it != s_masks.end()) return it->second;
+    }
+    unsigned long long mask = ~0ull;
+    ID3DBlob* text = nullptr;
+    if (info->bytecode && !info->bytecode->empty() &&
+        SUCCEEDED(D3DDisassemble(info->bytecode->data(), info->bytecode->size(), 0, nullptr, &text)) && text)
+    {
+        mask = 0;
+        std::istringstream in(std::string((const char*)text->GetBufferPointer(), text->GetBufferSize()));
+        std::string line;
+        while (std::getline(in, line))
+        {
+            const size_t a = line.find_first_not_of(' ');
+            if (a == std::string::npos) continue;
+            const std::string op = line.substr(a, line.find_first_of(" (", a) - a);
+            if (op.compare(0, 12, "ld_uav_typed") && op.compare(0, 6, "ld_raw") && op.compare(0, 13, "ld_structured") &&
+                op.compare(0, 10, "imm_atomic"))
+                continue;
+            for (size_t p = line.find('u', a + op.size()); p != std::string::npos; p = line.find('u', p + 1))
+            {
+                if (p > 0 && (isalnum((unsigned char)line[p - 1]) || line[p - 1] == '_')) continue;
+                if (p + 1 >= line.size() || !isdigit((unsigned char)line[p + 1])) continue;
+                const int slot = atoi(line.c_str() + p + 1);
+                if (slot >= 0 && slot < 64) mask |= 1ull << slot;
+            }
+        }
+        text->Release();
+    }
+    std::lock_guard<std::mutex> g(s_lock);
+    s_masks[info->crc32] = mask;
+    return mask;
+}
+
+// Before a left dispatch the right eye repeats: each shared UAV the shader reads is copied to its twin (write-only ones
+// get none); the right's counters start at the game's bind-time counts while those are still fresh.
+void Context11Proxy::PrepareSharedUavTwins()
+{
+    UAVEyeSlots& s = m_csUAVSlots;
+    const bool repeats = gInfo.DuplicateDraws && gInfo.Input.StereoActive && m_activeEye == Eye::Left && s.anyStereo;
+    const unsigned long long reads = repeats ? CsUavReadMask(m_boundInfo[2]) : 0;
+    for (UINT i = 0; i < s.high; ++i)
+    {
+        m_csTwin[i] = nullptr;
+        m_csTwinCount[i] = m_csInitFresh[i] ? m_csInitCount[i] : ~0u;
+        if (!repeats || !s.left[i] || s.right[i] != s.left[i]) continue;
+        if (i < 64 && !(reads & (1ull << i))) { ++m_twinWriteOnlyThisFrame; continue; }
+        m_csTwin[i] = TwinFor(s.left[i]);
+        if (!m_csTwin[i]) ++m_twinFailedThisFrame;
+        D3D11_UNORDERED_ACCESS_VIEW_DESC ud = {};
+        s.left[i]->GetDesc(&ud);
+        if (ud.ViewDimension == D3D11_UAV_DIMENSION_BUFFER &&
+            (ud.Buffer.Flags & (D3D11_BUFFER_UAV_FLAG_APPEND | D3D11_BUFFER_UAV_FLAG_COUNTER)) && !m_csInitFresh[i])
+            ++m_twinCounterUnknownThisFrame;
+    }
+    for (UINT i = 0; i < s.high; ++i) m_csInitFresh[i] = false;
+    m_csTwinsPrepared = repeats;
+}
+
+ID3D11UnorderedAccessView* Context11Proxy::TwinFor(ID3D11UnorderedAccessView* v)
+{
+    ID3D11Device* dev = m_parent ? m_parent->GetReal() : nullptr;
+    ID3D11Resource* src = nullptr;
+    v->GetResource(&src);
+    if (!src || !dev) { if (src) src->Release(); return nullptr; }
+    D3D11_UNORDERED_ACCESS_VIEW_DESC ud = {};
+    v->GetDesc(&ud);
+    UavTwin& t = m_uavTwins[v];
+    if (t.uav && (t.src != src || memcmp(&t.ud, &ud, sizeof(ud)) != 0))
+    {
+        t.uav->Release();
+        t.res->Release();
+        t = UavTwin();
+    }
+    if (!t.uav)
+    {
+        D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+        src->GetType(&dim);
+        const UINT noShare = ~(UINT)(D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX |
+                                     D3D11_RESOURCE_MISC_GDI_COMPATIBLE);
+        HRESULT hr = E_FAIL;
+        if (dim == D3D11_RESOURCE_DIMENSION_BUFFER)
+        {
+            D3D11_BUFFER_DESC d = {};
+            static_cast<ID3D11Buffer*>(src)->GetDesc(&d);
+            d.MiscFlags &= noShare;
+            hr = dev->CreateBuffer(&d, nullptr, reinterpret_cast<ID3D11Buffer**>(&t.res));
+            t.bytes = d.ByteWidth;
+        }
+        else if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
+        {
+            D3D11_TEXTURE2D_DESC d = {};
+            static_cast<ID3D11Texture2D*>(src)->GetDesc(&d);
+            d.MiscFlags &= noShare;
+            hr = dev->CreateTexture2D(&d, nullptr, reinterpret_cast<ID3D11Texture2D**>(&t.res));
+            t.bytes = (UINT64)d.Width * d.Height * d.ArraySize * 4;
+        }
+        else if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE3D)
+        {
+            D3D11_TEXTURE3D_DESC d = {};
+            static_cast<ID3D11Texture3D*>(src)->GetDesc(&d);
+            d.MiscFlags &= noShare;
+            hr = dev->CreateTexture3D(&d, nullptr, reinterpret_cast<ID3D11Texture3D**>(&t.res));
+            t.bytes = (UINT64)d.Width * d.Height * d.Depth * 4;
+        }
+        else if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE1D)
+        {
+            D3D11_TEXTURE1D_DESC d = {};
+            static_cast<ID3D11Texture1D*>(src)->GetDesc(&d);
+            d.MiscFlags &= noShare;
+            hr = dev->CreateTexture1D(&d, nullptr, reinterpret_cast<ID3D11Texture1D**>(&t.res));
+            t.bytes = (UINT64)d.Width * d.ArraySize * 4;
+        }
+        if (SUCCEEDED(hr) && t.res && FAILED(dev->CreateUnorderedAccessView(t.res, &ud, &t.uav))) t.uav = nullptr;
+        if (!t.uav)
+        {
+            if (t.res) t.res->Release();
+            t = UavTwin();
+            src->Release();
+            m_uavTwins.erase(v);
+            return nullptr;
+        }
+        t.src = src;
+        t.ud = ud;
+    }
+    m_real->CopyResource(t.res, src);
+    src->Release();
+    t.lastFrame = s_frameId;
+    ++m_twinCopiesThisFrame;
+    m_twinBytesThisFrame += t.bytes;
+    return t.uav;
+}
+
+// Twins whose UAV the game has not dispatched with for a while (a freed view's address may come back as another view).
+void Context11Proxy::ReleaseUavTwins(unsigned olderThan)
+{
+    for (auto it = m_uavTwins.begin(); it != m_uavTwins.end();)
+    {
+        if (olderThan == ~0u || s_frameId - it->second.lastFrame > olderThan)
+        {
+            if (it->second.uav) it->second.uav->Release();
+            if (it->second.res) it->second.res->Release();
+            it = m_uavTwins.erase(it);
+        }
+        else ++it;
+    }
 }
 
 // Compute output has no right-eye copy unless the dispatch runs again with the
@@ -844,6 +1324,10 @@ bool Context11Proxy::BeginRightEyeDispatch()
         if (m_srvSlots[st].anyStereo) BindStageSRVs((StageIdx)st, true);
         if (m_cbSlots[st].anyStereo)  BindStageCBs((StageIdx)st, true);
     }
+    // Compute passes that feed the scene (shadow and lighting inputs) need the right camera too.
+    EditRightCBs(true);
+    BindLeftSRVs(true);
+    for (auto& f : Features()) f->OnRightDispatch(*this);
     return true;
 }
 
@@ -856,6 +1340,13 @@ void Context11Proxy::EndRightEyeDispatch()
         if (m_srvSlots[st].anyStereo) BindStageSRVs((StageIdx)st, false);
         if (m_cbSlots[st].anyStereo)  BindStageCBs((StageIdx)st, false);
     }
+    // A feature's substitute for one right dispatch: the game's view goes back.
+    for (UINT slot : m_substitutedCSSRVs)
+    {
+        ID3D11ShaderResourceView* l = m_srvSlots[ST_CS].left[slot];
+        m_real->CSSetShaderResources(slot, 1, &l);
+    }
+    m_substitutedCSSRVs.clear();
 }
 
 void Context11Proxy::BindStageCBs(StageIdx stage, bool right)
@@ -1128,6 +1619,9 @@ bool Context11Proxy::BeginRightEyeDraw()
     }
     m_activeEye = Eye::Right;
     BindEye(true);
+    EditRightCBs(false);
+    BindLeftSRVs(false);
+    for (auto& f : Features()) f->OnRightDraw(*this);
     ProbeRightCB();
     return true;
 }
@@ -1188,6 +1682,7 @@ void Context11Proxy::ProbeRightCB()
 
 void Context11Proxy::EndRightEyeDraw()
 {
+    for (auto& f : Features()) f->OnRightDrawDone(*this);
     BindEye(false);
     m_activeEye = Eye::Left;
 }
@@ -1195,9 +1690,13 @@ void Context11Proxy::EndRightEyeDraw()
 // Re-issue a draw for the right eye immediately after the game's own call.
 #define DUPLICATE_DRAW(CALL)              \
     do {                                  \
-        if (!BeginRightEyeDraw()) break;  \
-        m_real->CALL;                     \
-        EndRightEyeDraw();                \
+        if (BeginRightEyeDraw())          \
+        {                                 \
+            m_real->CALL;                 \
+            EndRightEyeDraw();            \
+        }                                 \
+        for (auto& f_ : Features())       \
+            f_->OnDrawDone(*this);        \
     } while (0)
 
 // Stage 4b.4 (more state setters): record-and-replay for *SetShaderResources
@@ -1444,7 +1943,29 @@ void STDMETHODCALLTYPE Context11Proxy::STAGE_PREFIX##SetShader(                 
 RECORD_SHADER_SET(GS, ID3D11GeometryShader)
 RECORD_SHADER_SET(HS, ID3D11HullShader)
 RECORD_SHADER_SET(DS, ID3D11DomainShader)
-RECORD_SHADER_SET(CS, ID3D11ComputeShader)
+
+void STDMETHODCALLTYPE Context11Proxy::CSSetShader(
+    ID3D11ComputeShader* pShader, ID3D11ClassInstance* const* ppClassInstances, UINT NumClassInstances)
+{
+    m_boundInfo[2] = m_parent ? m_parent->LookupShaderProjection(pShader) : nullptr;
+    m_real->CSSetShader(pShader, ppClassInstances, NumClassInstances);
+    if (!m_presentHookActive) return;
+    ComRefHolder shaderRef(pShader);
+    std::vector<ComRefHolder> ciRefs;
+    ciRefs.reserve(NumClassInstances);
+    for (UINT i = 0; i < NumClassInstances; ++i)
+        ciRefs.emplace_back(ppClassInstances ? ppClassInstances[i] : nullptr);
+    m_frameCommands.emplace_back(
+        [this, shaderRef, ciRefs, NumClassInstances]() {
+            ID3D11ClassInstance* raw[kMaxClassInst] = { 0 };
+            UINT cap = NumClassInstances <= kMaxClassInst ? NumClassInstances : kMaxClassInst;
+            for (UINT i = 0; i < cap; ++i)
+                raw[i] = static_cast<ID3D11ClassInstance*>(ciRefs[i].p);
+            m_real->CSSetShader(
+                static_cast<ID3D11ComputeShader*>(shaderRef.p),
+                ciRefs.empty() ? nullptr : raw, NumClassInstances);
+        });
+}
 
 // Stage 4e.2: VS variant that ALSO snapshots m_boundVS for the Unmap path's
 // projection-data lookup. Snapshot stored regardless of m_presentHookActive
@@ -1458,6 +1979,7 @@ void STDMETHODCALLTYPE Context11Proxy::VSSetShader(
     UINT NumClassInstances)
 {
     m_boundVS = pShader;
+    m_boundInfo[0] = m_parent ? m_parent->LookupShaderProjection(pShader) : nullptr;
 
     // A modified shader shifts its own output from a constant we supply, so it
     // runs for BOTH eyes and only the constant differs — the left eye gets the
@@ -1506,6 +2028,7 @@ void STDMETHODCALLTYPE Context11Proxy::PSSetShader(
     UINT NumClassInstances)
 {
     m_boundPS = pShader;
+    m_boundInfo[1] = m_parent ? m_parent->LookupShaderProjection(pShader) : nullptr;
     m_real->PSSetShader(pShader, ppClassInstances, NumClassInstances);
     if (!m_presentHookActive) return;
     ComRefHolder shaderRef(pShader);
@@ -1688,6 +2211,7 @@ void STDMETHODCALLTYPE Context11Proxy::Dispatch(
     UINT ThreadGroupCountX, UINT ThreadGroupCountY, UINT ThreadGroupCountZ)
 {
     ++m_dispatchesThisFrame;
+    PrepareSharedUavTwins();
     m_real->Dispatch(ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ);
     if (BeginRightEyeDispatch())
     {
@@ -1707,6 +2231,7 @@ void STDMETHODCALLTYPE Context11Proxy::DispatchIndirect(
     ID3D11Buffer* pBufferForArgs, UINT AlignedByteOffsetForArgs)
 {
     ++m_dispatchesThisFrame;
+    PrepareSharedUavTwins();
     m_real->DispatchIndirect(UnwrapBuf(pBufferForArgs), AlignedByteOffsetForArgs);
     if (BeginRightEyeDispatch())
     {
@@ -2257,6 +2782,14 @@ static float EyeOffsetM41(float eyeShift)
     return -eyeShift * StereoConvergence();
 }
 
+// The core's stereo state, for profile features (ProfileFeature.h).
+namespace stereo
+{
+float Convergence()               { return StereoConvergence(); }
+float FallbackB(float eyeShift)   { return EyeShiftB(eyeShift); }
+void  PublishCameraP00(float p00) { s_camP00 = p00; }
+}
+
 static bool ShouldSkipProjectionMatrix(const float* f, bool transposed)
 {
     // Orthographic: no perspective divide, i.e. the row/column that produces w
@@ -2331,12 +2864,15 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
     if (eyeShift == 0.f || matrices.empty()) return;
     constexpr size_t kRegBytes  = 16;
     constexpr size_t kMat4Bytes = 4 * kRegBytes;
+    Buffer11Proxy* lightBuf = srcBuffer ? TryUnwrapBuffer(static_cast<ID3D11Resource*>(const_cast<void*>(srcBuffer))) : nullptr;
     for (const auto& m : matrices)
     {
         size_t base = size_t(m.matrixRegister) * kRegBytes;
         if (base + kMat4Bytes > byteCount) continue;
         float* f = reinterpret_cast<float*>(data + base);
         const bool transposed = (m.matrixIsTransposed != 0);
+        // Only shadow passes read it as a position matrix: a light's view, the same for both eyes.
+        if (lightBuf && !m.matrixIsInverse && lightBuf->LightOnlyMatrix(m.matrixRegister)) { ++s_lightOnlyKept; continue; }
 
         // Inverse (unprojection) matrices: corrected by the exact inverse of the
         // whole forward shift (see PatchInverse). None of the guards below apply
@@ -2444,7 +2980,11 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         }
         if (basisWn < s_wnMin) s_wnMin = basisWn;
         if (basisWn > s_wnMax) s_wnMax = basisWn;
-        const float camXScale = ProjXScaleFromMatrix(f, transposed);
+        // A scaled world (MP3's light volumes: unit mesh * radius) has no unit w row; its x scale is the camera's p00,
+        // not the cached last unit-w matrix's.
+        const bool unitW = basisWn > 1e-6f && fabsf(basisWn - 1.f) < 0.05f;
+        if (!unitW && s_camP00 > 0.f) ++s_scaledByCamera;
+        const float camXScale = (!unitW && s_camP00 > 0.f) ? s_camP00 : ProjXScaleFromMatrix(f, transposed);
 
         if (gInfo.FullColumnEyeShift)
         {
@@ -2489,7 +3029,7 @@ void Context11Proxy::PatchBoundCBsForDraw()
     if (!info || !info->parsed || info->projection.matrixData.cb.empty()) return;
 
     const float eyeShift = wiz3D_GetEffectiveEyeShift()
-                         * ProfileShaderMultiplier(m_parent, m_boundVS);
+                         * ProfileShaderMultiplier(m_parent, m_boundVS) * EyeShiftSign();
     if (eyeShift == 0.f) return;
     const DWORD crc = BoundShaderCRC(m_parent, m_boundVS);
 
@@ -2524,6 +3064,7 @@ void Context11Proxy::PatchBoundCBsForDraw()
         unsigned shifted = 0;
         ApplyTargetedEyeShiftToCB(m_drawPatchScratch.data(), m_drawPatchScratch.size(),
                                   eyeShift, targets, &shifted, nullptr, nullptr, b);
+        NoteRightConstants(b);
 
         // WRITE_DISCARD only works on a dynamic buffer; a DEFAULT one (the
         // UpdateSubresource style) has to be written the same way the game
@@ -2935,8 +3476,11 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                         && mapped.pData)
                     {
                         memcpy(mapped.pData, bytes.data(), bytes.size());
+                        // Written while an x-flipped target is bound (a profile feature says so): the shift flips.
+                        const float sign = EyeShiftSign();
                         float eyeShift = wiz3D_GetEffectiveEyeShift()
-                                       * ProfileShaderMultiplier(m_parent, m_boundVS);
+                                       * ProfileShaderMultiplier(m_parent, m_boundVS) * sign;
+                        if (sign < 0.f && !targets.empty()) ++m_flippedWritesThisFrame;
                         if (!targets.empty())
                         {
                             const unsigned before = m_cbMatShiftedThisFrame;
@@ -2950,6 +3494,7 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                         else if (useBlindNow)
                             ApplyEyeShiftToCB(static_cast<unsigned char*>(mapped.pData),
                                               bytes.size(), eyeShift);
+                        NoteRightConstants(bp);
                         // gViewInverse stays untouched: RAGE reads only its
                         // translation row, which shared shadow maps rely on.
                         m_real->Unmap(rightBuf, subres);
@@ -3107,8 +3652,10 @@ void Context11Proxy::DoUpdateSubresource(
                 if (!targets.empty())
                 {
                     const unsigned before = m_cbMatShiftedThisFrame;
+                    const float sign = EyeShiftSign();
                     float eyeShift = wiz3D_GetEffectiveEyeShift()
-                                   * ProfileShaderMultiplier(m_parent, m_boundVS);
+                                   * ProfileShaderMultiplier(m_parent, m_boundVS) * sign;
+                    if (sign < 0.f) ++m_flippedWritesThisFrame;
                     ApplyTargetedEyeShiftToCB(tmp.data(), bd.ByteWidth, eyeShift,
                                               targets, &m_cbMatShiftedThisFrame,
                                               &m_cbMatRejectedThisFrame,
@@ -3123,6 +3670,7 @@ void Context11Proxy::DoUpdateSubresource(
             if (!patched)
                 m_real->UpdateSubresource(bp->GetRealRight(), DstSubresource, pDstBox,
                                           pSrcData, SrcRowPitch, SrcDepthPitch);
+            NoteRightConstants(bp);
         }
     }
 }
@@ -3576,7 +4124,7 @@ void STDMETHODCALLTYPE Context11Proxy::CSSetUnorderedAccessViews(
     ID3D11UnorderedAccessView* const* ppUnorderedAccessViews,
     const UINT* pUAVInitialCounts)
 {
-    TrackCSUAVs(StartSlot, NumUAVs, ppUnorderedAccessViews);
+    TrackCSUAVs(StartSlot, NumUAVs, ppUnorderedAccessViews, pUAVInitialCounts);
     // Stage 3c.2: unwrap UAVs eye-aware before forwarding.
     ID3D11UnorderedAccessView* rawSet[kMaxUAVs] = { 0 };
     UINT setCap = NumUAVs <= kMaxUAVs ? NumUAVs : kMaxUAVs;

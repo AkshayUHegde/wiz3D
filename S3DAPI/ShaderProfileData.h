@@ -12,6 +12,7 @@
 #include <vector>
 #include <d3dx9math.h>
 #include <list>
+#include <map>
 #include <string>
 
 #define SHADER_MATRIX_SIZE 2
@@ -89,6 +90,9 @@ public:
 	ShaderProfileDataMap			GSCRCData;
 	ShaderProfileDataMap			PSCRCData;
 	std::list<std::string>			AdditionalMatrixName;
+	// <Profile> elements the reader has no rule for, by name: their attributes, for the DX11 per-game features.
+	// Kept last: the DX9 wrapper reads this object across the DLL boundary, so the offsets above must not move.
+	std::map<std::string, std::map<std::string, std::string> >	FeatureEntries;
 
 	void clear();
 };

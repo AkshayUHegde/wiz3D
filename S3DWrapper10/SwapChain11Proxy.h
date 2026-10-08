@@ -124,6 +124,10 @@ private:
     // Post clears the recording vector and re-arms the hook for frame N+1.
     void OnPresentBoundaryPre();
     void OnPresentBoundaryPost();
+    // Hotkey-changed stereo settings are written once they settle for 5 s, as the DX9 wrapper does at each Present.
+    void PersistSettings();
+    DataInput m_savedInput;
+    ULONGLONG m_writeSettingsAt = 0;
 
     // Stage 4d: stereo BB sibling + SBS composite. EnsureStereoBackBuffer
     // allocates wiz3D-side LEFT + RIGHT BB textures (matching real BB desc

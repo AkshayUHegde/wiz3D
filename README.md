@@ -26,7 +26,7 @@ This project modernizes that source code, replaces kernel-level hooks with a pro
 * **DirectX 9:** ✅ **Mostly Working!** `d3d9.dll` proxy loader works! Left 4 Dead 2 and many others run in full stereo3D, outputs in all originally supported formats, and the profile system loads shader fixes and stereo settings for all originally supported games.
 * **DirectX 8:** ✅ **Partially Worikng.** Wrapper to convert DX8 to use DX9's stereoization. One tested game working, needs further testing.
 * **DirectX 7:** ⚠️ **In Progress.** Wrapper to convert DX7 to use DX9's stereoization. DX7 to DX9 converstion is working. Here for testing.
-* **DirectX 10/11:** ⚠️ **Partial.** The DX10/11 wrapper was never completely finished by iZ3D Inc. Some games work, but implementation in wiz3D still has some way to go and hasn't got any games booting with stereo3D initialised yet.
+* **DirectX 10/11:** ⚠️ **Partial.** The DX10/11 wrapper was never completely finished by iZ3D Inc. wiz3D's COM wrapper now runs Far Cry 3, Far Cry 4, Battlefield 3, Battlefield: Bad Company 2 and Max Payne 3 in stereo; other games still need testing.
 
 ---
 
@@ -389,6 +389,7 @@ Games that render Stereoscipic 3D themselves and display that via 3D Vision's 'D
 |------|-----|---------|--------|-------|-------|
 | Aliens vs. Predator (2010) | DX9/DX11 | x86 | ✓ | ✅ DX9 Working | Needs shadow shader fix on DX9. |
 | Assassins Creed | DX9/DX10 | x86 | ✓ | Untested |  |
+| Battlefield 3 | DX11 | x86 | ✕ | ✅ Working | Works with DirectX 11. |
 | BioShock | DX9/DX10 | x86 | ✓ | Untested |  |
 | BioShock 2 | DX9/DX10 | x86 | ✓ | Untested |  |
 | Call of Juarez: Bound in Blood | DX9/DX10 | x86 | ✓ | Untested |  |
@@ -401,6 +402,8 @@ Games that render Stereoscipic 3D themselves and display that via 3D Vision's 'D
 | De Blob | DX11 | x86 | ✓ | Untested |  |
 | Dragon Age II | DX9/DX11 | x86 | ✓ | Untested |  |
 | Far Cry 2 | DX9/DX10 | x86 | ✓ | Untested |  |
+| Far Cry 3 | DX9/DX11 | x86 | ✕ | ✅ Mostly Working | DX11 only. HUD elements and crosshair need correct depth. |
+| Far Cry 4 | DX11 | x64 | ✕ | ✅ Mostly Working | HUD elements and crosshair need correct depth. |
 | F.E.A.R. 3 | DX9/DX10 | x86 | ✓ | Untested |  |
 | Gears of War | DX9/DX10 | x86 | ✓ | Untested |  |
 | Homefront | DX9/DX11 | x86 | ✓ | Untested |  |
@@ -427,7 +430,7 @@ Games that used 3D Vision "Automatic Mode" driver stereo injection, but communic
 | Batman: Arkham Asylum | DX9 | x86 | ✓ | ✅ Working | Enables `Nvidia Stereoscopic 3D` in game setting. |
 | Batman: Arkham City | DX9/DX11 | x86 | ✕ | ✅ Partially Working | DX9 working, DX11 not working. Might need to implement more 3D Vison features. |
 | Batman: Arkham Origins | DX9/DX11 | x86 | ✕ | ❌ Not Working | DX9 needs `-force-d3d9`. Not working in DX9 or DX10. |
-| Battlefield: Bad Company 2 | DX9/DX10/DX11 | x86 | ✓ | Untested | Including 'Vietnam' Expansion Pack. |
+| Battlefield: Bad Company 2 | DX9/DX10/DX11 | x86 | ✓ | ✅ Mostly Working | DX11. Incorrect skybox. Including 'Vietnam' Expansion Pack. |
 | Brave: The Video Game | DX9 | x86 | ✕ | Untested |  |
 | Call of Duty: Black Ops | DX9 | x86 | ✓ | ✅ Working | Might need to implement more 3D Vison features. |
 | Carrier Command: Gaea Mission | DX9/DX11 | x86 | ✕ | Untested |  |
@@ -446,7 +449,7 @@ Games that used 3D Vision "Automatic Mode" driver stereo injection, but communic
 | L.A. Noire | DX9/DX11 | x86 | ✕ | Untested | Game tells Automatic Mode what depth to use per frame. |
 | Lost Planet 2 | DX9/DX11 | x86 | ✓ | Untested | `Stereo=ON` in `config.ini`. |
 | Mafia II | DX9 | x86 | ✓ | Untested |  |
-| Max Payne 3 | DX9/DX11 | x86 | ✕ | ⚠️ Partial | Needs 3D Vision shader fixes. `3D Vision` not showing in `Graphics` menu. `-stereo 1` command line argument. |
+| Max Payne 3 | DX9/DX11 | x86 | ✕ | ✅ Mostly Working | DX11. Rockstar logo intro does not render and the loading icon renders incorrectly. `3D Vision` not showing in `Graphics` menu. `-stereo 1` command line argument. |
 | Medal of Honor (2010) | DX9/DX11 | x86 | ✓ | Untested | Use Single Player only. |
 | Metro 2033 | DX9/DX11 | x86 | ✓ | ✅ Mostly Working | Can't see weapon in hand. |
 | Metro: Last Light | DX9/DX11 | x86 | ✕ | Untested | Lists 3D Vision support in [Official PC Requirements](https://www.reddit.com/r/Games/comments/1cjh4l/metro_last_light_official_pc_requirements/). |

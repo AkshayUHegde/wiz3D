@@ -399,10 +399,10 @@ public:
 	// time. Far Cry 4 needs it -- its job renderer fills CBs long before binding
 	// the consumer, so no write is ever attributed. Bisected as the cause of Far
 	// Cry 3's soft right eye (074dafe5); 0 restores the picture before it.
-	// DX10	 COM-wrap: patch the right eye's constants at DRAW time, for the
+	// DX10\11 COM-wrap: patch the right eye's constants at DRAW time, for the
 	// shader about to consume them, not at write time for whichever was bound.
 	bool		PatchConstantsAtDraw;
-	// DX10	 COM-wrap: only cache view-projections into the detector ring from
+	// DX10\11 COM-wrap: only cache view-projections into the detector ring from
 	// buffers written a few times a frame. A per-object CB is rewritten per
 	// draw and flushed the ring before the deferred write arrived.
 	bool		RingFromRareWritesOnly;

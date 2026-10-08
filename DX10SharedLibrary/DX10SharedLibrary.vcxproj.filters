@@ -761,6 +761,42 @@
     <ClCompile Include="..\S3DWrapper10\Context11Proxy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\ProfileFeature.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureStereoTexture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureMirroredTarget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureHudDepth.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureLightViewPasses.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureAdditionalMatrices.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureRightCamera.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureRayCorners.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureDuniaLocalLights.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureCameraProjection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureLeftEyeTextures.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureCameraRelativePlanes.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\DXGIDeviceProxy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

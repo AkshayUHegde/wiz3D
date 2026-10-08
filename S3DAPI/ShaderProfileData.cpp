@@ -19,4 +19,5 @@ void ProfileData::clear()
 	PSCRCData.clear();
 	AdditionalMatrixName.clear();
 	MonoRHWValues.clear();
+	FeatureEntries.clear();
 }

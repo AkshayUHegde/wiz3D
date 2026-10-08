@@ -21,6 +21,7 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // bundled lib/d3d10 dxgitype.h still
 #include <string>
 #include <map>
 #include <algorithm>
+#include "ProfileFeature.h"
 
 namespace wiz3d
 {
@@ -64,6 +65,7 @@ struct ComRefHolder
 
 class Device11Proxy;
 class Buffer11Proxy;
+struct ShaderAnalysis11Result;
 
 class Context11Proxy : public ID3D11DeviceContext3
 {
@@ -359,7 +361,31 @@ private:
         bool anyStereo;
     };
     UAVEyeSlots m_csUAVSlots = {};
-    void TrackCSUAVs(UINT StartSlot, UINT NumUAVs, ID3D11UnorderedAccessView* const* pp);
+    void TrackCSUAVs(UINT StartSlot, UINT NumUAVs, ID3D11UnorderedAccessView* const* pp, const UINT* initialCounts);
+    // The game's initial counts at the last bind, valid until the first dispatch after it (-1 = keep the counter).
+    UINT m_csInitCount[kMaxUAVs];
+    bool m_csInitFresh[kMaxUAVs] = {};
+    // A right dispatch's twin of each shared UAV, copied before the left dispatch, so the right reads what the left read
+    // and writes nothing the left eye owns (PrepareSharedUavTwins, BindCSUAVs).
+    struct UavTwin
+    {
+        ID3D11Resource*            src = nullptr;   // not owned; with the descs, identifies a reused address
+        ID3D11Resource*            res = nullptr;
+        ID3D11UnorderedAccessView* uav = nullptr;
+        D3D11_UNORDERED_ACCESS_VIEW_DESC ud = {};
+        UINT64                     bytes = 0;
+        unsigned                   lastFrame = 0;
+    };
+    std::map<ID3D11UnorderedAccessView*, UavTwin> m_uavTwins;
+    ID3D11UnorderedAccessView* m_csTwin[kMaxUAVs] = {};
+    UINT                       m_csTwinCount[kMaxUAVs];
+    bool                       m_csTwinsPrepared = false;   // the arrays above belong to this dispatch
+    void PrepareSharedUavTwins();
+    ID3D11UnorderedAccessView* TwinFor(ID3D11UnorderedAccessView* v);
+    void ReleaseUavTwins(unsigned olderThan);
+    unsigned m_twinCopiesThisFrame = 0, m_twinFailedThisFrame = 0, m_twinCounterUnknownThisFrame = 0;
+    unsigned m_twinWriteOnlyThisFrame = 0;
+    UINT64   m_twinBytesThisFrame = 0;
     void BindCSUAVs(bool right);
     bool BeginRightEyeDispatch();
     void EndRightEyeDispatch();
@@ -460,6 +486,10 @@ private:
     // Depth-only draws (no RTV bound), and draws with no right-eye target of
     // any kind — the latter is the one that means content is actually lost.
     unsigned m_dispatchesDuplicatedThisFrame = 0;
+    // Right dispatches whose sibling-less UAVs were unbound (BindCSUAVs), by compute shader CRC.
+    unsigned m_sharedUavDispatchesThisFrame = 0;
+    unsigned m_sharedUavSlotsThisFrame      = 0;
+    std::map<DWORD, unsigned> m_sharedUavByCS;
     unsigned m_drawsDepthOnlyThisFrame     = 0;
     std::vector<unsigned char> m_drawPatchScratch;
     unsigned m_drawsNoRightTargetThisFrame = 0;
@@ -561,6 +591,71 @@ private:
     bool EnsureStereoShiftCBs();
     void BindStereoShiftCB(bool right);
     void ReleaseStereoShiftCBs();
+
+    // Analysis of the bound vertex [0], pixel [1] and compute [2] shader, taken when the game sets them.
+    const ShaderAnalysis11Result* m_boundInfo[3] = {};
+
+    // The game's per-game behaviour (ProfileFeature.h), built from its profile on first use.
+    ProfileFeatures m_features;
+    bool            m_featuresBuilt = false;
+    ProfileFeatures& Features();
+    // The features' edits of the bound shaders' noted cbuffers, for a right draw or dispatch (EditRightConstants).
+    void EditRightCBs(bool compute);
+    bool OutputAtPresentAspect(bool compute) const;
+    void BindRightCB(StageIdx st, UINT slot, ID3D11Buffer* b);
+    void BindLeftSRVs(bool compute);
+    unsigned m_leftSRVsThisFrame = 0;
+    std::vector<UINT> m_substitutedCSSRVs;   // slots a feature replaced for the current right dispatch
+    std::vector<unsigned char> m_editScratch;
+    bool                       m_editAtDispatch = false, m_editMovedOrigin = false, m_editRetry = false;
+    const ShaderAnalysis11Result* m_editShader = nullptr;
+    // Every write to a CB's right sibling counts here, so a feature's draw-time rewrite knows when it was overwritten.
+    void NoteRightConstants(Buffer11Proxy* b);
+    // CB writes this frame that took a flipped eye shift (inside an x-flipped target).
+    unsigned m_flippedWritesThisFrame = 0;
+
+public:
+    // ---- What profile features use (ProfileFeature.h) ----------------------
+    ID3D11DeviceContext* Real() const   { return m_real; }
+    Device11Proxy*       Parent() const { return m_parent; }
+    // The analysis of the bound vertex (pixel = false) or pixel shader, null if unknown.
+    const ShaderAnalysis11Result* BoundShader(bool pixel) const { return m_boundInfo[pixel ? 1 : 0]; }
+    // The game's constant buffer / shader resources at a vertex or pixel shader slot (left = the game's, right = the
+    // right eye's), null when none.
+    Buffer11Proxy*            BoundCB(bool pixel, UINT slot) const;
+    ID3D11ShaderResourceView* LeftSRV(bool pixel, UINT slot) const;
+    ID3D11ShaderResourceView* RightSRV(bool pixel, UINT slot) const;
+    UINT                      NumTargets() const { return m_numRTVs; }
+    ID3D11RenderTargetView*   LeftTarget(UINT i) const { return i < kMaxRTVs ? m_rtvLeft[i] : nullptr; }
+    ID3D11DepthStencilView*   LeftDepth() const { return m_dsvLeft; }
+    // The right copy reads the left eye's VS/HS/DS/GS constants (a light's view is the same for both eyes).
+    void                      BindLeftGeometryConstants();
+    // Writes a whole CB's right sibling (a feature's rewrite of the game's last bytes); counts as a right write.
+    bool                      WriteRightConstants(Buffer11Proxy* b, const unsigned char* data, size_t size, int variant = 0);
+    // Over every feature: the eye shift's sign, the scene camera's p00 (0 = unknown), a light's-view pass.
+    float                     EyeShiftSign() const;
+    float                     CameraP00() const;
+    bool                      LightViewPass() const;
+    // Over every feature: the bound camera and the right camera's move (ProfileFeature::BoundCameraMove).
+    bool                      BoundCameraMove(CameraMove& out);
+    // During EditRightConstants: the edit is for a dispatch (else a draw), and the buffer the bound shaders read as a
+    // noted cbuffer (null = none).
+    bool                      EditAtDispatch() const { return m_editAtDispatch; }
+    // During EditRightConstants: the shader whose cbuffer is edited ($Globals is laid out per shader).
+    const ShaderAnalysis11Result* EditingShader() const { return m_editShader; }
+    Buffer11Proxy*            BoundNamedCB(const std::string& cbuffer) const;
+    // A bound shader carries a feature's tag; the pass sees the right camera with its origin moved; a feature lacked
+    // what it needs (the edit is redone at the next binding rather than kept).
+    bool                      BoundShadersTagged(const std::string& name) const;
+    bool                      MovedOrigin() const { return m_editMovedOrigin; }
+    void                      RetryEdit() { m_editRetry = true; }
+    // The bound compute shader; the SRV its right dispatch reads at a slot; one bound in its place for this right
+    // dispatch only (the left one is put back after it).
+    const ShaderAnalysis11Result* BoundCompute() const { return m_boundInfo[2]; }
+    ID3D11ShaderResourceView* ComputeSRVForRight(UINT slot) const;
+    void                      SubstituteComputeSRV(UINT slot, ID3D11ShaderResourceView* v);
+    unsigned                  FlippedWritesThisFrame() const { return m_flippedWritesThisFrame; }
+private:
 
     // Stage 4b.1: per-frame command record. Stage 4b.8 + 4d flush + replay
     // before each Present. Only populated when m_presentHookActive is true.

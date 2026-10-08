@@ -741,6 +741,14 @@ void ReadVectorData( TiXmlElement* itemElement, float fMultiplier )
 	}
 }
 
+// An element with no rule here: its attributes, for the wrapper's per-game features (ProfileData::FeatureEntries).
+static void ReadFeatureEntry( TiXmlElement* itemElement )
+{
+	std::map<std::string, std::string>& entry = g_ProfileData.FeatureEntries[itemElement->Value()];
+	for (const TiXmlAttribute* a = itemElement->FirstAttribute(); a; a = a->Next())
+		entry[a->Name()] = a->Value();
+}
+
 void ReadProfilePart2Data(TiXmlNode* node)
 {
 	if (!node)
@@ -897,6 +905,10 @@ void ReadProfilePart2Data(TiXmlNode* node)
 					itemElement2->QueryIntAttribute("Key", (int*)&gInfo.HotKeyList[j].code);
 				}
 			}
+		}
+		else
+		{
+			ReadFeatureEntry(itemElement);
 		}
 	}
 	if (gInfo.DeviceMode == DEVICE_MODE_RESERVED)

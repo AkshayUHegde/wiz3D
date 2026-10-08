@@ -25,6 +25,7 @@
 #include <madCHook.h>
 #include <mutex>
 #include <unordered_map>
+#include <atomic>
 
 #pragma comment(lib, "dxguid.lib")
 
@@ -442,6 +443,18 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
 
     ShaderAnalysis11Result info;
     const bool analyzed = AnalyzeShader11(pBytecode, byteLength, info);
+    // The features may read the code here (the 3D Vision texel scan); only compute shaders keep it, for the UAV slots
+    // their right dispatch reads (Context11Proxy::PrepareSharedUavTwins), within a budget.
+    if (pBytecode && byteLength)
+        info.bytecode = std::make_shared<const std::vector<BYTE>>((const BYTE*)pBytecode, (const BYTE*)pBytecode + byteLength);
+    // The game's per-game features locate their names (ProfileFeature.h); built once, after the profile was read.
+    static const ProfileFeatures s_shaderFeatures = CreateProfileFeatures();
+    const RdefView rdef(pBytecode, byteLength);
+    for (const auto& f : s_shaderFeatures) f->OnShaderCreated(rdef, info);
+    static std::atomic<size_t> s_keptBytes(0);
+    const size_t kKeepBudget = sizeof(void*) == 8 ? (256u << 20) : (64u << 20);
+    if (strcmp(tag, "Compute") != 0 || s_keptBytes.load() + byteLength > kKeepBudget) info.bytecode.reset();
+    else s_keptBytes += byteLength;
     if (analyzed && !info.projection.matrixData.cb.empty())
     {
         NVDM_TRACE_FIRST_N(32,
@@ -586,8 +599,12 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateComputeShader(
 {
     static unsigned s_csDump = 0;
     DumpShaderBytecode("cs", pShaderBytecode, BytecodeLength, s_csDump++);
-    return m_real->CreateComputeShader(pShaderBytecode, BytecodeLength,
-                                       pClassLinkage, ppComputeShader);
+    // Analysed for the profile features' names only (no SV_Position, so no matrix analysis runs).
+    return AnalyzeAndCreate<ID3D11ComputeShader>("Compute", this,
+        [this](const void* b, SIZE_T n, ID3D11ClassLinkage* cl, ID3D11ComputeShader** pp) {
+            return m_real->CreateComputeShader(b, n, cl, pp);
+        },
+        pShaderBytecode, BytecodeLength, pClassLinkage, ppComputeShader);
 }
 
 HRESULT STDMETHODCALLTYPE Device11Proxy::CreateGeometryShader(

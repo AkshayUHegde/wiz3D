@@ -16,6 +16,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <vector>
+#include <bitset>
 
 namespace wiz3d
 {
@@ -55,6 +56,9 @@ public:
     // rather than rewriting a shared buffer. Null unless gInfo.DuplicateDraws.
     ID3D11Buffer*  GetRealRight()  const { return m_realRight; }
     void           SetRealRight(ID3D11Buffer* p) { m_realRight = p; }
+    // The right copy a pass reads (Context11Proxy::EditRightCBs): 0 = the sibling above, 1 = a second sibling for passes
+    // that see the right camera with its origin moved, made on first use with the same desc.
+    ID3D11Buffer*  RightCopy(int variant);
 
     // Stage 4c.1: sticky tag — set when *SetConstantBuffers fires on a
     // vertex-pipeline stage (VS / GS / HS / DS). Map/Unmap consults this
@@ -119,6 +123,26 @@ public:
     { m_patchedSeq = m_writeSeq; m_patchedCRC = crc; m_patchedShift = shift; }
     static const size_t kMaxShadowBytes = 64 * 1024;
 
+    // Registers vertex shaders read as their position matrix, by pass. One read only in shadow passes is a light's view
+    // (MP3's ShadowParam.gShadowMatrix), the same for both eyes.
+    void NoteMatrixUse(DWORD reg, bool shadowPass) { if (reg < 256) { if (shadowPass) m_lightRegs.set(reg); else m_cameraRegs.set(reg); } }
+    bool LightOnlyMatrix(DWORD reg) const { return reg < 256 && m_lightRegs.test(reg) && !m_cameraRegs.test(reg); }
+    // Every write to the right sibling counts, so a feature's draw-time rewrite knows when its bytes are still in place
+    // (pooled buffers change content between draws).
+    void     NoteRightWrite() { ++m_rightSeq; }
+    // The features' edit of a right copy (Context11Proxy::EditRightCBs) was made from these bytes and settings.
+    bool NeedsRightEdit(int v, float eyeShift, float conv) const
+    {
+        const EditKey& k = m_edit[v & 1];
+        return k.write != m_writeSeq || k.right != CopySeq(v) || k.shift != eyeShift || k.conv != conv;
+    }
+    void MarkRightEdited(int v, float eyeShift, float conv)
+    {
+        EditKey& k = m_edit[v & 1];
+        k.write = m_writeSeq; k.right = CopySeq(v); k.shift = eyeShift; k.conv = conv;
+    }
+    void NoteMovedWrite() { ++m_movedSeq; }
+
     // Inverse-detection backoff: a buffer that keeps scanning clean is
     // rescanned only sparsely (~1,500 full scans/frame in BioShock Infinite).
     bool ShouldScanForInverse()
@@ -144,6 +168,13 @@ private:
     unsigned       m_writesThisFrame = 0;
     std::vector<unsigned char> m_shadow;
     std::vector<MatrixTarget> m_learned;
+    std::bitset<256> m_lightRegs, m_cameraRegs;
+    unsigned       m_rightSeq = 0;
+    ID3D11Buffer*  m_realRightMoved = nullptr;   // owned, RightCopy(1)
+    unsigned       m_movedSeq = 0;
+    struct EditKey { unsigned write = ~0u, right = ~0u; float shift = 0.f, conv = 0.f; };
+    EditKey        m_edit[2];
+    unsigned       CopySeq(int v) const { return (v & 1) ? m_movedSeq : m_rightSeq; }
 };
 
 } // namespace wiz3d
