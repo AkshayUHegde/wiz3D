@@ -129,6 +129,35 @@ std::vector<std::pair<int, UINT>> RdefView::Variables(const std::string& name, b
     return out;
 }
 
+std::vector<std::pair<int, UINT>> RdefView::UsedMatrices() const
+{
+    std::vector<std::pair<int, UINT>> out;
+    const DWORD cbCount = Rd32(0), cbOff = Rd32(4), resCount = Rd32(8), resOff = Rd32(12);
+    if (!m_rd || cbOff + cbCount * 24u > m_size || resOff + resCount * 32u > m_size) return out;
+    for (DWORD c = 0; c < cbCount; ++c)
+    {
+        const DWORD cb = cbOff + c * 24u, varCount = Rd32(cb + 4), varOff = Rd32(cb + 8);
+        if (varOff + varCount * m_varStride > m_size) continue;
+        int slot = -1;
+        for (DWORD i = 0; i < resCount; ++i)
+            if (Rd32(resOff + i * 32u + 4) == 0 && !strcmp(Str(Rd32(resOff + i * 32u)), Str(Rd32(cb))))
+                slot = (int)Rd32(resOff + i * 32u + 20);
+        if (slot < 0) continue;
+        for (DWORD v = 0; v < varCount; ++v)
+        {
+            const DWORD var = varOff + v * m_varStride;
+            if (!(Rd32(var + 12) & 2 /* D3D_SVF_USED */) || Rd32(var + 8) != 64) continue;
+            // Type: class (row/column-major matrix), float, 4 rows, 4 columns, not an array.
+            const DWORD type = Rd32(var + 16), classType = Rd32(type), rowsCols = Rd32(type + 4);
+            const DWORD cls = classType & 0xFFFF;
+            if ((cls != 2 && cls != 3) || (classType >> 16) != 3 || rowsCols != 0x00040004 || (Rd32(type + 8) & 0xFFFF))
+                continue;
+            out.push_back(std::make_pair(slot, (UINT)Rd32(var + 4)));
+        }
+    }
+    return out;
+}
+
 bool RdefView::Variable(const std::string& name, bool usedOnly, int& cbSlot, UINT& offset) const
 {
     const std::vector<std::pair<int, UINT>> all = Variables(name, usedOnly);
@@ -195,6 +224,8 @@ ProfileFeatures CreateProfileFeatures()
         { "MirroredTarget",       &MakeMirroredTarget,     false },
         { "HudDepth",             &MakeHudDepth,           false },
         { "LightViewPasses",      &MakeLightViewPasses,    false },
+        { "VertexCameraMatrices", &MakeVertexCameraMatrices, false },
+        { "UiProjectionParallax", &MakeUiProjectionParallax, false },
         { "AdditionalMatrixName", &MakeAdditionalMatrices, false },
         { "RightCamera",          &MakeRightCamera,        false },
         { "RayCorners",           &MakeRayCorners,         true  },

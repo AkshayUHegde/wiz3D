@@ -278,6 +278,20 @@ struct StereoMatrixState
         return false;
     }
 
+    // A cached camera view-projection equal to this canonical one: last frame's, read again by a later pass.
+    bool MatchForward(const float* canon) const
+    {
+        for (unsigned i = 0; i < kRing; ++i)
+        {
+            if (!EntryUsable(ring[i], kMaxAge)) continue;
+            bool same = true;
+            for (int k = 0; k < 16 && same; ++k)
+                same = fabsf(ring[i].m[k] - canon[k]) <= 1e-5f * (fabsf(ring[i].m[k]) + fabsf(canon[k])) + 1e-7f;
+            if (same) return true;
+        }
+        return false;
+    }
+
     struct DetectedInverse
     {
         unsigned reg;

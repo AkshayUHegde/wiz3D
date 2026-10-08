@@ -15,6 +15,7 @@ namespace wiz3d
 {
 
 class Device11Proxy;
+class Texture2D11Proxy;
 
 class SRV11Proxy : public ID3D11ShaderResourceView
 {
@@ -38,11 +39,16 @@ public:
     ID3D11ShaderResourceView*  GetReal()       const { return m_realLeft;  }
     ID3D11ShaderResourceView*  GetRealRight()  const { return m_realRight; }
     Device11Proxy*             GetParent()     const { return m_parent;    }
+    // The viewed Texture2D proxy, when the view is of one: per-eye binding asks it whether its right copy holds anything.
+    // Held by reference: the game drops its own once the view exists (Metro's level load crashed on the freed proxy).
+    void                       SetTexture(Texture2D11Proxy* t);
+    Texture2D11Proxy*          Texture()       const { return m_texture;   }
 
 private:
     ID3D11ShaderResourceView* m_realLeft;
     ID3D11ShaderResourceView* m_realRight;
     Device11Proxy*            m_parent;
+    Texture2D11Proxy*         m_texture = nullptr;   // one reference held
     LONG                      m_refs;
 };
 

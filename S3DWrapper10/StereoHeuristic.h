@@ -21,6 +21,12 @@
 namespace wiz3d
 {
 
+inline bool IsBlockCompressedFormat(DXGI_FORMAT f)
+{
+    return (f >= DXGI_FORMAT_BC1_TYPELESS && f <= DXGI_FORMAT_BC5_SNORM) ||
+           (f >= DXGI_FORMAT_BC6H_TYPELESS && f <= DXGI_FORMAT_BC7_UNORM_SRGB);
+}
+
 inline bool IsSquareSize_Stage3(UINT Width, UINT Height, BOOL CreateBigInStereo, const SIZE* pBBSize)
 {
     if (Width != Height) return false;
@@ -115,10 +121,11 @@ inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE*
         return ShouldDoubleRenderTargetTexture(pDesc->Format, pDesc->Width, pDesc->Height, pBBSize, outReason);
     // SRV-only textures created empty, MSAA ones included, are resolve/copy destinations: a mono one flattens both eyes
     // to the left image downstream (BC2's MSAA resolve, BF3's G-buffer depth copy). The Resolve/Copy mirrors fill both.
+    // A block-compressed one is a streamed asset (never a render or resolve destination) and stays single.
     if ((pDesc->BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0 &&
         (pDesc->BindFlags & D3D11_BIND_UNORDERED_ACCESS) == 0 &&
         pDesc->Usage == D3D11_USAGE_DEFAULT && !hasInitialData &&
-        pDesc->Width >= 640 && pDesc->Height >= 360)
+        pDesc->Width >= 640 && pDesc->Height >= 360 && !IsBlockCompressedFormat(pDesc->Format))
         return true;
     // UAV textures stay single, as NVIDIA's heuristics have it: a compute output written outside a duplicated
     // dispatch would leave its sibling uninitialised.

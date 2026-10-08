@@ -7,6 +7,7 @@
 // copy reads the left eye's geometry constants, and registers only such passes read are never shifted.
 
 #include "StdAfx.h"
+#include <math.h>
 #include "ProfileFeature.h"
 #include "Context11Proxy.h"
 #include "Device11Proxy.h"
@@ -34,7 +35,11 @@ public:
         D3D11_TEXTURE2D_DESC td = {};
         if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) static_cast<ID3D11Texture2D*>(r)->GetDesc(&td);
         r->Release();
-        m_pass = td.Width && (td.Width != dev->GetPresentWidth() || td.Height != dev->GetPresentHeight());
+        // Nor the presented aspect: a half-size depth pre-pass is a view of the scene (Metro's 1920x1080 depth under
+        // a 3840x2160 present, which its sun quad is depth-tested against).
+        const bool sameAspect = td.Height && dev->GetPresentHeight() &&
+            fabsf((float)td.Width / td.Height - (float)dev->GetPresentWidth() / dev->GetPresentHeight()) < 0.01f;
+        m_pass = td.Width && !sameAspect && (td.Width != dev->GetPresentWidth() || td.Height != dev->GetPresentHeight());
     }
 
     void OnRightDraw(Context11Proxy& ctx) override

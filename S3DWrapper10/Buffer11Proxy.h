@@ -94,6 +94,9 @@ public:
         ++m_writeSeq;
     }
     const std::vector<unsigned char>& Shadow() const { return m_shadow; }
+    // A copy or a boxed write filled the buffer behind the shadow's back: nothing may be rebuilt from it until the
+    // next whole write.
+    void ForgetShadow() { m_shadow.clear(); ++m_writeSeq; }
     // The shift is part of the key, as the eye offset is baked into the bytes: a buffer the game stops rewriting would
     // otherwise keep an old separation.
     bool NeedsDrawPatch(DWORD crc, float shift) const
@@ -101,6 +104,20 @@ public:
     void MarkDrawPatched(DWORD crc, float shift)
     { m_patchedSeq = m_writeSeq; m_patchedCRC = crc; m_patchedShift = shift; }
     static const size_t kMaxShadowBytes = 64 * 1024;
+
+    // What the right sibling holds beyond the shadow bytes: forward (geometry) shifts and inverse patches applied to
+    // them; plain shadow is neither. A copy into the buffer counts as unknown, i.e. shifted.
+    void SetRightFromShadow(bool v) { m_rightForward = v ? 0 : 1; m_rightInverse = 0; }
+    void NoteRightShift(unsigned forward, unsigned inverse) { m_rightForward = forward; m_rightInverse = inverse; }
+    bool RightIsShadow() const { return !m_rightForward && !m_rightInverse; }
+    bool RightForwardShifted() const { return m_rightForward != 0; }
+    // A shader's camera matrices are rebuilt from the shadow once per write and stereo setting; a later rewrite of the
+    // sibling by another path asks for the check again.
+    bool InverseDrawCheckDue(float shift, float conv) const
+    { return m_invCheckSeq != m_writeSeq || m_invCheckShift != shift || m_invCheckConv != conv; }
+    void MarkInverseDrawChecked(float shift, float conv)
+    { m_invCheckSeq = m_writeSeq; m_invCheckShift = shift; m_invCheckConv = conv; }
+    void InvalidateInverseDrawCheck() { m_invCheckSeq = 0xFFFFFFFFu; }
 
     // Registers vertex shaders read as their position matrix, by pass. One read only in shadow passes is a light's view
     // (MP3's ShadowParam.gShadowMatrix), the same for both eyes.
@@ -142,6 +159,9 @@ private:
     unsigned       m_patchedSeq = 0xFFFFFFFFu;
     DWORD          m_patchedCRC = 0;
     float          m_patchedShift = 0.f;
+    unsigned       m_rightForward = 0, m_rightInverse = 0;
+    unsigned       m_invCheckSeq = 0xFFFFFFFFu;
+    float          m_invCheckShift = 0.f, m_invCheckConv = 0.f;
     std::vector<unsigned char> m_shadow;
     std::vector<MatrixTarget> m_learned;
     std::bitset<256> m_lightRegs, m_cameraRegs;

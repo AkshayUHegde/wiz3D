@@ -1721,6 +1721,8 @@
 		<!-- Deferred lighting reconstructs position from an inverse view-projection in pixel-shader constant buffers;
 		     the numeric inverse hunt keeps right-eye lighting on right-eye geometry. -->
 		<DetectInverseMatrix Value="1"/>
+		<!-- Constant buffers are pooled across shaders: patch each for the shader about to read it -->
+		<PatchConstantsAtDraw Value="1"/>
 		<!-- Spot shadow maps: depth-only passes into targets not the screen's size render the light's view -->
 		<LightViewPasses Value="1" />
 	</Profile>
@@ -2016,6 +2018,19 @@
 				<AutoFocusEnable Value="0" />
 			</Preset>
 		</Presets>
+	</Profile>
+	<Profile Name="Metro Redux (2033 and Last Light)">
+		<File Name="metro.exe" />
+		<!-- 4A Engine, deferred: lighting rebuilds position from inverse matrices in pixel-shader buffers -->
+		<DetectInverseMatrix Value="1"/>
+		<!-- Constant buffers are pooled across shaders: patch each for the shader about to read it -->
+		<PatchConstantsAtDraw Value="1"/>
+		<!-- Shadow maps: depth-only passes into targets not the screen's size render the light's view -->
+		<LightViewPasses Value="1"/>
+		<!-- Per-object motion blur reads last frame's camera (mblur_previous) in the vertex shader beside m_VP -->
+		<VertexCameraMatrices Value="1"/>
+		<!-- The 3D menu draws its selected item with its own projection; it takes the scene camera's parallax -->
+		<UiProjectionParallax Value="1"/>
 	</Profile>
 	<Profile Name="Metro 2033">
 		<File Name="Metro2033.exe" />

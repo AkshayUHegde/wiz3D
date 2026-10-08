@@ -58,12 +58,32 @@ public:
     ID3D11Texture2D* GetReal()       const { return m_realLeft;  }
     ID3D11Texture2D* GetRealRight()  const { return m_realRight; }
     Device11Proxy*   GetParent()     const { return m_parent;    }
+    // The swap chain's presented pair: draws into it without a depth test are overlays (HUD, menus).
+    void             MarkBackBuffer()      { m_backBuffer = true; }
+    bool             IsBackBuffer()  const { return m_backBuffer; }
+    // A sampled-only right copy that no mirror has written holds nothing of the game's (a texture streamed past the
+    // wrapper); the right eye samples the left until a mirror fills it.
+    void             MarkRightWritten()    { m_rightWritten = true; }
+    bool             RightUnwritten() const
+    {
+        if (!m_realRight || m_rightWritten) return false;
+        if (m_sampledOnly < 0)
+        {
+            D3D11_TEXTURE2D_DESC d = {};
+            m_realLeft->GetDesc(&d);
+            m_sampledOnly = (d.BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) ? 0 : 1;
+        }
+        return m_sampledOnly == 1;
+    }
 
 private:
     ID3D11Texture2D* m_realLeft;   // owned (released in dtor)
     ID3D11Texture2D* m_realRight;  // owned, nullable
     Device11Proxy*   m_parent;     // not owned
     LONG             m_refs;
+    bool             m_backBuffer = false;
+    bool             m_rightWritten = false;
+    mutable signed char m_sampledOnly = -1;
 };
 
 } // namespace wiz3d
