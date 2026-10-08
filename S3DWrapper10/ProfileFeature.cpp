@@ -7,7 +7,7 @@
 
 #include "StdAfx.h"
 #include "ProfileFeature.h"
-#include "DxbcRebuild.h"                   // FindDxbcChunk
+#include "ShaderAnalyzer11.h"              // FindDxbcChunk
 #include "AdapterFunctions.h"              // DDILog
 #include "..\S3DAPI\ShaderProfileData.h"   // g_ProfileData
 #include <cstdarg>
@@ -188,6 +188,7 @@ ProfileFeatures CreateProfileFeatures()
 {
     typedef std::unique_ptr<ProfileFeature> (*Factory)(const ProfileEntry*);
     // Profile element -> feature, called in this order at every draw point. needsCamera: it moves with RightCamera's camera.
+    // RayCorners, DuniaLocalLights and CameraRelativePlanes serve camera-relative deferred lighting; no shipped profile uses them yet.
     static const struct { const char* element; Factory make; bool needsCamera; } kRegistry[] =
     {
         { "StereoTexture",        &MakeStereoTexture,      false },

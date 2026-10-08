@@ -102,7 +102,7 @@ private:
     float    m_right[8] = {};          // sep, conv, eye offset xyz: what [1]/[2] hold
     float    m_axis[3] = {};           // the last view-inverse row 0 read
     int      m_bound[2] = { -1, -1 };  // VS, PS slot taken this draw
-    float    m_camP00 = 0.f;           // 1 / tanX from the last light; the cached projXScale drifts (0.14 vs a 1.54 camera)
+    float    m_camP00 = 0.f;           // 1 / tanX from the last light; the cached projXScale drifts between cameras
     unsigned m_draws = 0, m_rightBinds = 0, m_noAxis = 0, m_updates = 0;
 
     // MP3's texture is 8x2 RGBA32F; 3D Vision's is 8x1 (ShadowLib samples v = 0.5, row 1 of an 8x2 = the zero eye offset).

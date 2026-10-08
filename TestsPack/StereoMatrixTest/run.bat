@@ -1,17 +1,12 @@
 @echo off
-rem Build and run the StereoMatrix inverse-correction proof.
-rem Header-only target, no project dependencies: cl on one .cpp is enough.
-rem
-rem vswhere lives under "Program Files (x86)", whose parentheses terminate any
-rem enclosing for/if block, so locate vcvars64.bat by recursive dir instead --
-rem VS 2017 and newer all install under %ProgramFiles%.
+rem Project : wiz3D
+rem Copyright (C) Akshay Hegde 2026
+
+rem Builds and runs the StereoMatrix proof (header-only: cl on one .cpp). vcvars64.bat is found by a recursive dir, as
+rem vswhere's "Program Files (x86)" parentheses would end an enclosing for/if block.
 setlocal
-rem VsDevCmd.bat:180 pushd's into the vswhere directory and then runs
-rem "vswhere.exe" by bare name, which cmd refuses to resolve from the current
-rem directory when NoDefaultCurrentDirectoryInExePath is set -- printing a
-rem spurious "'vswhere.exe' is not recognized" and (per its own comment on line
-rem 170) carrying on regardless. Clearing the variable is scoped to this
-rem setlocal, and also lets us launch the built exe by name below.
+rem VsDevCmd.bat runs vswhere.exe by bare name, which cmd will not resolve from the current directory while
+rem NoDefaultCurrentDirectoryInExePath is set; clearing it (scoped by setlocal) also lets the exe launch by name.
 set "NoDefaultCurrentDirectoryInExePath="
 set "VCVARS="
 for /f "delims=" %%i in ('dir /b /s "%ProgramFiles%\Microsoft Visual Studio\vcvars64.bat" 2^>nul') do set "VCVARS=%%i"

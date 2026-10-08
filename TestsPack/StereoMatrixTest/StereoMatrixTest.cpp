@@ -1,16 +1,10 @@
-﻿/* wiz3D - offline proof of the inverse-matrix correction in Shared/StereoMatrix.h.
- *
- * PatchInverse claims to produce P_r^-1 from P^-1, where P_r is the right-eye
- * matrix the forward path builds. That claim is checkable without a GPU: build
- * P, run the same forward shift Context11Proxy applies, invert the result
- * numerically, and compare. The functional round-trip below is the stronger
- * test of the two -- it projects world points through P_r and unprojects them
- * through the patched inverse, so it passes only if the convention (row-vector,
- * row-major, w-producing column at m[3]/m[7]/m[11]/m[15]) is right as well as
- * the algebra.
- *
- * Build + run:  TestsPack\StereoMatrixTest\run.bat
- */
+﻿/*
+* Project : wiz3D
+* Copyright (C) Akshay Hegde 2026
+*/
+
+// Offline proof of Shared/StereoMatrix.h: PatchInverse turns P^-1 into P_r^-1, checked against a numeric inverse and
+// by a round trip through the right-eye matrix. Build and run: TestsPack\StereoMatrixTest\run.bat
 
 #include <stdio.h>
 #include <math.h>
@@ -23,11 +17,8 @@ using wiz3d::StereoMatrixState;
 static int g_failures = 0;
 static int g_checks   = 0;
 
-// ---------------------------------------------------------------------------
-// Reference linear algebra. Row-vector convention throughout: a point is a row
-// and transforms compose left to right, so m[r*4+c] with the w-producing column
-// at c == 3 -- the canonical layout StereoMatrix.h documents.
-// ---------------------------------------------------------------------------
+// Reference linear algebra, row-vector throughout: a point is a row and transforms compose left to right, so m[r*4+c]
+// has the w-producing column at c == 3 (StereoMatrix.h's canonical layout).
 static void Mul(const float* a, const float* b, float* out)
 {
     for (int r = 0; r < 4; ++r)
@@ -87,9 +78,7 @@ static void Transpose(const float* m, float* out)
         for (int c = 0; c < 4; ++c) out[c * 4 + r] = m[r * 4 + c];
 }
 
-// ---------------------------------------------------------------------------
-// Projections. Both are row-vector D3D-style: the w-producing column is index 3.
-// ---------------------------------------------------------------------------
+// Projections, row-vector D3D style: the w-producing column is index 3.
 static void PerspectiveLH(float xScale, float yScale, float zn, float zf, float* m)
 {
     memset(m, 0, 16 * sizeof(float));
@@ -100,9 +89,8 @@ static void PerspectiveLH(float xScale, float yScale, float zn, float zf, float*
     m[14] = -zn * zf / (zf - zn);   // _43
 }
 
-// Reversed-Z with an infinite far plane: depth 1 at the near plane falling to 0
-// at infinity. GTA V's depth buffer is of this family, and it is the case where
-// the correction's row-2 coefficient gets large, so it must be covered.
+// Reversed-Z with an infinite far plane (depth 1 at the near plane, 0 at infinity), as GTA V's: the case where the
+// correction's row-2 coefficient gets large.
 static void PerspectiveReversedInfinite(float xScale, float yScale, float zn, float* m)
 {
     memset(m, 0, 16 * sizeof(float));
@@ -113,10 +101,8 @@ static void PerspectiveReversedInfinite(float xScale, float yScale, float zn, fl
     m[14] = zn;
 }
 
-// Orthographic light view-projection, built the way an engine builds one: a
-// rigid light view times a diagonal ortho projection (optionally with a
-// texture-space bias folded in, which is also diagonal). `scale` distinguishes
-// cascades.
+// Orthographic light view-projection as an engine builds one: a rigid light view times a diagonal ortho projection
+// (a texture-space bias folded in is diagonal too). `scale` distinguishes cascades.
 static void OrthoLight(float scale, float* m)
 {
     const float c = 0.8f, s = 0.6f;   // light view: rotation about Y
@@ -134,10 +120,8 @@ static void OrthoLight(float scale, float* m)
     Mul(V, O, m);
 }
 
-// ---------------------------------------------------------------------------
-// The forward shift under test, transcribed from Context11Proxy.cpp's
-// FullColumnEyeShift branch (column 0 += b * column 3, then _41 += m41).
-// ---------------------------------------------------------------------------
+// The forward shift under test, as Context11Proxy.cpp's full-column (draw duplication) branch applies it: column 0
+// += b * column 3, then _41 += m41.
 static void ForwardShiftRightEye(float* f, float b, float m41)
 {
     f[0] += b * f[3];   f[4]  += b * f[7];
@@ -176,12 +160,10 @@ static void CheckBitIdentical(const char* what, const float* got, const float* w
 {
     ++g_checks;
     if (memcmp(got, want, 16 * sizeof(float)) != 0)
-        Fail(what, "not bit-identical to the legacy shear-only result");
+        Fail(what, "not bit-identical to the shear-only result");
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 // The claim: patching P^-1 yields the exact inverse of the right-eye forward
 // matrix. Everything else follows from this.
@@ -206,10 +188,8 @@ static void TestExactInverse(const char* name, const float* P, float eyeShift, f
     CheckClose(name, patched, PrInvRef, 2e-4f);
 }
 
-// Stronger and convention-independent: project world points through the
-// right-eye matrix, hand the pixel-space vector (ndc.xy, ndc.z, 1) to the
-// patched inverse, and require the original world point back. This is exactly
-// what a deferred pass does.
+// Stronger and convention-independent, as a deferred pass does it: world points through the right-eye matrix, the
+// pixel-space vector (ndc.xy, ndc.z, 1) through the patched inverse, and the original point back.
 static void TestRoundTrip(const char* name, const float* P, float eyeShift, float conv)
 {
     StereoMatrixState st;
@@ -253,9 +233,8 @@ static void TestRoundTrip(const char* name, const float* P, float eyeShift, floa
         const float ry = world[1] / world[3];
         const float rz = world[2] / world[3];
 
-        // Assertion 1 (the property under test): our patched matrix must agree
-        // with the exact inverse of P_r. Both see the same quantised depth, so
-        // any disagreement is algebra, not precision.
+        // Assertion 1 (the property under test): the patched matrix agrees with the exact inverse of P_r; both see the
+        // same quantised depth, so any disagreement is algebra, not precision.
         float refWorld[4];
         MulPoint(v, refInv, refWorld);
         const float ex = refWorld[0] / refWorld[3];
@@ -272,12 +251,8 @@ static void TestRoundTrip(const char* name, const float* P, float eyeShift, floa
             Fail(name, buf);
         }
 
-        // Assertion 2 (sanity): the round trip recovers the original point. The
-        // tolerance is loose because a float32 non-reversed depth buffer really
-        // does lose this much at the far end -- z_ndc sits at 0.9998 by z=400,
-        // where one float ulp is ~4e-4 of the reconstructed view depth. That is
-        // the reason reversed-Z exists, and it is why the reversed-Z case below
-        // holds far tighter than this bound.
+        // Assertion 2 (sanity): the round trip recovers the original point, loosely: a float32 non-reversed depth
+        // loses this much at the far end, where z_ndc is near 1 (the reversed-Z case holds far tighter).
         const float err = fabsf(rx - pts[i][0]) + fabsf(ry - pts[i][1]) + fabsf(rz - pts[i][2]);
         if (err / scale > 1e-3f)
         {
@@ -290,8 +265,7 @@ static void TestRoundTrip(const char* name, const float* P, float eyeShift, floa
     }
 }
 
-// The regression contract: conv == 0 must reproduce the old body exactly, so the
-// ExactInverseConvergence flag is a true A/B and not an approximation of one.
+// conv == 0 must give exactly the shear-only inverse, which the replay path's m[2][0] shift needs.
 static void TestLegacyEquivalence(const float* P, float eyeShift)
 {
     StereoMatrixState st;
@@ -342,33 +316,6 @@ static void TestTransposed(const char* name, const float* P, float eyeShift, flo
     CheckClose(name, got, PrInvRef, 2e-4f);
 }
 
-// A composed screen-to-light matrix X = P^-1 * L must land on P_r^-1 * L when the
-// caller supplies P^-1 as the basis -- the property Change 3 depends on.
-static void TestComposed(const char* name, const float* P, float eyeShift, float conv)
-{
-    StereoMatrixState st;
-    st.projXScale = P[0];
-    const float b   = st.EyeShiftB(eyeShift);
-    const float m41 = -b * conv;
-
-    float L[16];
-    OrthoLight(0.01f, L);
-
-    float Pr[16], PrInv[16], PInv[16];
-    memcpy(Pr, P, sizeof Pr);
-    ForwardShiftRightEye(Pr, b, m41);
-    if (!Invert(Pr, PrInv) || !Invert(P, PInv)) { Fail(name, "singular"); return; }
-
-    float want[16];
-    Mul(PrInv, L, want);          // the correct right-eye screen-to-light matrix
-
-    float got[16];
-    Mul(PInv, L, got);            // what the game stores (mono)
-    st.PatchInverse(got, false, eyeShift, conv, /*basis*/PInv);
-
-    CheckClose(name, got, want, 2e-4f);
-}
-
 // A basis that makes the denominator vanish must leave the game's constants
 // untouched rather than writing infinities into a live buffer.
 static void TestDegenerateGuard()
@@ -392,9 +339,8 @@ static void TestDegenerateGuard()
         Fail("degenerate denominator guard", "matrix was modified");
 }
 
-// Rigid world-view-projection: a rotation and translation composed with P, i.e.
-// exactly what an engine writes per object. Passes the unit-w / orthogonal-bases
-// test that gates ring admission, which is why the ring used to drown in them.
+// Rigid world-view-projection, as an engine writes per object: it passes the unit-w / orthogonal-bases test that
+// gates ring admission.
 static void MakeRigidWVP(const float* P, float angle, float tx, float tz, float* out)
 {
     const float c = cosf(angle), s = sinf(angle);
@@ -407,16 +353,14 @@ static void MakeRigidWVP(const float* P, float angle, float tx, float tz, float*
     Mul(W, P, out);
 }
 
-// The GTA V scenario in miniature: one camera view-projection reused across the
-// frame, interleaved with a flood of unique per-object WVPs. The VP must still
-// be in the ring at the end -- that is the whole reason detection was dead.
+// One camera view-projection reused across the frame among a flood of unique per-object WVPs (GTA V): the VP must
+// still be in the ring at the end.
 static void TestRingAdmission(const float* P)
 {
     StereoMatrixState st;
 
-    // Admission is immediate: a view-projection is usable the moment it is
-    // written. Requiring a second sighting stalled Battlefield 3 completely,
-    // because a moving camera never writes the same matrix twice.
+    // Admission is immediate: a moving camera never writes the same matrix twice (Battlefield 3), so requiring a
+    // second sighting would admit nothing.
     ++g_checks;
     st.CacheForwardVP(P, false);
     if (st.RingValid() != 1) Fail("ring admission", "a fresh view-projection was not admitted");
@@ -442,20 +386,20 @@ static void TestRingAdmission(const float* P)
     float cb[4 * 16];
     memset(cb, 0, sizeof cb);
     for (int i = 0; i < 16; ++i) cb[2 * 4 + i] = inv[i];   // at register 2
-    unsigned reg = 0; bool tr = false; float bestMiss = 1e30f;
-    if (!st.DetectInverse(reinterpret_cast<const unsigned char*>(cb), sizeof cb,
-                          reg, tr, bestMiss) || reg != 2 || tr)
+    StereoMatrixState::DetectedInverse hit = {};
+    float bestMiss = 1e30f;
+    if (st.DetectInverses(reinterpret_cast<const unsigned char*>(cb), sizeof cb, &hit, 1, bestMiss) != 1 ||
+        hit.reg != 2 || hit.transposed)
     {
         char buf[128];
         snprintf(buf, sizeof buf, "detect failed (reg %u, transposed %d, bestMiss %.2f)",
-                 reg, (int)tr, bestMiss);
+                 hit.reg, (int)hit.transposed, bestMiss);
         Fail("ring admission", buf);
     }
 }
 
-// A WVP is not a view-projection: admitting one and matching an "inverse"
-// against it would patch an unrelated constant. Repetition alone must not be
-// enough to make a detection wrong, so check the pairing stays exact.
+// A repeated WVP in the ring must not match the inverse of a different matrix: the pairing stays exact, or an
+// unrelated constant gets patched.
 static void TestNoCrossMatch(const float* P)
 {
     ++g_checks;
@@ -471,17 +415,13 @@ static void TestNoCrossMatch(const float* P)
         Fail("no cross match", "P^-1 matched a rigid WVP in the ring");
 }
 
-// The cascade-resolve case: a buffer holding the inverse view-projection plus
-// one screen-to-light matrix per cascade. All of them must be found (returning
-// only the first is what used to leave the cascades unpatched), the composed
-// ones must be flagged, and patching one must land on P_r^-1 * L.
-static void TestComposedDetection(const float* P, float eyeShift, float conv)
+// A cascade-resolve buffer: the inverse view-projection plus one screen-to-light matrix per cascade. Only the bare
+// inverse matches; a screen-to-light matrix inverts no cached camera.
+static void TestDetection(const float* P)
 {
     StereoMatrixState st;
     st.projXScale = P[0];
     st.CacheForwardVP(P, false);
-    st.CacheForwardVP(P, false);
-    st.CacheForwardVP(P, false);   // hits >= 2: composed matching requires it
 
     float PInv[16];
     Invert(P, PInv);
@@ -501,62 +441,18 @@ static void TestComposedDetection(const float* P, float eyeShift, float conv)
     ++g_checks;
     wiz3d::StereoMatrixState::DetectedInverse hits[8];
     float bestMiss = 1e30f;
-    const unsigned n = st.DetectInverses(reinterpret_cast<const unsigned char*>(cb),
-                                         sizeof cb, /*allowComposed*/true, hits, 8, bestMiss);
-    if (n != 5)
+    const unsigned n = st.DetectInverses(reinterpret_cast<const unsigned char*>(cb), sizeof cb, hits, 8, bestMiss);
+    if (n != 1 || hits[0].reg != 0)
     {
         char buf[128];
-        snprintf(buf, sizeof buf, "found %u of 5 matrices (invVP + 4 cascades)", n);
-        Fail("composed detection", buf);
+        snprintf(buf, sizeof buf, "%u hits, first at reg %u (want the bare inverse at reg 0 only)", n,
+                 n ? hits[0].reg : 0u);
+        Fail("detection", buf);
     }
-    else
-    {
-        ++g_checks;
-        if (hits[0].composed) Fail("composed detection", "register 0 was flagged composed");
-        for (unsigned i = 1; i < n; ++i)
-            if (!hits[i].composed || hits[i].reg != 4 * i)
-            {
-                char buf[128];
-                snprintf(buf, sizeof buf, "hit %u: reg %u composed %d", i, hits[i].reg,
-                         (int)hits[i].composed);
-                Fail("composed detection", buf);
-                break;
-            }
-    }
-
-    // Without the opt-in, only the bare inverse may be reported.
-    ++g_checks;
-    bestMiss = 1e30f;
-    const unsigned nPure = st.DetectInverses(reinterpret_cast<const unsigned char*>(cb),
-                                             sizeof cb, /*allowComposed*/false, hits, 8, bestMiss);
-    if (nPure != 1)
-    {
-        char buf[128];
-        snprintf(buf, sizeof buf, "composed matrices were matched with the opt-in off (%u hits)", nPure);
-        Fail("composed detection", buf);
-    }
-
-    // And the patch must produce the right matrix for a cascade.
-    const float b   = st.EyeShiftB(eyeShift);
-    const float m41 = -b * conv;
-    float Pr[16], PrInv[16], want[16], got[16];
-    memcpy(Pr, P, sizeof Pr);
-    ForwardShiftRightEye(Pr, b, m41);
-    Invert(Pr, PrInv);
-    Mul(PrInv, L[2], want);
-
-    wiz3d::StereoMatrixState::InverseMatch match;
-    ++g_checks;
-    if (!st.VerifyInverseAgainstRing(X[2], false, true, &match) || !match.composed)
-        Fail("composed detection", "re-verification of a cascade matrix failed");
-    memcpy(got, X[2], sizeof got);
-    st.PatchInverse(got, false, eyeShift, conv, match.basis);
-    CheckClose("composed cascade patch", got, want, 2e-4f);
 }
 
-// The pre-filter is a performance gate, so it must never reject a matrix the
-// detector would otherwise match -- including the off-axis and jittered
-// projections real engines use.
+// The pre-filter is a performance gate: it must never reject a matrix the detector would match, off-axis and
+// jittered projections included.
 static void TestUnprojectionPrefilter()
 {
     struct { const char* name; float m[16]; } cases[5];
@@ -584,9 +480,7 @@ static void TestUnprojectionPrefilter()
         if (!wiz3d::LooksLikeUnprojection(inv))
             Fail("prefilter rejected a real unprojection", cases[i].name);
 
-        // Transposed storage is canonicalised before the filter sees it, so the
-        // canonical form is what must pass -- check the raw transpose does NOT,
-        // which is what makes the filter cheap.
+        // Transposed storage is canonicalised before the filter sees it, so the canonical form must pass.
         ++g_checks;
         float invT[16], canon[16];
         Transpose(inv, invT);
@@ -595,9 +489,7 @@ static void TestUnprojectionPrefilter()
             Fail("prefilter rejected a canonicalised transposed unprojection", cases[i].name);
     }
 
-    // Rejection rate on plausible junk: material constants, colours, directions.
-    // This is the perf claim -- if it does not reject nearly everything, the
-    // scan cost does not drop.
+    // Rejection rate on random blocks: the perf claim, as the scan cost drops only if nearly all of them are rejected.
     ++g_checks;
     unsigned kept = 0;
     const unsigned trials = 20000;
@@ -618,10 +510,8 @@ static void TestUnprojectionPrefilter()
         Fail("prefilter", "keeps more than 1% of random blocks; scan cost will not drop");
 }
 
-// Battlefield 3: the camera moves, so every frame writes a DIFFERENT
-// view-projection, once. The current frame's inverse must verify on the frame it
-// is written -- anything less patches some writes and not others, which renders
-// as geometry flashing between two positions.
+// A moving camera writes a different view-projection once per frame (Battlefield 3): the frame's inverse must verify
+// in that frame, or some writes are patched and others not (geometry flashing between two positions).
 static void TestMovingCamera()
 {
     StereoMatrixState st;
@@ -683,9 +573,8 @@ static void TestMovingCamera()
         Fail("moving camera", "a stale camera still confirms targets");
 }
 
-// Matrices lifted verbatim from a Battlefield 3 session log ([mat inverse-hit]
-// dumps, in register order with the storage order the detector reported). The
-// structural pre-filter is a performance gate and must accept every one of them.
+// Matrices from a Battlefield 3 session, in register order with the storage order the detector reported: the
+// pre-filter must accept every one.
 static void TestRealBF3Matrices()
 {
     struct Case { const char* name; bool transposed; float m[16]; };
@@ -743,9 +632,6 @@ int main()
     TestTransposed("transposed storage, standard",     std60, eyeShift, conv);
     TestTransposed("transposed storage, reversed-Z",   revZ,  eyeShift, conv);
 
-    TestComposed("composed screen-to-light, standard",   std60, eyeShift, conv);
-    TestComposed("composed screen-to-light, reversed-Z", revZ,  eyeShift, conv);
-
     TestLegacyEquivalence(std60, eyeShift);
     TestDegenerateGuard();
 
@@ -753,12 +639,11 @@ int main()
     TestMovingCamera();
     TestRealBF3Matrices();
     TestNoCrossMatch(std60);
-    TestComposedDetection(std60, eyeShift, conv);
-    TestComposedDetection(revZ,  eyeShift, conv);
+    TestDetection(std60);
+    TestDetection(revZ);
     TestUnprojectionPrefilter();
 
-    // Quantify what the old arithmetic was doing, so the log records the size of
-    // the defect rather than just its existence.
+    // How far the shear-only inverse lands from the full model's point, for the record.
     {
         StereoMatrixState st;
         st.projXScale = std60[0];

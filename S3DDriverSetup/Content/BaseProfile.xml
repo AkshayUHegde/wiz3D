@@ -1718,9 +1718,8 @@
 	</Profile>
 	<Profile Name="Battlefield 3">
 		<File Name="bf3.exe" />
-		<!-- Deferred lighting reconstructs position from an inverse view-projection
-		     held in pixel-shader constant buffers; the numeric inverse hunt keeps
-		     right-eye lighting on right-eye geometry. -->
+		<!-- Deferred lighting reconstructs position from an inverse view-projection in pixel-shader constant buffers;
+		     the numeric inverse hunt keeps right-eye lighting on right-eye geometry. -->
 		<DetectInverseMatrix Value="1"/>
 		<!-- Spot shadow maps: depth-only passes into targets not the screen's size render the light's view -->
 		<LightViewPasses Value="1" />
@@ -1729,17 +1728,6 @@
 		<File Name="MassEffectAndromeda.exe" />
 		<!-- Frostbite 3, same deferred lighting as Battlefield 3. -->
 		<DetectInverseMatrix Value="1"/>
-	</Profile>
-	<Profile Name="Red Dead Redemption 2">
-		<File Name="RDR2.exe" />
-		<!-- Vulkan. Keeps view and projection as separate matrices (camera-
-		     relative); the inverse-matrix scan found no usable pair. Off. -->
-		<DetectInverseMatrix Value="0"/>
-	</Profile>
-	<Profile Name="DOOM (2016)">
-		<File Name="DOOMx64vk.exe" />
-		<!-- Vulkan. Forward-shifted geometry is enough; no inverse-matrix scan. -->
-		<DetectInverseMatrix Value="0"/>
 	</Profile>
 	<!-- Engine settings a <Profile> takes with <Engine Value="..."/>; the profile's own elements and attributes win -->
 	<Engine Name="Dunia">

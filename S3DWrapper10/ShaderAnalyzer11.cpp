@@ -136,6 +136,11 @@ bool ParseOutputSignature(const BYTE* chunkData, DWORD chunkSize, DWORD chunkTag
 namespace wiz3d
 {
 
+const BYTE* FindDxbcChunk(const void* blob, SIZE_T blobLen, DWORD tag, DWORD& outSize)
+{
+    return FindChunk(static_cast<const BYTE*>(blob), blobLen, tag, outSize);
+}
+
 bool AnalyzeShader11(const void* pBytecode, SIZE_T byteLength,
                      ShaderAnalysis11Result& out)
 {
@@ -180,7 +185,6 @@ bool AnalyzeShader11(const void* pBytecode, SIZE_T byteLength,
     shader_analyzer::ParseShader(reinterpret_cast<const unsigned*>(shex), shList);
     shader_analyzer::GetProjectionMatrices(pOutPos, out.projection, shList);
 
-    out.posRegister = pOutPos->Register;
     out.parsed = true;
     return true;
 }

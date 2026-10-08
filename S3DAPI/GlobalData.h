@@ -1,4 +1,4 @@
-﻿/* 
+/* 
 * Project : iZ3D Stereo Driver
 * Copyright (C) iZ3D Inc. 2002 - 2010
 */
@@ -349,100 +349,12 @@ public:
 	// interesting state is further in (e.g. set to 600 to start ~10s into
 	// gameplay at 60fps).
 	DWORD		FrameTraceStartFrame;
-	// DX10/11 (Aug 2026): controls the per-eye constant-buffer patch policy
-	// used by the right-eye replay in Context11Proxy::Unmap.
-	//
-	//   false (default) — legacy behaviour. When the shader analyzer has no
-	//     projection-matrix entry for the CB being written, fall back to
-	//     ApplyEyeShiftToCB: a heuristic scan that walks the whole buffer at
-	//     4-byte offsets looking for anything shaped like a perspective matrix
-	//     and shifts EVERY match.
-	//   true — trust the analyzer. If it successfully parsed the bound vertex
-	//     shader and reports no projection matrix in this buffer, leave the
-	//     buffer alone instead of guessing.
-	//
-	// The heuristic's match test (m[2][3]==1, m[3][3]==0, m[0][0]!=0,
-	// m[1][1]!=0) is cheap to satisfy by accident, and MP3 issues thousands of
-	// CB writes per frame, so false positives corrupt unrelated constants —
-	// the suspected cause of the right eye rendering depth-green (MSAA off) or
-	// near-black (MSAA on). Kept as a flag rather than an unconditional fix so
-	// the two policies can be A/B'd against games that currently work.
-	bool		DisableBlindCBScan;
-	// Shift the whole first column via the matrix's w terms instead of only
-	// _31/_13. Required for WorldViewProjection matrices, where the single-
-	// element form scales the shift by each mesh's own object space and makes
-	// attached objects drift apart. Flagged so it can be A/B'd.
-	bool		FullColumnEyeShift;
-	// DX10\11 COM-wrap: hunt inverse view-projections numerically in CB writes
-	// the analyzer cleared, and eye-shift them via the matrixIsInverse branch.
-	// Deferred lighting keeps them in pixel-shader-only buffers no SV_Position
-	// analysis reaches (BF3: lighting offset by a constant at every depth).
+	// DX10/11 COM-wrap, per game: find inverse view-projections numerically in constant buffers no shader analysis
+	// reaches (deferred lighting's pixel-shader-only buffers) and patch them for the right eye.
 	bool		DetectInverseMatrix;
-	// DX10\11 COM-wrap: invert the whole forward shift x += sep*(w - conv), not
-	// just its sep*w shear. Dropping the convergence term displaced every
-	// right-eye screen-space reconstruction by one interaxial separation at
-	// every depth. Clear for the old arithmetic (A/B).
-	bool		ExactInverseConvergence;
-	// DX10\11 COM-wrap: also accept a composed screen-to-light matrix
-	// (invViewProj * lightViewProj), identified by the light transform left
-	// behind when a cached view-projection divides out. Off by default -- a
-	// false positive patches an unrelated constant with no shape guard.
-	bool		DetectComposedMatrix;
-	// DX10\11 COM-wrap: patch every inverse-shaped block in a constant buffer,
-	// not just the first. Off by default -- a CB can hold a previous-frame
-	// reprojection matrix beside the current inverse.
-	bool		PatchAllInverses;
-	// DX10\11 COM-wrap, bisect switches. LegacyForwardVPRing restores the
-	// round-robin 32-entry cache with no ageing; SkipUnprojectionPrefilter
-	// bypasses the structural gate. Together they reproduce the detector as it
-	// was before 2026-08-22, so a regression can be attributed without a build.
-	// DX10\11 COM-wrap: teach a constant buffer its matrix registers at DRAW
-	// time. Far Cry 4 needs it -- its job renderer fills CBs long before binding
-	// the consumer, so no write is ever attributed. Bisected as the cause of Far
-	// Cry 3's soft right eye (074dafe5); 0 restores the picture before it.
-	// DX10\11 COM-wrap: patch the right eye's constants at DRAW time, for the
-	// shader about to consume them, not at write time for whichever was bound.
+	// DX10/11 COM-wrap, per game: patch the right eye's constants at draw time, for the shader about to read them.
 	bool		PatchConstantsAtDraw;
-	// DX10\11 COM-wrap: only cache view-projections into the detector ring from
-	// buffers written a few times a frame. A per-object CB is rewritten per
-	// draw and flushed the ring before the deferred write arrived.
-	bool		RingFromRareWritesOnly;
-	bool		TeachMatricesAtDraw;
-	bool		LegacyForwardVPRing;
-	bool		SkipUnprojectionPrefilter;
-	// DX10\11: identify a shadow atlas by SHAPE, not by a multiple of backbuffer
-	// area -- the area test answers differently at 1080p and 4K for one atlas.
-	bool		ShadowAtlasByShape;
-	// DX10\11 COM-wrap: give SRV-only scene-sized textures a right sibling.
-	// They are resolve/copy destinations — BC2's MSAA resolve into a mono one
-	// flattened both eyes to the left image for the whole post chain.
-	bool		DoubleResolveTargets;
-	// DX10\11 COM-wrap: modify vertex shaders so they shift their own output
-	// position, instead of patching a projection matrix in a constant buffer.
-	bool		ModifyShadersDX11;
-	// Bisection aid: modify only the first N eligible vertex shaders. 0 = no
-	// limit. Halve it to find which shader breaks the driver.
-	DWORD		ModifyShadersMaxCount;
-	int			DumpModifiedShaders;
-	// Start the frame trace at the first frame with at least this many draws.
-	DWORD		FrameTraceMinDraws;
-	// DX10/11 COM-wrap replay: also snapshot and replay writes to dynamic
-	// VERTEX and INDEX buffers, not just constant buffers.
-	//
-	// The right-eye replay re-issues the frame's draws at Present, after the
-	// game has finished writing. Geometry the game refills between draws — the
-	// map(WRITE_DISCARD)/fill/unmap/draw loop used for HUD, text and particle
-	// batches — is therefore stale by replay time: every draw reads the last
-	// batch written rather than its own. Without this, such passes replay with
-	// the correct draw calls and render nothing in the right eye (observed as
-	// Max Payne 3's missing right-eye HUD). Static geometry is unaffected.
-	//
-	// Costs one full-buffer copy per qualifying Unmap, so set to 0 if a game
-	// streams large dynamic buffers and the frame cost matters more than
-	// stereo correctness on those passes.
-	bool		ReplayDynamicBuffers;
-	// Issue each draw twice live (NVIDIA Automatic's model) instead of recording
-	// the frame and replaying it for the right eye at Present. Disables replay.
+	// DX10/11 COM-wrap: issue each draw twice live instead of recording the frame and replaying it at Present.
 	bool		DuplicateDraws;
 	// Option B (Stage 4c): internal dev override for the per-eye horizontal
 	// shift applied to projection matrices' m[2][0] during the right-eye
@@ -564,25 +476,9 @@ public:
 		UseCOMWrapSwapChain = true;   // Swap-chain wrap + Present hook (4d composite needs this).
 		UseCOMWrapReplay = true;      // Right-eye replay at Present (4c CB math + 4e analyzer use this).
 		COMWrapEyeShift  = 0.0f;      // 0 = use per-game profile StereoBase; non-zero = override.
-		DisableBlindCBScan = true;    // Never guess: the blind scan corrupted cascade transforms.
-		FullColumnEyeShift = true;    // Real 1/z parallax; false = legacy single-element shift.
-		DetectInverseMatrix = false;  // Off until a game's config opts in (deferred-lighting titles).
-			ExactInverseConvergence = true;  // Invert the convergence term too; 0 = old shear-only arithmetic.
-			DetectComposedMatrix = false;    // Per-game opt-in, like DetectInverseMatrix.
-			PatchAllInverses = false;        // First match only; the rest can be reprojection matrices.
-			PatchConstantsAtDraw = false;      // Per-game opt-in; changes how every patch lands.
-			RingFromRareWritesOnly = false;    // Per-game opt-in.
-			TeachMatricesAtDraw = true;        // Far Cry 4 needs it; Far Cry 3 sets 0.
-			LegacyForwardVPRing = false;       // Bisect switch, see above.
-			SkipUnprojectionPrefilter = false; // Bisect switch, see above.
-			ShadowAtlasByShape = false;      // Perf; makes strictly more depth targets mono.
-		DoubleResolveTargets = true;  // Mono resolve destinations flatten stereo (BC2 with MSAA).
-		ModifyShadersDX11  = false;   // false = constant-buffer patching only.
-		ModifyShadersMaxCount = 0;    // 0 = modify every eligible shader.
-		DumpModifiedShaders = 0;      // 1 = write per-shader before/after disassembly.
-		FrameTraceMinDraws    = 0;    // 0 = frame-number gate only.
-		ReplayDynamicBuffers = true;  // Replay dynamic VB/IB writes so re-issued draws see their own geometry.
-		DuplicateDraws   = true;      // Issue each draw twice live; false = legacy record+replay.
+		DetectInverseMatrix  = false; // Per game (BaseProfile.xml).
+		PatchConstantsAtDraw = false; // Per game (BaseProfile.xml).
+		DuplicateDraws   = true;      // Issue each draw twice live; false = record+replay at Present.
 		DrawType = 2;
 		DeviceMode = DEVICE_MODE_AUTO;
 		MultiWindowsMode = MULTI_WINDOWS_MODE_AUTO;

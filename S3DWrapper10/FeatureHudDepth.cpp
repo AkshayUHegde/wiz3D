@@ -58,7 +58,7 @@ public:
             centered = (unitCorners || signedCorners) && fabsf(tp[0]) < 0.25f && fabsf(tp[1]) < 0.45f;
         }
         if (centered) ++m_centered;
-        if (m_listLen < sizeof m_list - 1)
+        if (gInfo.CollectDebugInformation && m_listLen < sizeof m_list - 1)
         {
             const int w = _snprintf_s(m_list + m_listLen, sizeof m_list - m_listLen, _TRUNCATE,
                                       " %.1f@[%.3f %.3f %.3f %.3f]%s", depth, tp[0], tp[1], tp[2], tp[3], centered ? "*" : "");

@@ -1,4 +1,4 @@
-﻿/* IZ3D_FILE: $Id$ 
+/* IZ3D_FILE: $Id$ 
 *
 * Project : iZ3D Stereo Driver
 * Copyright (C) iZ3D Inc. 2002 - 2010
@@ -309,24 +309,6 @@ bool ReadConfigRouterType()
 			DECLARE_IVALUE(VerboseFrameTrace),
 			DECLARE_IVALUE(FrameTraceStartFrame),
 			DECLARE_FVALUE(COMWrapEyeShift),
-			DECLARE_BVALUE(DisableBlindCBScan),
-			DECLARE_BVALUE(FullColumnEyeShift),
-			DECLARE_BVALUE(DetectInverseMatrix),
-			DECLARE_BVALUE(ExactInverseConvergence),
-			DECLARE_BVALUE(DetectComposedMatrix),
-			DECLARE_BVALUE(PatchAllInverses),
-			DECLARE_BVALUE(PatchConstantsAtDraw),
-			DECLARE_BVALUE(RingFromRareWritesOnly),
-			DECLARE_BVALUE(TeachMatricesAtDraw),
-			DECLARE_BVALUE(LegacyForwardVPRing),
-			DECLARE_BVALUE(SkipUnprojectionPrefilter),
-			DECLARE_BVALUE(ShadowAtlasByShape),
-			DECLARE_BVALUE(DoubleResolveTargets),
-			DECLARE_BVALUE(ModifyShadersDX11),
-			DECLARE_IVALUE(ModifyShadersMaxCount),
-			DECLARE_IVALUE(DumpModifiedShaders),
-			DECLARE_IVALUE(FrameTraceMinDraws),
-			DECLARE_BVALUE(ReplayDynamicBuffers),
 			DECLARE_BVALUE(DuplicateDraws),
 			DECLARE_BVALUE(CollectDebugInformation),
 			DECLARE_IVALUE(ScreenshotType),
@@ -585,9 +567,18 @@ void ReadInputData(TiXmlNode* node)
 	pitem = item->FirstChildElement("StereoActive");
 	if (pitem)
 		QueryBoolAsInt(pitem, "Value", &gInfo.Input.StereoActive);
+	const bool userProfile = (node == g_nodeUserProfile);
 	node = node->FirstChild("Presets");
 	if (node)
 	{
+		// The preset the game was saved on; a user profile saved without it was tuned on preset 0, the old default.
+		if (userProfile)
+		{
+			int active = 0;
+			node->ToElement()->QueryIntAttribute("Active", &active);
+			if (active >= 0 && active < 3)
+				gInfo.Input.ActivePreset = active;
+		}
 		for( item = node->FirstChildElement("Preset"); item; item = item->NextSiblingElement("Preset") )
 		{
 			int i;
@@ -669,6 +660,7 @@ void WriteInputData(DataInput* overrideInput)
 		node2 = node->InsertEndChild(TiXmlElement("Presets"));
 	else 
 		node2->Clear();
+	node2->ToElement()->SetAttribute("Active", overrideInput->ActivePreset);
 	for( int i = 0; i < 3; i++ )
 	{
 		TiXmlElement* item = node2->InsertEndChild(TiXmlElement("Preset"))->ToElement();
@@ -839,17 +831,9 @@ void ReadProfilePart2Data(TiXmlNode* node)
 		DECLARE_BVALUE(CheckShadowMatrix),
 		DECLARE_BVALUE(CheckInverseLR),
 		DECLARE_BVALUE(FixNone16x9TextPosition),
-		// Per-game: deferred titles need the inverse hunt, others can be hurt by it.
+		// Per game: deferred titles need the inverse hunt, others can be hurt by it; draw-time patching changes every patch.
 		DECLARE_BVALUE(DetectInverseMatrix),
-		DECLARE_BVALUE(ExactInverseConvergence),
-		DECLARE_BVALUE(DetectComposedMatrix),
-		DECLARE_BVALUE(PatchAllInverses),
-			DECLARE_BVALUE(PatchConstantsAtDraw),
-			DECLARE_BVALUE(RingFromRareWritesOnly),
-			DECLARE_BVALUE(TeachMatricesAtDraw),
-			DECLARE_BVALUE(LegacyForwardVPRing),
-		DECLARE_BVALUE(SkipUnprojectionPrefilter),
-		DECLARE_BVALUE(ShadowAtlasByShape),
+		DECLARE_BVALUE(PatchConstantsAtDraw),
 		DECLARE_FVALUE(SeparationScale),
 		DECLARE_FVALUE(ScaleSeparationForSmallViewPorts),
 		DECLARE_IVALUE(SearchFrameSizeX),

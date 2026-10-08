@@ -43,22 +43,6 @@ inline bool IsLessThanBB_Stage3(UINT Width, UINT Height, const SIZE* pBBSize)
     return f >= 0.01f;
 }
 
-// A shadow atlas is a depth target whose shape is unrelated to the screen. The
-// old backbuffer-AREA test answered differently at 1080p and 4K for one atlas.
-inline bool IsShadowAtlasShape(UINT Width, UINT Height, const SIZE* pBBSize)
-{
-    if (!pBBSize || pBBSize->cx <= 0 || pBBSize->cy <= 0) return false;
-    if (Height == 0) return false;
-    if (Width == (UINT)pBBSize->cx && Height == (UINT)pBBSize->cy) return false;
-    const float aRT = (float)Width / (float)Height;
-    const float aBB = (float)pBBSize->cx / (float)pBBSize->cy;
-    const float ratio = (aRT > aBB) ? aRT / aBB : aBB / aRT;
-    // 1.5 clears a square page against any widescreen backbuffer (16:9 gives
-    // 1.78) while leaving scene-shaped targets -- full, half or quarter res --
-    // well inside.
-    return ratio >= 1.5f;
-}
-
 inline bool IsShadowFormat_Stage3(DXGI_FORMAT Format)
 {
     switch (Format)
@@ -107,16 +91,7 @@ inline bool ShouldDoubleDepthStencilTexture(UINT Width, UINT Height, const SIZE*
         case 0: reason = "mode0"; result = false; break;
         case 1: result = true; break;
         default:
-            // Shadow atlases: light-camera constants never shift, so a sibling
-            // is identical (GTA V: ~450 draws/frame). ShadowAtlasByShape is off
-            // until measured -- it makes strictly MORE depth targets mono, and a
-            // wrong call there flattens a real per-eye buffer.
-            if (gInfo.ShadowAtlasByShape
-                    ? IsShadowAtlasShape(Width, Height, pBBSize)
-                    : (pBBSize && (ULONGLONG)Width * Height >=
-                                  4ull * (ULONGLONG)pBBSize->cx * (ULONGLONG)pBBSize->cy))
-                { reason = "shadowAtlas"; result = false; }
-            else if (gInfo.MonoDepthStencilTextures)                                                                            { reason = "monoDSFlag"; result = false; }
+            if      (gInfo.MonoDepthStencilTextures)                                                                            { reason = "monoDSFlag"; result = false; }
             else if (gInfo.CreateSquareDSInMono && IsSquareSize_Stage3(Width, Height, gInfo.CreateBigSquareDSInStereo, pBBSize)) { reason = "squareDS";   result = false; }
             else if (gInfo.CreateDSThatLessThanBBInMono && IsLessThanBB_Stage3(Width, Height, pBBSize))                          { reason = "lessThanBB"; result = false; }
             else if (Width == 1 || Height == 1)                                                                                 { reason = "1pixel";     result = false; }
@@ -138,23 +113,15 @@ inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE*
         return ShouldDoubleDepthStencilTexture(pDesc->Width, pDesc->Height, pBBSize, outReason);
     if ((pDesc->BindFlags & D3D11_BIND_RENDER_TARGET) != 0)
         return ShouldDoubleRenderTargetTexture(pDesc->Format, pDesc->Width, pDesc->Height, pBBSize, outReason);
-    // SRV-only scene-sized textures with no seed data are resolve/copy
-    // destinations. BC2's MSAA resolve funnelled both eyes through a mono
-    // one — everything downstream sampled the left scene and the output
-    // went byte-identical. Doubling the dst lets the existing Resolve/Copy
-    // mirroring route each eye's content through automatically.
-    // MSAA ones too: only a copy can fill them (BF3 copies its MSAA G-buffer depth into one, resolves it for both eyes,
-    // and the right eye lit and ambient-occluded the left eye's depth).
-    if (gInfo.DoubleResolveTargets &&
-        (pDesc->BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0 &&
+    // SRV-only textures created empty, MSAA ones included, are resolve/copy destinations: a mono one flattens both eyes
+    // to the left image downstream (BC2's MSAA resolve, BF3's G-buffer depth copy). The Resolve/Copy mirrors fill both.
+    if ((pDesc->BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0 &&
         (pDesc->BindFlags & D3D11_BIND_UNORDERED_ACCESS) == 0 &&
         pDesc->Usage == D3D11_USAGE_DEFAULT && !hasInitialData &&
         pDesc->Width >= 640 && pDesc->Height >= 360)
         return true;
-    // UAV-only textures are deliberately not doubled: NVIDIA's 3D Vision
-    // heuristics cover render targets and depth only, and a compute output
-    // written once outside a duplicated dispatch would leave the sibling
-    // uninitialised. GTA V has none of these anyway.
+    // UAV textures stay single, as NVIDIA's heuristics have it: a compute output written outside a duplicated
+    // dispatch would leave its sibling uninitialised.
     if (outReason) *outReason = "noRTBind";
     return false;
 }

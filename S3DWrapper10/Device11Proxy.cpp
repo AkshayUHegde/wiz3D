@@ -11,8 +11,6 @@
 #include "Texture1D11Proxy.h"
 #include "Texture3D11Proxy.h"
 #include "StereoHeuristic.h"
-#include "DxbcRebuild.h"                   // DxbcSelfTest
-#include "ShaderModify11.h"                // TryModifyShaderForStereo
 #include "..\S3DAPI\ReadData.h"            // ReadCurrentProfile
 #include "..\S3DAPI\ShaderProfileData.h"   // g_ProfileData
 #include "proxy_factory.h"     // for IID_wiz3D_Device11Proxy
@@ -21,8 +19,8 @@
 #include <dxgi.h>
 #include <dxgi1_2.h>
 #include <dxgi1_3.h>
-#include <d3dcompiler.h>
 #include <madCHook.h>
+#include <intrin.h>            // _ReturnAddress
 #include <mutex>
 #include <unordered_map>
 #include <atomic>
@@ -57,14 +55,8 @@ static DWORD GetVendorIdFromDevice(ID3D11Device* dev)
     return vendor;
 }
 
-// ---------------------------------------------------------------------------
-// Real-device bypass. Objects we hand out unwrapped (shaders, state objects)
-// answer GetDevice() with the REAL device, and an engine that fetches its
-// context from there draws past the proxy: Mass Effect Andromeda rendered
-// its whole scene that way (120 proxied draws, 0 dispatches, right eye never
-// written). Detouring the real vtable's GetImmediateContext* hands such
-// callers the context proxy; CreateDeferredContext is only reported.
-// ---------------------------------------------------------------------------
+// Objects handed out unwrapped (shaders, states) answer GetDevice() with the real device, and an engine that takes its
+// context from there draws past the proxy (Mass Effect Andromeda): the real vtable's GetImmediateContext* returns ours.
 static std::mutex s_realDevLock;
 static std::unordered_map<ID3D11Device*, Device11Proxy*> s_realToDevice;
 
@@ -79,17 +71,36 @@ typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext)(ID3D11Device*, ID3D11D
 typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext1)(ID3D11Device1*, ID3D11DeviceContext1**);
 typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext2)(ID3D11Device2*, ID3D11DeviceContext2**);
 typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext3)(ID3D11Device3*, ID3D11DeviceContext3**);
-typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext)(ID3D11Device*, UINT, ID3D11DeviceContext**);
 static PFN_GetImmediateContext  s_origGetImmediateContext  = nullptr;
 static PFN_GetImmediateContext1 s_origGetImmediateContext1 = nullptr;
 static PFN_GetImmediateContext2 s_origGetImmediateContext2 = nullptr;
 static PFN_GetImmediateContext3 s_origGetImmediateContext3 = nullptr;
-static PFN_CreateDeferredContext s_origCreateDeferredContext = nullptr;
+
+// A call from this DLL keeps the real context: the wrapper's own passes (the output composite) asked the real device
+// for it and must not run through the proxy.
+static bool CalledFromThisModule(const void* returnAddress)
+{
+    static const BYTE* s_base = nullptr;
+    static SIZE_T      s_size = 0;
+    if (!s_base)
+    {
+        HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&CalledFromThisModule), &self);
+        if (!self) return false;
+        const BYTE* base = reinterpret_cast<const BYTE*>(self);
+        s_size = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew)
+                     ->OptionalHeader.SizeOfImage;
+        s_base = base;
+    }
+    const BYTE* a = static_cast<const BYTE*>(returnAddress);
+    return a >= s_base && a < s_base + s_size;
+}
 
 static void STDMETHODCALLTYPE Hook_RealGetImmediateContext(ID3D11Device* self, ID3D11DeviceContext** pp)
 {
     Device11Proxy* dp = FindDeviceByReal(self);
-    if (dp && pp && dp->GetContextProxy())
+    if (dp && pp && dp->GetContextProxy() && !CalledFromThisModule(_ReturnAddress()))
     {
         NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext bypass caught -> context proxy\n");
         dp->GetImmediateContext(pp);
@@ -101,7 +112,7 @@ static void STDMETHODCALLTYPE Hook_RealGetImmediateContext(ID3D11Device* self, I
 static void STDMETHODCALLTYPE Hook_RealGetImmediateContext1(ID3D11Device1* self, ID3D11DeviceContext1** pp)
 {
     Device11Proxy* dp = FindDeviceByReal(static_cast<ID3D11Device*>(self));
-    if (dp && pp && dp->GetContextProxy())
+    if (dp && pp && dp->GetContextProxy() && !CalledFromThisModule(_ReturnAddress()))
     {
         NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext1 bypass caught -> context proxy\n");
         dp->GetImmediateContext1(pp);
@@ -113,7 +124,7 @@ static void STDMETHODCALLTYPE Hook_RealGetImmediateContext1(ID3D11Device1* self,
 static void STDMETHODCALLTYPE Hook_RealGetImmediateContext2(ID3D11Device2* self, ID3D11DeviceContext2** pp)
 {
     Device11Proxy* dp = FindDeviceByReal(static_cast<ID3D11Device*>(self));
-    if (dp && pp && dp->GetContextProxy())
+    if (dp && pp && dp->GetContextProxy() && !CalledFromThisModule(_ReturnAddress()))
     {
         NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext2 bypass caught -> context proxy\n");
         dp->GetImmediateContext2(pp);
@@ -125,7 +136,7 @@ static void STDMETHODCALLTYPE Hook_RealGetImmediateContext2(ID3D11Device2* self,
 static void STDMETHODCALLTYPE Hook_RealGetImmediateContext3(ID3D11Device3* self, ID3D11DeviceContext3** pp)
 {
     Device11Proxy* dp = FindDeviceByReal(static_cast<ID3D11Device*>(self));
-    if (dp && pp && dp->GetContextProxy())
+    if (dp && pp && dp->GetContextProxy() && !CalledFromThisModule(_ReturnAddress()))
     {
         NVDM_TRACE_FIRST_N(4, "  Real device GetImmediateContext3 bypass caught -> context proxy\n");
         dp->GetImmediateContext3(pp);
@@ -134,49 +145,8 @@ static void STDMETHODCALLTYPE Hook_RealGetImmediateContext3(ID3D11Device3* self,
     s_origGetImmediateContext3(self, pp);
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext(ID3D11Device* self, UINT flags, ID3D11DeviceContext** pp)
-{
-    HRESULT hr = s_origCreateDeferredContext(self, flags, pp);
-    if (FindDeviceByReal(self))
-        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
-    return hr;
-}
-
-typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext1)(ID3D11Device1*, UINT, ID3D11DeviceContext1**);
-typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext2)(ID3D11Device2*, UINT, ID3D11DeviceContext2**);
-typedef HRESULT (STDMETHODCALLTYPE* PFN_CreateDeferredContext3)(ID3D11Device3*, UINT, ID3D11DeviceContext3**);
-static PFN_CreateDeferredContext1 s_origCreateDeferredContext1 = nullptr;
-static PFN_CreateDeferredContext2 s_origCreateDeferredContext2 = nullptr;
-static PFN_CreateDeferredContext3 s_origCreateDeferredContext3 = nullptr;
-
-static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext1(ID3D11Device1* self, UINT flags, ID3D11DeviceContext1** pp)
-{
-    HRESULT hr = s_origCreateDeferredContext1(self, flags, pp);
-    if (FindDeviceByReal(static_cast<ID3D11Device*>(self)))
-        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext1 bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
-    return hr;
-}
-
-static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext2(ID3D11Device2* self, UINT flags, ID3D11DeviceContext2** pp)
-{
-    HRESULT hr = s_origCreateDeferredContext2(self, flags, pp);
-    if (FindDeviceByReal(static_cast<ID3D11Device*>(self)))
-        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext2 bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
-    return hr;
-}
-
-static HRESULT STDMETHODCALLTYPE Hook_RealCreateDeferredContext3(ID3D11Device3* self, UINT flags, ID3D11DeviceContext3** pp)
-{
-    HRESULT hr = s_origCreateDeferredContext3(self, flags, pp);
-    if (FindDeviceByReal(static_cast<ID3D11Device*>(self)))
-        NVDM_TRACE_FIRST_N(8, "  Real device CreateDeferredContext3 bypass (flags=0x%X) hr=0x%08lX -- UNWRAPPED\n", flags, hr);
-    return hr;
-}
-
-// ID3D11Device vtable: GetImmediateContext is slot 40, CreateDeferredContext
-// 27; Device1 adds GetImmediateContext1 at 43, Device2 GetImmediateContext2
-// at 50, Device3 GetImmediateContext3 at 61. Runtime vtables are shared by
-// every device, so the detours are installed once.
+// GetImmediateContext is vtable slot 40 of ID3D11Device, 43 of Device1, 50 of Device2, 61 of Device3. The runtime's
+// vtables are shared by every device, so the detours are installed once.
 static void InstallRealDeviceHooks(ID3D11Device* real, ID3D11Device1* real1, ID3D11Device2* real2, ID3D11Device3* real3)
 {
     static bool s_done = false;
@@ -184,11 +154,10 @@ static void InstallRealDeviceHooks(ID3D11Device* real, ID3D11Device1* real1, ID3
     s_done = true;
     void** vt = *reinterpret_cast<void***>(real);
     HookCode(vt[40], Hook_RealGetImmediateContext, (PVOID*)&s_origGetImmediateContext, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK);
-    HookCode(vt[27], Hook_RealCreateDeferredContext, (PVOID*)&s_origCreateDeferredContext, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK);
-    if (real1) { void** vt1 = *reinterpret_cast<void***>(real1); HookCode(vt1[43], Hook_RealGetImmediateContext1, (PVOID*)&s_origGetImmediateContext1, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); HookCode(vt1[44], Hook_RealCreateDeferredContext1, (PVOID*)&s_origCreateDeferredContext1, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
-    if (real2) { void** vt2 = *reinterpret_cast<void***>(real2); HookCode(vt2[50], Hook_RealGetImmediateContext2, (PVOID*)&s_origGetImmediateContext2, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); HookCode(vt2[51], Hook_RealCreateDeferredContext2, (PVOID*)&s_origCreateDeferredContext2, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
-    if (real3) { void** vt3 = *reinterpret_cast<void***>(real3); HookCode(vt3[61], Hook_RealGetImmediateContext3, (PVOID*)&s_origGetImmediateContext3, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); HookCode(vt3[62], Hook_RealCreateDeferredContext3, (PVOID*)&s_origCreateDeferredContext3, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
-    DDILog("  Real device vtable detours installed (GetImmediateContext 0..3, CreateDeferredContext 0..3)\n");
+    if (real1) { void** vt1 = *reinterpret_cast<void***>(real1); HookCode(vt1[43], Hook_RealGetImmediateContext1, (PVOID*)&s_origGetImmediateContext1, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
+    if (real2) { void** vt2 = *reinterpret_cast<void***>(real2); HookCode(vt2[50], Hook_RealGetImmediateContext2, (PVOID*)&s_origGetImmediateContext2, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
+    if (real3) { void** vt3 = *reinterpret_cast<void***>(real3); HookCode(vt3[61], Hook_RealGetImmediateContext3, (PVOID*)&s_origGetImmediateContext3, NO_SAFE_UNHOOKING | DONT_RENEW_OVERWRITTEN_HOOK); }
+    DDILog("  Real device vtable detours installed (GetImmediateContext 0..3)\n");
 }
 
 Device11Proxy::Device11Proxy(ID3D11Device* real)
@@ -223,34 +192,19 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
         InstallRealDeviceHooks(m_real, m_real1, m_real2, m_real3);
     }
 
-    // Populate g_ProfileData. Only D3DDeviceWrapper (legacy DDI) and DX9 ever
-    // called this, so under COM-wrap every per-game profile — mono shader
-    // lists, matrix declarations — silently did nothing.
+    // The game's profile (g_ProfileData): only the legacy DDI path and DX9 read it, so under COM-wrap its mono shader
+    // lists and matrix declarations did nothing.
     static bool s_profileRead = false;
     if (!s_profileRead)
     {
         s_profileRead = true;
-        // ReadConfig bails early when g_docConfig is null (it is, under
-        // COM-wrap), so DefaultProfile presets never load and a game profile
-        // without its own <Presets> would leave separation at zero. Keep the
-        // camera state we already had; we only want the shader/matrix data.
+        // ReadConfig leaves DefaultProfile presets unread under COM-wrap (no g_docConfig), so a profile without its own
+        // <Presets> keeps the camera state we already had.
         DataInput savedInput = gInfo.Input;
         ReadCurrentProfile(GetVendorIdFromDevice(m_real));
-        // Restoring unconditionally also discarded presets a profile really did
-        // supply, pinning every game to the built-in 0.16 / 0.5. Keep what the
-        // profile gave us; fall back only when it gave nothing usable.
         const CameraPreset* loaded = gInfo.Input.GetActivePreset();
         if (!loaded || loaded->StereoBase == 0.f)
             gInfo.Input = savedInput;
-        // Method 0 shifts via dp4 with the stereo projection's _31/_41 skew, which
-        // only the DX9 renderer computes. Method 2 is x += sep*(w - conv), which
-        // needs just separation and convergence — the values we actually have.
-        if (gInfo.ModifyShadersDX11 && gInfo.VertexShaderModificationMethod != 2)
-        {
-            DDILog("  Device11Proxy: ModifyShadersDX11 forces VertexShaderModificationMethod 2 (was %d)\n",
-                   (int)gInfo.VertexShaderModificationMethod);
-            gInfo.VertexShaderModificationMethod = 2;
-        }
         const CameraPreset* act = gInfo.Input.GetActivePreset();
         DDILog("  Device11Proxy: preset StereoBase=%.6f One_div_ZPS=%.6f (converge=%.2f units)\n",
                act ? act->StereoBase : 0.f, act ? act->One_div_ZPS : 0.f,
@@ -316,82 +270,6 @@ Texture2D11Proxy* Device11Proxy::LookupProxyByReal(void* realLeft) const
     return p;
 }
 
-// BC2: right CBs are provably shifted at duplicated draws, yet the BB
-// siblings stay byte-identical — some pass flattens the chain. Compare every
-// large stereo texture's siblings at Present; the DIFFERS/IDENTICAL boundary
-// names the flattening pass.
-void Device11Proxy::SurveyStereoTextures()
-{
-    static int s_budget = 4;
-    static int s_present = 0;
-    if (!gInfo.CollectDebugInformation) return;
-    if (s_budget <= 0 || (s_present++ % 600) != 0) return;
-    --s_budget;
-
-    ID3D11DeviceContext* ctx = nullptr;
-    m_real->GetImmediateContext(&ctx);
-    if (!ctx) return;
-
-    EnterCriticalSection(&m_realToProxyLock);
-    DDILog("  [texsurvey] --- %zu registered textures ---\n", m_realToProxy.size());
-    for (auto& kv : m_realToProxy)
-    {
-        Texture2D11Proxy* tp = kv.second;
-        if (!tp || !tp->IsStereo()) continue;
-        ID3D11Texture2D* l = tp->GetReal();
-        ID3D11Texture2D* r = tp->GetRealRight();
-        if (!l || !r) continue;
-        D3D11_TEXTURE2D_DESC td = {};
-        l->GetDesc(&td);
-        if (td.Width < 800 || td.SampleDesc.Count > 1 || td.ArraySize != 1) continue;
-
-        D3D11_TEXTURE2D_DESC sd = td;
-        sd.Usage          = D3D11_USAGE_STAGING;
-        sd.BindFlags      = 0;
-        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        sd.MiscFlags      = 0;
-        sd.MipLevels      = 1;
-        sd.ArraySize      = 1;
-        ID3D11Texture2D* sl = nullptr;
-        ID3D11Texture2D* sr = nullptr;
-        if (FAILED(m_real->CreateTexture2D(&sd, nullptr, &sl)) ||
-            FAILED(m_real->CreateTexture2D(&sd, nullptr, &sr)))
-        {
-            if (sl) sl->Release();
-            if (sr) sr->Release();
-            continue;
-        }
-        ctx->CopySubresourceRegion(sl, 0, 0, 0, 0, l, 0, nullptr);
-        ctx->CopySubresourceRegion(sr, 0, 0, 0, 0, r, 0, nullptr);
-        D3D11_MAPPED_SUBRESOURCE ml = {}, mr = {};
-        if (SUCCEEDED(ctx->Map(sl, 0, D3D11_MAP_READ, 0, &ml)) &&
-            SUCCEEDED(ctx->Map(sr, 0, D3D11_MAP_READ, 0, &mr)))
-        {
-            const UINT rowL = td.Height / 2;
-            size_t n = (ml.RowPitch < mr.RowPitch) ? ml.RowPitch : mr.RowPitch;
-            if (n > 8192) n = 8192;
-            const size_t offL = (size_t)rowL * ml.RowPitch;
-            const size_t offR = (size_t)rowL * mr.RowPitch;
-            // Stay inside what Map handed back (FC4 crashed on an array/mip
-            // layout whose row math overran the staging copy).
-            if (offL + n <= ml.DepthPitch && offR + n <= mr.DepthPitch)
-            {
-                const BYTE* bl = (const BYTE*)ml.pData + offL;
-                const BYTE* br = (const BYTE*)mr.pData + offR;
-                DDILog("  [texsurvey] tex=%p %ux%u fmt=%d bind=0x%X %s\n",
-                       (void*)tp, td.Width, td.Height, (int)td.Format, td.BindFlags,
-                       memcmp(bl, br, n) == 0 ? "IDENTICAL" : "DIFFERS");
-            }
-        }
-        if (ml.pData) ctx->Unmap(sl, 0);
-        if (mr.pData) ctx->Unmap(sr, 0);
-        sl->Release();
-        sr->Release();
-    }
-    LeaveCriticalSection(&m_realToProxyLock);
-    ctx->Release();
-}
-
 void Device11Proxy::StoreShaderProjection(void* shaderPtr, const ShaderAnalysis11Result& info)
 {
     if (!shaderPtr) return;
@@ -411,17 +289,6 @@ const ShaderAnalysis11Result* Device11Proxy::LookupShaderProjection(void* shader
     return p;
 }
 
-const Device11Proxy::ModifiedVS* Device11Proxy::LookupModifiedVS(ID3D11VertexShader* original) const
-{
-    if (!original) return nullptr;
-    auto* self = const_cast<Device11Proxy*>(this);
-    EnterCriticalSection(&self->m_shaderProjLock);
-    auto it = m_modifiedVS.find(original);
-    const ModifiedVS* p = (it == m_modifiedVS.end()) ? nullptr : &it->second;
-    LeaveCriticalSection(&self->m_shaderProjLock);
-    return p;
-}
-
 namespace {
 
 template<typename TShader, typename CreateFn>
@@ -431,15 +298,6 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
 {
     HRESULT hr = createReal(pBytecode, byteLength, pClassLinkage, ppShader);
     if (FAILED(hr) || !ppShader || !*ppShader) return hr;
-
-    // One-time proof, against real game bytecode, that our checksum matches the
-    // compiler's and that a rebuilt container is byte-identical to the original.
-    static bool s_selfTested = false;
-    if (!s_selfTested && pBytecode && byteLength > 32)
-    {
-        s_selfTested = true;
-        DxbcSelfTest(pBytecode, byteLength);
-    }
 
     ShaderAnalysis11Result info;
     const bool analyzed = AnalyzeShader11(pBytecode, byteLength, info);
@@ -469,17 +327,8 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
             tag, info.crc32, *ppShader, (int)info.parsed);
     }
 
-    // Store EVERY successfully-parsed result, including ones with no
-    // projection matrices (Aug 2026). Previously we only stored shaders that
-    // had matrices, which meant LookupShaderProjection returned null for two
-    // very different situations: "analyzed, definitively has no projection"
-    // and "never analyzed at all". Context11Proxy::Unmap could not tell them
-    // apart, so a shader we had positively cleared still fell through to the
-    // heuristic CB scan. Storing the negative result makes that distinction
-    // available at the call site.
-    // Store on CRC alone too: pixel shaders always fail analysis (no
-    // SV_Position output) but BaseProfile.xml still matches them by CRC.
-    // parsed stays false there, so analyzerKnows is unaffected.
+    // Every result, matrices or not, so a lookup tells "analysed, no projection" from "never analysed"; unparsed ones
+    // too (pixel and compute shaders), as BaseProfile.xml and the features still match them by CRC and name.
     if (analyzed || info.crc32)
         self->StoreShaderProjection(*ppShader, info);
     return hr;
@@ -491,101 +340,17 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateVertexShader(
     const void* pShaderBytecode, SIZE_T BytecodeLength,
     ID3D11ClassLinkage* pClassLinkage, ID3D11VertexShader** ppVertexShader)
 {
-    HRESULT hr = AnalyzeAndCreate<ID3D11VertexShader>("Vertex", this,
+    return AnalyzeAndCreate<ID3D11VertexShader>("Vertex", this,
         [this](const void* b, SIZE_T n, ID3D11ClassLinkage* cl, ID3D11VertexShader** pp) {
             return m_real->CreateVertexShader(b, n, cl, pp);
         },
         pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
-
-    // CRC-named so a shader seen in the frame trace (vs=0x...) can be pulled
-    // by filename; BC2's scene VSes need reading to find where the real
-    // transform lives (suspected instance data, not the CB matrices we shift).
-    if (gInfo.DumpModifiedShaders && SUCCEEDED(hr) && ppVertexShader && *ppVertexShader)
-    {
-        if (const ShaderAnalysis11Result* info = LookupShaderProjection(*ppVertexShader))
-        {
-            ID3DBlob* dis = nullptr;
-            if (SUCCEEDED(D3DDisassemble(pShaderBytecode, BytecodeLength, 0, nullptr, &dis)) && dis)
-            {
-                char path[MAX_PATH];
-                sprintf_s(path, "wiz3D_vs_%08lX.txt", info->crc32);
-                FILE* f = nullptr;
-                if (fopen_s(&f, path, "wb") == 0 && f)
-                {
-                    fprintf(f, "%s\n", (const char*)dis->GetBufferPointer());
-                    fclose(f);
-                }
-                dis->Release();
-            }
-        }
-    }
-
-    if (gInfo.ModifyShadersDX11 && SUCCEEDED(hr) && ppVertexShader && *ppVertexShader)
-        TryBuildModifiedVS(pShaderBytecode, BytecodeLength, pClassLinkage, *ppVertexShader);
-    return hr;
-}
-
-// Builds the self-shifting variant of a vertex shader and keeps it beside the
-// original. Only shaders the analyzer found no projection matrix in are worth
-// modifying — the rest are already handled by targeted CB patching.
-void Device11Proxy::TryBuildModifiedVS(const void* bytecode, SIZE_T byteLength,
-                                       ID3D11ClassLinkage* linkage, ID3D11VertexShader* original)
-{
-    const ShaderAnalysis11Result* info = LookupShaderProjection(original);
-    if (!info || !info->parsed) { ++m_vsModSkippedUnparsed; return; }
-    if (!info->projection.matrixData.cb.empty()) { ++m_vsModSkippedHasMatrix; return; }
-    if (gInfo.ModifyShadersMaxCount && m_vsModOk >= gInfo.ModifyShadersMaxCount) return;
-
-    std::vector<BYTE> blob;
-    ModifiedShaderData mdata;
-    if (!TryModifyShaderForStereo(bytecode, byteLength, info->posRegister, false, blob, mdata))
-    {
-        ++m_vsModFailed;
-        NVDM_TRACE_FIRST_N(8, "  TryBuildModifiedVS: CRC=0x%08lX modify FAILED"
-                              " (posRegister=%u)\n", info->crc32, info->posRegister);
-        return;
-    }
-
-    ID3D11VertexShader* modified = nullptr;
-    HRESULT hr = m_real->CreateVertexShader(blob.data(), blob.size(), linkage, &modified);
-    if (FAILED(hr) || !modified)
-    {
-        ++m_vsModRejected;
-        NVDM_TRACE_FIRST_N(8,
-            "  TryBuildModifiedVS: CRC=0x%08lX runtime REJECTED modified shader hr=0x%08lX\n",
-            info->crc32, hr);
-        return;
-    }
-
-    ++m_vsModOk;
-    DumpShaderPair(bytecode, byteLength, blob.data(), blob.size(), m_vsModOk, info->crc32);
-    // Index is the bisection handle: with ModifyShadersMaxCount set, only
-    // shaders below that index are modified, so the last one logged before a
-    // crash narrows the culprit.
-    DDILog("  TryBuildModifiedVS[%u]: CRC=0x%08lX OK cb=%u dp4Reg=%u (orig=%zu mod=%zu bytes)\n",
-           m_vsModOk, info->crc32, mdata.CBIndex, mdata.dp4VectorRegister, byteLength, blob.size());
-
-    EnterCriticalSection(&m_shaderProjLock);
-    ModifiedVS& slot = m_modifiedVS[original];
-    if (slot.shader) slot.shader->Release();   // shader pointer reuse after a Release
-    slot.shader = modified;
-    slot.data   = mdata;
-    LeaveCriticalSection(&m_shaderProjLock);
-}
-
-void Device11Proxy::LogShaderModStats() const
-{
-    DDILog("  VS modification: ok=%u failed=%u rejected=%u skipped(hasMatrix)=%u skipped(unparsed)=%u\n",
-           m_vsModOk, m_vsModFailed, m_vsModRejected,
-           m_vsModSkippedHasMatrix, m_vsModSkippedUnparsed);
 }
 
 HRESULT STDMETHODCALLTYPE Device11Proxy::CreatePixelShader(
     const void* pShaderBytecode, SIZE_T BytecodeLength,
     ID3D11ClassLinkage* pClassLinkage, ID3D11PixelShader** ppPixelShader)
 {
-    static unsigned s_psDump = 0;
-    DumpShaderBytecode("ps", pShaderBytecode, BytecodeLength, s_psDump++);
     return AnalyzeAndCreate<ID3D11PixelShader>("Pixel", this,
         [this](const void* b, SIZE_T n, ID3D11ClassLinkage* cl, ID3D11PixelShader** pp) {
             return m_real->CreatePixelShader(b, n, cl, pp);
@@ -597,8 +362,6 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateComputeShader(
     const void* pShaderBytecode, SIZE_T BytecodeLength,
     ID3D11ClassLinkage* pClassLinkage, ID3D11ComputeShader** ppComputeShader)
 {
-    static unsigned s_csDump = 0;
-    DumpShaderBytecode("cs", pShaderBytecode, BytecodeLength, s_csDump++);
     // Analysed for the profile features' names only (no SV_Position, so no matrix analysis runs).
     return AnalyzeAndCreate<ID3D11ComputeShader>("Compute", this,
         [this](const void* b, SIZE_T n, ID3D11ClassLinkage* cl, ID3D11ComputeShader** pp) {
@@ -732,11 +495,8 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateRenderTargetView(
     return hr;
 }
 
-// Real D3D11 keeps the immediate context alive for the device's lifetime no
-// matter what the app does with its own handle. Without this ref, a game that
-// drops the context it got from D3D11CreateDevice (UE3 does, then re-fetches it
-// via GetImmediateContext) destroyed our proxy and the real context under a
-// live device — BioShock Infinite faulted in the driver during device setup.
+// The device holds its immediate context for its lifetime, as D3D11 does: UE3 releases the one D3D11CreateDevice gave
+// it and fetches it again, which freed our proxy under a live device (BioShock Infinite faulted at device setup).
 void Device11Proxy::SetImmediateContextProxy(Context11Proxy* ctxProxy)
 {
     if (m_ctxProxy == ctxProxy) return;
@@ -916,75 +676,6 @@ void STDMETHODCALLTYPE Device11Proxy::GetImmediateContext3(ID3D11DeviceContext3*
     else *ppImmediateContext = nullptr;
 }
 
-// ---------------------------------------------------------------------------
-// Deferred-context creation — diagnostic passthrough (Aug 2026).
-//
-// Behaviour is UNCHANGED: we still hand the game the real deferred context.
-// The logging exists to answer a specific open question on Max Payne 3, where
-// the per-frame recording that feeds the right-eye replay comes back nearly
-// empty (19 commands / 2 draws for a full gameplay frame, when the real frame
-// is hundreds of draws). If the game builds its scene on deferred contexts,
-// those draws never pass through Context11Proxy at all, so the right-eye
-// sibling textures are never written — which would explain a right eye that
-// is black (MSAA on) or depth-garbage green (MSAA off) rather than merely
-// mis-shifted.
-//
-// Note this is a REPORTING hook only. Wrapping deferred contexts is not a
-// drop-in fix: a command list bakes its resource bindings at record time, so
-// replaying one for the right eye would just redraw the left. If these lines
-// fire, the replay design needs rework, not a patch here.
-// ---------------------------------------------------------------------------
-HRESULT STDMETHODCALLTYPE Device11Proxy::CreateDeferredContext(
-    UINT ContextFlags, ID3D11DeviceContext** ppDeferredContext)
-{
-    HRESULT hr = m_real->CreateDeferredContext(ContextFlags, ppDeferredContext);
-    NVDM_TRACE_FIRST_N(8,
-        "  Device11Proxy::CreateDeferredContext(flags=0x%X) hr=0x%08lX ctx=%p"
-        " -- UNWRAPPED: draws on this context bypass right-eye recording\n",
-        ContextFlags, hr,
-        ((SUCCEEDED(hr) && ppDeferredContext) ? (void*)*ppDeferredContext : nullptr));
-    return hr;
-}
-
-HRESULT STDMETHODCALLTYPE Device11Proxy::CreateDeferredContext1(
-    UINT ContextFlags, ID3D11DeviceContext1** ppDeferredContext)
-{
-    HRESULT hr = m_real1 ? m_real1->CreateDeferredContext1(ContextFlags, ppDeferredContext)
-                         : E_NOINTERFACE;
-    NVDM_TRACE_FIRST_N(8,
-        "  Device11Proxy::CreateDeferredContext1(flags=0x%X) hr=0x%08lX ctx=%p"
-        " -- UNWRAPPED: draws on this context bypass right-eye recording\n",
-        ContextFlags, hr,
-        ((SUCCEEDED(hr) && ppDeferredContext) ? (void*)*ppDeferredContext : nullptr));
-    return hr;
-}
-
-HRESULT STDMETHODCALLTYPE Device11Proxy::CreateDeferredContext2(
-    UINT ContextFlags, ID3D11DeviceContext2** ppDeferredContext)
-{
-    HRESULT hr = m_real2 ? m_real2->CreateDeferredContext2(ContextFlags, ppDeferredContext)
-                         : E_NOINTERFACE;
-    NVDM_TRACE_FIRST_N(8,
-        "  Device11Proxy::CreateDeferredContext2(flags=0x%X) hr=0x%08lX ctx=%p"
-        " -- UNWRAPPED: draws on this context bypass right-eye recording\n",
-        ContextFlags, hr,
-        ((SUCCEEDED(hr) && ppDeferredContext) ? (void*)*ppDeferredContext : nullptr));
-    return hr;
-}
-
-HRESULT STDMETHODCALLTYPE Device11Proxy::CreateDeferredContext3(
-    UINT ContextFlags, ID3D11DeviceContext3** ppDeferredContext)
-{
-    HRESULT hr = m_real3 ? m_real3->CreateDeferredContext3(ContextFlags, ppDeferredContext)
-                         : E_NOINTERFACE;
-    NVDM_TRACE_FIRST_N(8,
-        "  Device11Proxy::CreateDeferredContext3(flags=0x%X) hr=0x%08lX ctx=%p"
-        " -- UNWRAPPED: draws on this context bypass right-eye recording\n",
-        ContextFlags, hr,
-        ((SUCCEEDED(hr) && ppDeferredContext) ? (void*)*ppDeferredContext : nullptr));
-    return hr;
-}
-
 HRESULT STDMETHODCALLTYPE Device11Proxy::CreateBuffer(
     const D3D11_BUFFER_DESC* pDesc,
     const D3D11_SUBRESOURCE_DATA* pInitialData,
@@ -1051,11 +742,10 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateTexture2D(
     const char* monoReason = "";
     const bool doubleIt = ShouldDoubleTexture2D(pDesc, pBBSize,
                                                 pInitialData != nullptr, &monoReason);
-    // Every RT/DS-capable or doubled create, uncapped: one mono link in the
-    // visible chain collapses the whole output to the left eye (BC2), and
-    // the capped generic trace below never reaches the level-load creates.
-    if (pDesc && (doubleIt ||
-                  (pDesc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL))))
+    // Every RT/DS-capable or doubled create, uncapped: one mono link in the visible chain flattens the output to the
+    // left eye, and the capped trace below never reaches the level-load creates.
+    if (gInfo.CollectDebugInformation && pDesc &&
+        (doubleIt || (pDesc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL))))
         DDILog("  [texcreate] %ux%u fmt=%d bind=0x%X stereo=%d%s%s\n",
                pDesc->Width, pDesc->Height, (int)pDesc->Format, pDesc->BindFlags,
                (int)doubleIt, doubleIt ? "" : " reason=", doubleIt ? "" : monoReason);
@@ -1217,15 +907,18 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateUnorderedAccessView(
     HRESULT hr = m_real->CreateUnorderedAccessView(realLeftRes, pDesc, ppUAView);
     if (FAILED(hr))
     {
-        D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
-        if (realLeftRes) realLeftRes->GetType(&dim);
-        D3D11_TEXTURE2D_DESC td = {};
-        if (tex2Proxy) tex2Proxy->GetDesc(&td);
-        DDILog("  Device11Proxy::CreateUnorderedAccessView FAILED hr=0x%08lX res=%p proxy=%s dim=%d"
-               " view(fmt=%d dim=%d) tex2(%ux%u fmt=%d bind=0x%X misc=0x%X mips=%u array=%u) right=%p\n",
-               hr, pResource, tex2Proxy ? "tex2" : tex1Proxy ? "tex1" : tex3Proxy ? "tex3" : bufProxy ? "buf" : "none",
-               (int)dim, pDesc ? (int)pDesc->Format : -1, pDesc ? (int)pDesc->ViewDimension : -1,
-               td.Width, td.Height, (int)td.Format, td.BindFlags, td.MiscFlags, td.MipLevels, td.ArraySize, realRightRes);
+        if (gInfo.CollectDebugInformation)
+        {
+            D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+            if (realLeftRes) realLeftRes->GetType(&dim);
+            D3D11_TEXTURE2D_DESC td = {};
+            if (tex2Proxy) tex2Proxy->GetDesc(&td);
+            DDILog("  Device11Proxy::CreateUnorderedAccessView FAILED hr=0x%08lX res=%p proxy=%s dim=%d"
+                   " view(fmt=%d dim=%d) tex2(%ux%u fmt=%d bind=0x%X misc=0x%X mips=%u array=%u) right=%p\n",
+                   hr, pResource, tex2Proxy ? "tex2" : tex1Proxy ? "tex1" : tex3Proxy ? "tex3" : bufProxy ? "buf" : "none",
+                   (int)dim, pDesc ? (int)pDesc->Format : -1, pDesc ? (int)pDesc->ViewDimension : -1,
+                   td.Width, td.Height, (int)td.Format, td.BindFlags, td.MiscFlags, td.MipLevels, td.ArraySize, realRightRes);
+        }
         return hr;
     }
     if (!ppUAView || !*ppUAView) return hr;
