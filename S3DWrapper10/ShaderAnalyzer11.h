@@ -30,9 +30,6 @@ struct ShaderAnalysis11Result
     bool                  parsed;     // SHDR/SHEX + OSGN chunks both present and parsed
     DWORD                 crc32;      // bytecode CRC32 — diagnostic, helps cross-match against legacy DDI logs
     ProjectionShaderData  projection; // matrix register info per CB
-    // Register holding SV_Position. ModifyShader needs it to know which output to
-    // shift; valid only when parsed is true.
-    DWORD                 posRegister;
     // Located by the names the game's <Profile> gives (g_ProfileData), from RDEF; -1 = absent or not read.
     // StereoTexture's t-slot, and the cb slot + byte offset of its EyeOffset view inverse (row 0 = the camera's right axis).
     int                   stereoParmsSlot = -1;
@@ -77,5 +74,8 @@ struct ShaderAnalysis11Result
 // were detected. Safe to call with nullptr/0 — returns parsed=false.
 bool AnalyzeShader11(const void* pBytecode, SIZE_T byteLength,
                      ShaderAnalysis11Result& outResult);
+
+// A DXBC chunk's data (after its tag and size) and size, by four-character tag; null when the blob has none.
+const BYTE* FindDxbcChunk(const void* blob, SIZE_T blobLen, DWORD tag, DWORD& outSize);
 
 } // namespace wiz3d

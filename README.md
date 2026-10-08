@@ -26,7 +26,7 @@ This project modernizes that source code, replaces kernel-level hooks with a pro
 * **DirectX 9:** ✅ **Mostly Working!** `d3d9.dll` proxy loader works! Left 4 Dead 2 and many others run in full stereo3D, outputs in all originally supported formats, and the profile system loads shader fixes and stereo settings for all originally supported games.
 * **DirectX 8:** ✅ **Partially Worikng.** Wrapper to convert DX8 to use DX9's stereoization. One tested game working, needs further testing.
 * **DirectX 7:** ⚠️ **In Progress.** Wrapper to convert DX7 to use DX9's stereoization. DX7 to DX9 converstion is working. Here for testing.
-* **DirectX 10/11:** ⚠️ **Partial.** The DX10/11 wrapper was never completely finished by iZ3D Inc. wiz3D's COM wrapper now runs Far Cry 3, Far Cry 4, Battlefield 3, Battlefield: Bad Company 2 and Max Payne 3 in stereo; other games still need testing.
+* **DirectX 10/11:** ⚠️ **Partial.** The DX10/11 wrapper was never completely finished by iZ3D Inc. wiz3D's COM wrapper now runs Far Cry 3, Far Cry 4, Battlefield 3, Battlefield: Bad Company 2, BioShock Infinite and Max Payne 3 in stereo; other games still need testing.
 
 ---
 
@@ -392,6 +392,7 @@ Games that render Stereoscipic 3D themselves and display that via 3D Vision's 'D
 | Battlefield 3 | DX11 | x86 | ✕ | ✅ Working | Works with DirectX 11. |
 | BioShock | DX9/DX10 | x86 | ✓ | Untested |  |
 | BioShock 2 | DX9/DX10 | x86 | ✓ | Untested |  |
+| BioShock Infinite | DX11 | x86 | ✕ | ✅ Mostly Working | Bullet-hole decals fade out with distance in the right eye. |
 | Call of Juarez: Bound in Blood | DX9/DX10 | x86 | ✓ | Untested |  |
 | Company of Heroes | DX9/DX10 | x86 | ✓ | Untested |  |
 | Cryostasis | DX9/DX10 | x86 | ✓ | Untested |  |
@@ -449,7 +450,7 @@ Games that used 3D Vision "Automatic Mode" driver stereo injection, but communic
 | L.A. Noire | DX9/DX11 | x86 | ✕ | Untested | Game tells Automatic Mode what depth to use per frame. |
 | Lost Planet 2 | DX9/DX11 | x86 | ✓ | Untested | `Stereo=ON` in `config.ini`. |
 | Mafia II | DX9 | x86 | ✓ | Untested |  |
-| Max Payne 3 | DX9/DX11 | x86 | ✕ | ✅ Mostly Working | DX11. Rockstar logo intro does not render and the loading icon renders incorrectly. `3D Vision` not showing in `Graphics` menu. `-stereo 1` command line argument. |
+| Max Payne 3 | DX9/DX11 | x86 | ✕ | ✅ Mostly Working | DX11. The loading icon renders incorrectly. `3D Vision` not showing in `Graphics` menu. `-stereo 1` command line argument. |
 | Medal of Honor (2010) | DX9/DX11 | x86 | ✓ | Untested | Use Single Player only. |
 | Metro 2033 | DX9/DX11 | x86 | ✓ | ✅ Mostly Working | Can't see weapon in hand. |
 | Metro: Last Light | DX9/DX11 | x86 | ✕ | Untested | Lists 3D Vision support in [Official PC Requirements](https://www.reddit.com/r/Games/comments/1cjh4l/metro_last_light_official_pc_requirements/). |

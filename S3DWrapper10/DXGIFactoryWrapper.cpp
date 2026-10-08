@@ -413,11 +413,8 @@ STDMETHODIMP Hooked_CreateDXGIFactory(REFIID riid, void **ppFactory, HMODULE hCa
 #endif
 
 	HRESULT hResult = CreateDXGIFactory(riid, ppFactory);
-	// Slot 10 is CreateSwapChain on IDXGIFactory and every interface derived
-	// from it, so hook it whichever IID the caller asked for. Requiring an
-	// exact riid match missed Battlefield 3, which calls CreateDXGIFactory1
-	// asking for IID_IDXGIFactory — legal, but it fell through both entry
-	// points' guards, so no swap chain was ever wrapped and no SBS appeared.
+	// Slot 10 is CreateSwapChain on IDXGIFactory and every interface derived from it, so it is hooked whatever IID was
+	// asked for: Battlefield 3's CreateDXGIFactory1(IID_IDXGIFactory) passed neither entry point's exact-IID check.
 	if (SUCCEEDED(hResult) && ppFactory && *ppFactory)
 		HookFactorySwapChainSlot(*ppFactory);
 	return hResult;

@@ -409,13 +409,40 @@ void SwapChain11Proxy::ReleaseComposite()
     if (m_compositeSampler)      { m_compositeSampler->Release();      m_compositeSampler      = nullptr; }
     if (m_compositePS)           { m_compositePS->Release();           m_compositePS           = nullptr; }
     if (m_compositeVS)           { m_compositeVS->Release();           m_compositeVS           = nullptr; }
+    if (m_compositeState)        { m_compositeState->Release();        m_compositeState        = nullptr; }
+}
+
+bool SwapChain11Proxy::EnsureCompositeState()
+{
+    if (m_compositeState) return true;
+    ID3D11Device* dev = m_parent ? m_parent->GetReal() : nullptr;
+    ID3D11Device1* dev1 = nullptr;
+    if (m_compositeStateFailed || !dev ||
+        FAILED(dev->QueryInterface(__uuidof(ID3D11Device1), reinterpret_cast<void**>(&dev1))) || !dev1)
+    {
+        m_compositeStateFailed = true;
+        return false;
+    }
+    const D3D_FEATURE_LEVEL level = dev->GetFeatureLevel();
+    const UINT flags = (dev->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED)
+                           ? D3D11_1_CREATE_DEVICE_CONTEXT_STATE_SINGLETHREADED : 0;
+    const HRESULT hr = dev1->CreateDeviceContextState(flags, &level, 1, D3D11_SDK_VERSION, __uuidof(ID3D11Device),
+                                                      nullptr, &m_compositeState);
+    dev1->Release();
+    if (FAILED(hr) || !m_compositeState)
+    {
+        DDILog("SwapChain11Proxy::EnsureCompositeState: CreateDeviceContextState failed 0x%08lX -- topology-only restore\n", hr);
+        m_compositeState = nullptr;
+        m_compositeStateFailed = true;
+        return false;
+    }
+    return true;
 }
 
 void SwapChain11Proxy::DoComposite()
 {
-    // Stage 4d: state the game has set is clobbered by the output pass; the
-    // recorded command stream replays per-eye state for the next frame's
-    // draws so anything important gets re-issued.
+    // Stage 4d: the output pass runs on the real context in a context state of its own, so the game's state comes back
+    // exactly as it was (the proxy's tracking stays true).
     if (!m_parent || !m_realBBRTV || !m_leftSRV || !m_rightSRV) return;
     if (FAILED(EnsureComposite())) return;
 
@@ -423,13 +450,24 @@ void SwapChain11Proxy::DoComposite()
     m_parent->GetReal()->GetImmediateContext(&ctx);
     if (!ctx) return;
 
-    // Only the topology goes back (MP3's loading screen draws a strip without re-setting it); restoring the whole
-    // state turned its intro videos black.
+    ID3D11DeviceContext1* ctx1 = nullptr;
+    ID3DDeviceContextState* gameState = nullptr;
+    if (EnsureCompositeState() &&
+        SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D11DeviceContext1), reinterpret_cast<void**>(&ctx1))) && ctx1)
+        ctx1->SwapDeviceContextState(m_compositeState, &gameState);
+    // Without a state of its own, only the topology goes back (MP3's loading screen draws a strip without re-setting it).
     D3D11_PRIMITIVE_TOPOLOGY gameTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-    ctx->IAGetPrimitiveTopology(&gameTopology);
+    if (!gameState) ctx->IAGetPrimitiveTopology(&gameTopology);
     if (!(WeaveSelected() && RunSRWeave(ctx)))
         DrawCompositePass(ctx, m_realBBRTV, m_bbWidth, m_bbHeight);
-    if (gameTopology != D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED) ctx->IASetPrimitiveTopology(gameTopology);
+    if (gameState)
+    {
+        ctx->ClearState();   // our state holds no back-buffer view across a ResizeBuffers
+        ctx1->SwapDeviceContextState(gameState, nullptr);
+        gameState->Release();
+    }
+    else if (gameTopology != D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED) ctx->IASetPrimitiveTopology(gameTopology);
+    if (ctx1) ctx1->Release();
     ctx->Release();
 }
 
@@ -635,9 +673,8 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetBuffer(UINT Buffer, REFIID riid, 
     HRESULT hr = m_wrappedBB->QueryInterface(riid, ppSurface);
     if (SUCCEEDED(hr))
     {
-        // Register whatever interface pointer the game actually got: QI may
-        // hand back a different address than m_wrappedBB, and CreateRTV
-        // compares against the pointer the game passes back in.
+        // The pointer the game got is registered: QI may return another address than m_wrappedBB, and CreateRTV
+        // compares against what the game passes back.
         if (m_parent && *ppSurface)
             m_parent->RegisterBackBufferTexture(*ppSurface);
         DDILog("SwapChain11Proxy::GetBuffer(0): returned wrapped BB=%p (as %p) registered on dev=%p\n",
@@ -648,63 +685,6 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetBuffer(UINT Buffer, REFIID riid, 
 }
 
 static int s_FramePresentCounter = 0;
-
-// Every 60th Present: readback both BB siblings and compare bytes. Splits the
-// "right eye shows the left image" space in two — identical bytes means the
-// right-eye draws painted left content (hunt upstream), differing bytes means
-// the composite sampled the wrong SRV (hunt here).
-static void CompareEyeBackBuffers(ID3D11Device* dev, ID3D11DeviceContext* ctx,
-                                  ID3D11Texture2D* leftBB, ID3D11Texture2D* rightBB)
-{
-    static int s_count = 0;
-    if (!gInfo.CollectDebugInformation) return;
-    if (!dev || !ctx || !leftBB || !rightBB) return;
-    // Every ~5s, uncapped: a front-loaded budget spent itself entirely on the
-    // menu, whose identical eyes are expected, and never sampled gameplay.
-    if ((s_count++ % 300) != 0) return;
-
-    D3D11_TEXTURE2D_DESC td = {};
-    leftBB->GetDesc(&td);
-    td.Usage          = D3D11_USAGE_STAGING;
-    td.BindFlags      = 0;
-    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    td.MiscFlags      = 0;
-    ID3D11Texture2D* stgL = nullptr;
-    ID3D11Texture2D* stgR = nullptr;
-    if (FAILED(dev->CreateTexture2D(&td, nullptr, &stgL)) ||
-        FAILED(dev->CreateTexture2D(&td, nullptr, &stgR)))
-    {
-        if (stgL) stgL->Release();
-        if (stgR) stgR->Release();
-        return;
-    }
-    ctx->CopyResource(stgL, leftBB);
-    ctx->CopyResource(stgR, rightBB);
-    D3D11_MAPPED_SUBRESOURCE mapL = {}, mapR = {};
-    if (SUCCEEDED(ctx->Map(stgL, 0, D3D11_MAP_READ, 0, &mapL)) &&
-        SUCCEEDED(ctx->Map(stgR, 0, D3D11_MAP_READ, 0, &mapR)))
-    {
-        size_t diffRows = 0, firstDiffRow = (size_t)-1;
-        const size_t rowBytes = (size_t)td.Width * 4;
-        for (UINT y = 0; y < td.Height; y += 8)
-        {
-            const BYTE* l = (const BYTE*)mapL.pData + (size_t)y * mapL.RowPitch;
-            const BYTE* r = (const BYTE*)mapR.pData + (size_t)y * mapR.RowPitch;
-            if (memcmp(l, r, rowBytes) != 0)
-            {
-                ++diffRows;
-                if (firstDiffRow == (size_t)-1) firstDiffRow = y;
-            }
-        }
-        DDILog("  [eyecmp] present#%d: %s (sampled rows differing=%zu/%u firstDiffRow=%zd)\n",
-               s_count - 1, diffRows ? "DIFFERENT" : "IDENTICAL",
-               diffRows, (td.Height + 7) / 8, (ptrdiff_t)firstDiffRow);
-    }
-    ctx->Unmap(stgL, 0);
-    ctx->Unmap(stgR, 0);
-    stgL->Release();
-    stgR->Release();
-}
 
 void SwapChain11Proxy::OnPresentBoundaryPre()
 {
@@ -733,18 +713,6 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
 
     if (FrameTraceActive())
         FrameTrace("--- composite start ---\n");
-
-    if (m_parent && m_leftBB && m_rightBB)
-    {
-        ID3D11DeviceContext* imm = nullptr;
-        m_parent->GetReal()->GetImmediateContext(&imm);
-        if (imm)
-        {
-            CompareEyeBackBuffers(m_parent->GetReal(), imm, m_leftBB, m_rightBB);
-            imm->Release();
-        }
-        m_parent->SurveyStereoTextures();
-    }
 
     // Stage 4d: composite the left + right BB siblings into the real BB.
     // Coupled to UseCOMWrapReplay because without the replay there's no
@@ -787,9 +755,8 @@ void SwapChain11Proxy::OnPresentBoundaryPost()
     if (!m_parent) return;
     Context11Proxy* ctx = m_parent->GetContextProxy();
     if (!ctx) return;
-    // Diagnostic: must run BEFORE ClearFrameCommands() so the summary sees the
-    // recording for the frame that just presented, not an empty vector.
-    ctx->LogAndResetFrameDrawStats();
+    // Before ClearFrameCommands(), so the frame report counts the recording of the frame that just presented.
+    ctx->EndFrame();
     ctx->ClearFrameCommands();
     ctx->SetPresentHookActive(true);
 }

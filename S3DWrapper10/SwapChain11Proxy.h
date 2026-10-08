@@ -33,6 +33,7 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // see DXGIDeviceProxy.h — bundled
 // SR-Lib (ThirdPartyLibs/SR-Lib_v2.0.0): lightfield weave for Simulated
 // Reality displays. Forward-declared so only the .cpp includes SR.hpp.
 namespace SimulatedReality { class SRInterfaceDX11; }
+struct ID3DDeviceContextState;   // d3d11_1.h, included by the .cpp
 
 namespace wiz3d
 {
@@ -40,9 +41,8 @@ namespace wiz3d
 class Device11Proxy;
 class Texture2D11Proxy;
 
-// Derives from IDXGISwapChain4 so QI for SwapChain2/3/4 can return `this`.
-// Handing back the real chain let Win11-era games (GTA V) Present and
-// GetBuffer behind our back, mixing real and wrapped back buffers.
+// IDXGISwapChain4, so QI for SwapChain2/3/4 returns `this`: handing back the real chain let Win11-era games (GTA V)
+// Present and GetBuffer behind our back, mixing real and wrapped back buffers.
 class SwapChain11Proxy : public IDXGISwapChain4
 {
 public:
@@ -141,18 +141,18 @@ private:
     void    ReleaseStereoBackBuffer();
     void    ReleaseComposite();
     void    DoComposite();
-    // The composite pass parameterized by destination: the SBS output draws
-    // into the real BB directly; the SR weave path draws the same SBS into
-    // a 2WxH offscreen texture that the weaver consumes.
+    // The composite pass by destination: the SBS output draws into the real BB, the SR weave path into a 2WxH
+    // offscreen texture the weaver reads.
     void    DrawCompositePass(ID3D11DeviceContext* ctx,
                               ID3D11RenderTargetView* rtv,
                               UINT width, UINT height);
+    // The output pass's own context state (D3D11.1), swapped in around it so the game's state comes back untouched.
+    bool    EnsureCompositeState();
+    ID3DDeviceContextState* m_compositeState = nullptr;
+    bool                    m_compositeStateFailed = false;
 
-    // Simulated Reality weave output (lightfield displays such as the
-    // SpatialLabs Go), selected by the same <OutputMethodDll> config key the
-    // DX9 path uses for its output plugin. Composite goes to an offscreen
-    // SBS texture and the SR weaver writes the woven result into the real
-    // BB. Any failure is sticky and falls back to plain SBS.
+    // Simulated Reality weave output (lightfield displays), chosen by the <OutputMethodDll> key the DX9 path uses: the
+    // weaver reads the offscreen SBS and writes into the real BB; any failure falls back to plain SBS for good.
     bool    WeaveSelected() const;
     bool    EnsureSRWeaver();
     HRESULT EnsureSRSBSTexture();
@@ -194,9 +194,8 @@ private:
     ID3D11BlendState*         m_compositeBlend;
     ID3D11DepthStencilState*  m_compositeDepthStencil;
 
-    // SR weave state. The weaver survives ResizeBuffers (it is bound to the
-    // device context + window, not the BB); the SBS input texture tracks the
-    // BB size/format and is recreated on mismatch.
+    // SR weave state: the weaver survives ResizeBuffers (it is bound to the context and window, not the BB); the SBS
+    // input texture follows the BB's size and format.
     SimulatedReality::SRInterfaceDX11* m_srInterface = nullptr;
     bool                      m_srFailed  = false;
     ID3D11Texture2D*          m_srSBSTex  = nullptr;

@@ -1,4 +1,4 @@
-﻿/* wiz3D - ID3D11Buffer proxy (Option B Stage 3c.1)
+/* wiz3D - ID3D11Buffer proxy (Option B Stage 3c.1)
  *
  * Passthrough wrap of ID3D11Buffer. Carries a sticky "ever bound to a
  * vertex-pipeline stage" flag the Stage 4c projection-matrix heuristic
@@ -69,23 +69,15 @@ public:
     bool IsVSBound() const { return m_vsBound; }
     void TagVSBound()      { m_vsBound = true; }
 
-    // Matrix locations learned for this buffer. Targets are otherwise looked up
-    // from the shader bound at Unmap, but games routinely write a CB before
-    // binding its consumer, and those writes then reached the right eye
-    // unshifted. A register holding a view-projection holds one whoever is
-    // bound, so the buffer is the stable key.
-    // Set once a matrix in this buffer has actually been eye-shifted, so the
-    // draw path can tell geometry that reached the right eye corrected from
-    // geometry that is still sitting at the left eye's position.
+    // When a matrix in this buffer was last eye-shifted, for the frame report's uncorrected-draw counts.
     bool EverShifted() const { return m_everShifted; }
     void MarkShifted(unsigned frame) { m_everShifted = true; m_shiftedFrame = frame; }
     unsigned ShiftedFrame() const { return m_shiftedFrame; }
 
+    // Matrix registers learned for this buffer: a game often writes a CB before binding its consumer, and a register
+    // holding a view-projection holds one whoever is bound. 24, as UE3's view buffer holds a dozen projective matrices.
     struct MatrixTarget { DWORD reg; BOOL transposed; BOOL inverse; };
     const std::vector<MatrixTarget>& LearnedMatrices() const { return m_learned; }
-    // Cap raised from 8: UE3's view buffer holds a dozen projective matrices,
-    // and teaching filled the slots before the inverse could be retained —
-    // it was detected, dropped and re-detected every write (BioShock Infinite).
     void LearnMatrix(const MatrixTarget& t)
     {
         for (size_t i = 0; i < m_learned.size(); ++i)
@@ -93,30 +85,17 @@ public:
         if (m_learned.size() < 24) m_learned.push_back(t);
     }
 
-    // Last bytes written, and a counter that changes with them. Patching at
-    // DRAW time needs the current contents and a way to tell whether the
-    // sibling is already correct for the shader about to consume it.
+    // Last bytes written, and a counter that changes with them: patching at draw time needs the current contents and
+    // a way to tell whether the sibling is already correct for the shader about to read it.
     void SetShadow(const unsigned char* p, size_t n)
     {
         if (!p || !n || n > kMaxShadowBytes) return;
         m_shadow.assign(p, p + n);
         ++m_writeSeq;
     }
-
-    // Writes this frame. A per-object buffer is rewritten hundreds of times, the
-    // camera's view buffer once or twice -- the only cheap way to tell a camera
-    // view-projection from the flood of per-object ones feeding the ring.
-    void NoteWriteFrame(unsigned frame)
-    {
-        if (m_writeCountFrame != frame) { m_writeCountFrame = frame; m_writesThisFrame = 0; }
-        ++m_writesThisFrame;
-    }
-    unsigned WritesThisFrame(unsigned frame) const
-    { return m_writeCountFrame == frame ? m_writesThisFrame : 0; }
     const std::vector<unsigned char>& Shadow() const { return m_shadow; }
-    // The eye offset is baked into the bytes, so the shift itself is part of the
-    // key: without it a buffer the game stops rewriting keeps an old separation
-    // for ever and its lighting slides against everything freshly written.
+    // The shift is part of the key, as the eye offset is baked into the bytes: a buffer the game stops rewriting would
+    // otherwise keep an old separation.
     bool NeedsDrawPatch(DWORD crc, float shift) const
     { return m_patchedSeq != m_writeSeq || m_patchedCRC != crc || m_patchedShift != shift; }
     void MarkDrawPatched(DWORD crc, float shift)
@@ -143,8 +122,7 @@ public:
     }
     void NoteMovedWrite() { ++m_movedSeq; }
 
-    // Inverse-detection backoff: a buffer that keeps scanning clean is
-    // rescanned only sparsely (~1,500 full scans/frame in BioShock Infinite).
+    // Inverse-detection backoff: a buffer that keeps scanning clean is rescanned only sparsely (BioShock Infinite).
     bool ShouldScanForInverse()
     {
         const unsigned n = m_invScans++;
@@ -164,8 +142,6 @@ private:
     unsigned       m_patchedSeq = 0xFFFFFFFFu;
     DWORD          m_patchedCRC = 0;
     float          m_patchedShift = 0.f;
-    unsigned       m_writeCountFrame = 0xFFFFFFFFu;
-    unsigned       m_writesThisFrame = 0;
     std::vector<unsigned char> m_shadow;
     std::vector<MatrixTarget> m_learned;
     std::bitset<256> m_lightRegs, m_cameraRegs;
