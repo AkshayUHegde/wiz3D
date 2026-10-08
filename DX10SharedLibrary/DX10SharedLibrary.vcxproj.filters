@@ -776,6 +776,12 @@
     <ClCompile Include="..\S3DWrapper10\FeatureLightViewPasses.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureVertexCameraMatrices.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureUiProjectionParallax.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\FeatureAdditionalMatrices.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

@@ -309,6 +309,8 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
     static const ProfileFeatures s_shaderFeatures = CreateProfileFeatures();
     const RdefView rdef(pBytecode, byteLength);
     for (const auto& f : s_shaderFeatures) f->OnShaderCreated(rdef, info);
+    // Vertex stage too: a second camera matrix outside the position chain (last frame's, for per-object velocity).
+    if (!strcmp(tag, "Pixel") || !strcmp(tag, "Compute") || !strcmp(tag, "Vertex")) info.readMatrices = rdef.UsedMatrices();
     static std::atomic<size_t> s_keptBytes(0);
     const size_t kKeepBudget = sizeof(void*) == 8 ? (256u << 20) : (64u << 20);
     if (strcmp(tag, "Compute") != 0 || s_keptBytes.load() + byteLength > kKeepBudget) info.bytecode.reset();
@@ -445,15 +447,20 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateRenderTargetView(
     // to the game.
     Texture2D11Proxy* texProxy   = TryUnwrapTexture2D(pResource);
     Buffer11Proxy*    bufProxy   = TryUnwrapBuffer(pResource);
+    // Volume and 1D targets (colour-grading LUTs, volumetrics) have no sibling: the view is made on the real texture.
+    Texture1D11Proxy* tex1Proxy  = TryUnwrapTexture1D(pResource);
+    Texture3D11Proxy* tex3Proxy  = TryUnwrapTexture3D(pResource);
     // Real-pointer fallback: De Blob and similar games QI our wrapped
     // texture for IDXGIResource, then QI that back to ID3D11Resource — which
     // returns the m_realLeft pointer. The probe above doesn't recognise raw
     // real pointers as ours. LookupProxyByReal closes that bypass.
-    if (!texProxy && !bufProxy && pResource)
+    if (!texProxy && !bufProxy && !tex1Proxy && !tex3Proxy && pResource)
         texProxy = LookupProxyByReal(pResource);
-    ID3D11Resource*   realToUse  = texProxy ? static_cast<ID3D11Resource*>(texProxy->GetReal())
-                                 : bufProxy ? static_cast<ID3D11Resource*>(bufProxy->GetReal())
-                                            : pResource;
+    ID3D11Resource*   realToUse  = texProxy  ? static_cast<ID3D11Resource*>(texProxy->GetReal())
+                                 : bufProxy  ? static_cast<ID3D11Resource*>(bufProxy->GetReal())
+                                 : tex1Proxy ? static_cast<ID3D11Resource*>(tex1Proxy->GetReal())
+                                 : tex3Proxy ? static_cast<ID3D11Resource*>(tex3Proxy->GetReal())
+                                             : pResource;
     ID3D11Resource*   realRight  = texProxy ? static_cast<ID3D11Resource*>(texProxy->GetRealRight())
                                             : nullptr;
 
@@ -786,11 +793,13 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateDepthStencilView(
     // Stage 3b: same unwrap-then-rewrap pattern as CreateRenderTargetView.
     Texture2D11Proxy* texProxy   = TryUnwrapTexture2D(pResource);
     Buffer11Proxy*    bufProxy   = TryUnwrapBuffer(pResource);  // DSV-on-buffer is exotic but legal
-    if (!texProxy && !bufProxy && pResource)
+    Texture1D11Proxy* tex1Proxy  = TryUnwrapTexture1D(pResource);
+    if (!texProxy && !bufProxy && !tex1Proxy && pResource)
         texProxy = LookupProxyByReal(pResource);  // raw-pointer fallback (see CreateRTV comment)
-    ID3D11Resource*   realToUse  = texProxy ? static_cast<ID3D11Resource*>(texProxy->GetReal())
-                                 : bufProxy ? static_cast<ID3D11Resource*>(bufProxy->GetReal())
-                                            : pResource;
+    ID3D11Resource*   realToUse  = texProxy  ? static_cast<ID3D11Resource*>(texProxy->GetReal())
+                                 : bufProxy  ? static_cast<ID3D11Resource*>(bufProxy->GetReal())
+                                 : tex1Proxy ? static_cast<ID3D11Resource*>(tex1Proxy->GetReal())
+                                             : pResource;
     ID3D11Resource*   realRight  = texProxy ? static_cast<ID3D11Resource*>(texProxy->GetRealRight())
                                             : nullptr;
 
@@ -840,6 +849,9 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateTexture3D(
     // Stage 3c.2: always-wrap identity (no stereo doubling for Tex3D).
     HRESULT hr = m_real->CreateTexture3D(pDesc, pInitialData, ppTexture3D);
     if (FAILED(hr) || !ppTexture3D || !*ppTexture3D) return hr;
+    if (gInfo.CollectDebugInformation && pDesc && (pDesc->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS)))
+        DDILog("  [texcreate] volume %ux%ux%u fmt=%d bind=0x%X mono\n", pDesc->Width, pDesc->Height, pDesc->Depth,
+               (int)pDesc->Format, pDesc->BindFlags);
     auto* texProxy = new Texture3D11Proxy(*ppTexture3D, this);
     *ppTexture3D = static_cast<ID3D11Texture3D*>(texProxy);
     return hr;
@@ -879,6 +891,7 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateShaderResourceView(
     }
 
     auto* srvProxy = new SRV11Proxy(*ppSRView, realRightSRV, this);
+    srvProxy->SetTexture(tex2Proxy);
     *ppSRView = static_cast<ID3D11ShaderResourceView*>(srvProxy);
     return hr;
 }

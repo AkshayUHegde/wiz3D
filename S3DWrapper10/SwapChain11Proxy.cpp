@@ -278,6 +278,9 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
     m_leftBB->AddRef();
     m_rightBB->AddRef();
     m_wrappedBB = new Texture2D11Proxy(m_leftBB, m_rightBB, m_parent);
+    m_wrappedBB->MarkBackBuffer();
+    // Views on the pair resolve to this proxy like any other texture's (the overlay rule asks by the real left).
+    if (m_parent) m_parent->RegisterRealToProxy(m_leftBB, m_wrappedBB);
 
     // RTV on the REAL swap-chain back buffer — used as the composite
     // destination. Acquired now so we don't pay the cost mid-frame.
@@ -308,6 +311,7 @@ void SwapChain11Proxy::ReleaseStereoBackBuffer()
     if (m_realBBRTV) { m_realBBRTV->Release(); m_realBBRTV = nullptr; }
     if (m_leftSRV)   { m_leftSRV->Release();   m_leftSRV   = nullptr; }
     if (m_rightSRV)  { m_rightSRV->Release();  m_rightSRV  = nullptr; }
+    if (m_wrappedBB && m_parent && m_leftBB) m_parent->UnregisterRealToProxy(m_leftBB);
     if (m_wrappedBB) { m_wrappedBB->Release(); m_wrappedBB = nullptr; }
     if (m_leftBB)    { m_leftBB->Release();    m_leftBB    = nullptr; }
     if (m_rightBB)   { m_rightBB->Release();   m_rightBB   = nullptr; }

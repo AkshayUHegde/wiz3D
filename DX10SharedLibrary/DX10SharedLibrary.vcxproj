@@ -201,6 +201,8 @@
     <ClCompile Include="..\S3DWrapper10\FeatureMirroredTarget.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureHudDepth.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureLightViewPasses.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureVertexCameraMatrices.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureUiProjectionParallax.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureAdditionalMatrices.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureRightCamera.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureRayCorners.cpp" />

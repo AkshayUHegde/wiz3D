@@ -167,22 +167,22 @@ public:
     void    STDMETHODCALLTYPE CSSetShader(ID3D11ComputeShader* pComputeShader, ID3D11ClassInstance* const* ppClassInstances, UINT NumClassInstances) override;
     void    STDMETHODCALLTYPE CSSetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState* const* ppSamplers) override;
     void    STDMETHODCALLTYPE CSSetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer* const* ppConstantBuffers) override;
-    void STDMETHODCALLTYPE VSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { m_real->VSGetConstantBuffers(StartSlot, NumBuffers, ppConstantBuffers); }
-    void STDMETHODCALLTYPE PSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { m_real->PSGetShaderResources(StartSlot, NumViews, ppShaderResourceViews); }
+    void STDMETHODCALLTYPE VSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { GetTrackedCBs(ST_VS, StartSlot, NumBuffers, ppConstantBuffers); }
+    void STDMETHODCALLTYPE PSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { GetTrackedSRVs(ST_PS, StartSlot, NumViews, ppShaderResourceViews); }
     void STDMETHODCALLTYPE PSGetShader(ID3D11PixelShader** ppPixelShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override                                               { m_real->PSGetShader(ppPixelShader, ppClassInstances, pNumClassInstances); }
     void STDMETHODCALLTYPE PSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override                                                                               { m_real->PSGetSamplers(StartSlot, NumSamplers, ppSamplers); }
     void STDMETHODCALLTYPE VSGetShader(ID3D11VertexShader** ppVertexShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override                                             { m_real->VSGetShader(ppVertexShader, ppClassInstances, pNumClassInstances); }
-    void STDMETHODCALLTYPE PSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { m_real->PSGetConstantBuffers(StartSlot, NumBuffers, ppConstantBuffers); }
+    void STDMETHODCALLTYPE PSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { GetTrackedCBs(ST_PS, StartSlot, NumBuffers, ppConstantBuffers); }
     void STDMETHODCALLTYPE IAGetInputLayout(ID3D11InputLayout** ppInputLayout) override                                                                                                            { m_real->IAGetInputLayout(ppInputLayout); }
     void STDMETHODCALLTYPE IAGetVertexBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppVertexBuffers, UINT* pStrides, UINT* pOffsets) override                                            { m_real->IAGetVertexBuffers(StartSlot, NumBuffers, ppVertexBuffers, pStrides, pOffsets); }
     void STDMETHODCALLTYPE IAGetIndexBuffer(ID3D11Buffer** pIndexBuffer, DXGI_FORMAT* Format, UINT* Offset) override                                                                               { m_real->IAGetIndexBuffer(pIndexBuffer, Format, Offset); }
-    void STDMETHODCALLTYPE GSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { m_real->GSGetConstantBuffers(StartSlot, NumBuffers, ppConstantBuffers); }
+    void STDMETHODCALLTYPE GSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { GetTrackedCBs(ST_GS, StartSlot, NumBuffers, ppConstantBuffers); }
     void STDMETHODCALLTYPE GSGetShader(ID3D11GeometryShader** ppGeometryShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override                                         { m_real->GSGetShader(ppGeometryShader, ppClassInstances, pNumClassInstances); }
     void STDMETHODCALLTYPE IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY* pTopology) override                                                                                                    { m_real->IAGetPrimitiveTopology(pTopology); }
-    void STDMETHODCALLTYPE VSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { m_real->VSGetShaderResources(StartSlot, NumViews, ppShaderResourceViews); }
+    void STDMETHODCALLTYPE VSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { GetTrackedSRVs(ST_VS, StartSlot, NumViews, ppShaderResourceViews); }
     void STDMETHODCALLTYPE VSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override                                                                               { m_real->VSGetSamplers(StartSlot, NumSamplers, ppSamplers); }
     void STDMETHODCALLTYPE GetPredication(ID3D11Predicate** ppPredicate, BOOL* pPredicateValue) override                                                                                           { m_real->GetPredication(ppPredicate, pPredicateValue); }
-    void STDMETHODCALLTYPE GSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { m_real->GSGetShaderResources(StartSlot, NumViews, ppShaderResourceViews); }
+    void STDMETHODCALLTYPE GSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { GetTrackedSRVs(ST_GS, StartSlot, NumViews, ppShaderResourceViews); }
     void STDMETHODCALLTYPE GSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override                                                                               { m_real->GSGetSamplers(StartSlot, NumSamplers, ppSamplers); }
     // Must hand back the proxies the game gave us, not m_real's views: games
     // save/restore OM state, and a leaked real RTV rebinds as untrackable.
@@ -194,19 +194,19 @@ public:
     void STDMETHODCALLTYPE RSGetState(ID3D11RasterizerState** ppRasterizerState) override                                                                                                          { m_real->RSGetState(ppRasterizerState); }
     void STDMETHODCALLTYPE RSGetViewports(UINT* pNumViewports, D3D11_VIEWPORT* pViewports) override                                                                                                { m_real->RSGetViewports(pNumViewports, pViewports); }
     void STDMETHODCALLTYPE RSGetScissorRects(UINT* pNumRects, D3D11_RECT* pRects) override                                                                                                         { m_real->RSGetScissorRects(pNumRects, pRects); }
-    void STDMETHODCALLTYPE HSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { m_real->HSGetShaderResources(StartSlot, NumViews, ppShaderResourceViews); }
+    void STDMETHODCALLTYPE HSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { GetTrackedSRVs(ST_HS, StartSlot, NumViews, ppShaderResourceViews); }
     void STDMETHODCALLTYPE HSGetShader(ID3D11HullShader** ppHullShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override                                                 { m_real->HSGetShader(ppHullShader, ppClassInstances, pNumClassInstances); }
     void STDMETHODCALLTYPE HSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override                                                                               { m_real->HSGetSamplers(StartSlot, NumSamplers, ppSamplers); }
-    void STDMETHODCALLTYPE HSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { m_real->HSGetConstantBuffers(StartSlot, NumBuffers, ppConstantBuffers); }
-    void STDMETHODCALLTYPE DSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { m_real->DSGetShaderResources(StartSlot, NumViews, ppShaderResourceViews); }
+    void STDMETHODCALLTYPE HSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { GetTrackedCBs(ST_HS, StartSlot, NumBuffers, ppConstantBuffers); }
+    void STDMETHODCALLTYPE DSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { GetTrackedSRVs(ST_DS, StartSlot, NumViews, ppShaderResourceViews); }
     void STDMETHODCALLTYPE DSGetShader(ID3D11DomainShader** ppDomainShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override                                             { m_real->DSGetShader(ppDomainShader, ppClassInstances, pNumClassInstances); }
     void STDMETHODCALLTYPE DSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override                                                                               { m_real->DSGetSamplers(StartSlot, NumSamplers, ppSamplers); }
-    void STDMETHODCALLTYPE DSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { m_real->DSGetConstantBuffers(StartSlot, NumBuffers, ppConstantBuffers); }
-    void STDMETHODCALLTYPE CSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { m_real->CSGetShaderResources(StartSlot, NumViews, ppShaderResourceViews); }
-    void STDMETHODCALLTYPE CSGetUnorderedAccessViews(UINT StartSlot, UINT NumUAVs, ID3D11UnorderedAccessView** ppUnorderedAccessViews) override                                                    { m_real->CSGetUnorderedAccessViews(StartSlot, NumUAVs, ppUnorderedAccessViews); }
+    void STDMETHODCALLTYPE DSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { GetTrackedCBs(ST_DS, StartSlot, NumBuffers, ppConstantBuffers); }
+    void STDMETHODCALLTYPE CSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** ppShaderResourceViews) override                                                          { GetTrackedSRVs(ST_CS, StartSlot, NumViews, ppShaderResourceViews); }
+    void STDMETHODCALLTYPE CSGetUnorderedAccessViews(UINT StartSlot, UINT NumUAVs, ID3D11UnorderedAccessView** ppUnorderedAccessViews) override                                                    { GetTrackedUAVs(StartSlot, NumUAVs, ppUnorderedAccessViews); }
     void STDMETHODCALLTYPE CSGetShader(ID3D11ComputeShader** ppComputeShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override                                           { m_real->CSGetShader(ppComputeShader, ppClassInstances, pNumClassInstances); }
     void STDMETHODCALLTYPE CSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override                                                                               { m_real->CSGetSamplers(StartSlot, NumSamplers, ppSamplers); }
-    void STDMETHODCALLTYPE CSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { m_real->CSGetConstantBuffers(StartSlot, NumBuffers, ppConstantBuffers); }
+    void STDMETHODCALLTYPE CSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { GetTrackedCBs(ST_CS, StartSlot, NumBuffers, ppConstantBuffers); }
     void STDMETHODCALLTYPE ClearState() override;
     void STDMETHODCALLTYPE Flush() override                                                                                                                                                        { m_real->Flush(); }
     D3D11_DEVICE_CONTEXT_TYPE STDMETHODCALLTYPE GetType() override                                                                                                                                 { return m_real->GetType(); }
@@ -231,12 +231,12 @@ public:
     void STDMETHODCALLTYPE GSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer* const* ppConstantBuffers, const UINT* pFirstConstant, const UINT* pNumConstants) override;
     void STDMETHODCALLTYPE PSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer* const* ppConstantBuffers, const UINT* pFirstConstant, const UINT* pNumConstants) override;
     void STDMETHODCALLTYPE CSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer* const* ppConstantBuffers, const UINT* pFirstConstant, const UINT* pNumConstants) override;
-    void STDMETHODCALLTYPE VSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->VSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
-    void STDMETHODCALLTYPE HSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->HSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
-    void STDMETHODCALLTYPE DSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->DSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
-    void STDMETHODCALLTYPE GSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->GSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
-    void STDMETHODCALLTYPE PSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->PSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
-    void STDMETHODCALLTYPE CSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->CSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
+    void STDMETHODCALLTYPE VSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { GetTrackedCBs(ST_VS, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
+    void STDMETHODCALLTYPE HSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { GetTrackedCBs(ST_HS, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
+    void STDMETHODCALLTYPE DSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { GetTrackedCBs(ST_DS, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
+    void STDMETHODCALLTYPE GSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { GetTrackedCBs(ST_GS, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
+    void STDMETHODCALLTYPE PSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { GetTrackedCBs(ST_PS, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
+    void STDMETHODCALLTYPE CSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { GetTrackedCBs(ST_CS, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
     void STDMETHODCALLTYPE SwapDeviceContextState(ID3DDeviceContextState* pState, ID3DDeviceContextState** ppPreviousState) override;
     void STDMETHODCALLTYPE ClearView(ID3D11View* pView, const FLOAT Color[4], const D3D11_RECT* pRect, UINT NumRects) override;
     void STDMETHODCALLTYPE DiscardView1(ID3D11View* pResourceView, const D3D11_RECT* pRects, UINT NumRects) override;
@@ -351,6 +351,7 @@ private:
     {
         ID3D11UnorderedAccessView* left[kMaxUAVs];
         ID3D11UnorderedAccessView* right[kMaxUAVs];
+        ID3D11UnorderedAccessView* game[kMaxUAVs];   // what the game bound, answered back by the getter
         UINT high;
         bool anyStereo;
     };
@@ -388,6 +389,7 @@ private:
     {
         ID3D11ShaderResourceView* left[kMaxSRVs];
         ID3D11ShaderResourceView* right[kMaxSRVs];
+        ID3D11ShaderResourceView* game[kMaxSRVs];   // what the game bound, answered back by the getter
         UINT high;       // highest slot ever bound + 1 — bounds every rebind
         bool anyStereo;  // some slot in [0,high) resolves differently per eye
     };
@@ -395,6 +397,7 @@ private:
     {
         ID3D11Buffer* left[kMaxCBs];
         ID3D11Buffer* right[kMaxCBs];
+        ID3D11Buffer* game[kMaxCBs];   // what the game bound, answered back by the getter
         // The wrapper behind left[]/right[], so a draw can ask whether the constants it is about to consume were
         // actually eye-shifted. Each slot holds a reference, as the runtime does for a bound object.
         Buffer11Proxy* proxy[kMaxCBs];
@@ -427,6 +430,9 @@ private:
     // Depth-stencil bound but mono: the right pass depth-tests against values
     // the left pass wrote, which can reject its geometry.
     bool                    m_omMonoDSV;
+    // Overlay state: the swap chain's back buffer is the first target and the depth test is off (null state = on).
+    bool                    m_omBackBuffer = false;
+    bool                    m_depthTestOn  = true;
 
     // Game-facing OM bindings, mirroring whatever is currently bound; each holds a reference, so OMGetRenderTargets
     // can hand them out after the game released its own.
@@ -438,6 +444,13 @@ private:
 
     void TrackSRVs(StageIdx stage, UINT StartSlot, UINT NumViews,
                    ID3D11ShaderResourceView* const* ppSRVs);
+    // State getters answer with what the game bound (our proxies), never the real objects behind them: an engine
+    // saving and restoring state through them would otherwise rebind the real left resources past the right eye.
+    void GetTrackedCBs(StageIdx stage, UINT StartSlot, UINT NumBuffers, ID3D11Buffer** pp,
+                       UINT* pFirst = nullptr, UINT* pNum = nullptr);
+    void GetTrackedSRVs(StageIdx stage, UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView** pp);
+    void GetTrackedUAVs(UINT StartSlot, UINT NumUAVs, ID3D11UnorderedAccessView** pp);
+    unsigned m_getCBsThisFrame = 0, m_getSRVsThisFrame = 0, m_getUAVsThisFrame = 0;
     void TrackCBs(StageIdx stage, UINT StartSlot, UINT NumBuffers, ID3D11Buffer* const* ppCBs,
                   const UINT* pFirst = nullptr, const UINT* pNum = nullptr);
     void TrackOM(UINT NumViews, ID3D11RenderTargetView* const* ppRTVs,
@@ -517,6 +530,24 @@ private:
     unsigned             m_updCBWritesThisFrame  = 0;
     unsigned             m_updCBPatchedThisFrame = 0;
     float                m_invBestMissThisFrame  = 1e30f;
+    // Pixel and compute shader camera matrices for the right eye: buffers checked, inverses and previous cameras patched,
+    // by shader CRC; and what each (shader, slot, register) was found to hold, kept for its later draws and dispatches.
+    unsigned             m_invDrawChecksThisFrame  = 0;
+    unsigned             m_invDrawPatchedThisFrame = 0;
+    unsigned             m_fwdDrawPatchedThisFrame = 0;
+    std::map<DWORD, unsigned> m_invDrawByPS;
+    // Overlay draws and the right copies they restored; plain constants restored for shaders reading no matrix there;
+    // learned forward shifts withheld at write time (the draw patch serves the consumer instead).
+    unsigned             m_overlayDrawsThisFrame     = 0;
+    unsigned             m_overlayRestoredThisFrame  = 0;
+    unsigned             m_plainRestoredThisFrame    = 0;
+    unsigned             m_learnedWithheldThisFrame  = 0;
+    struct PsCameraMatrix { bool inverse; bool transposed; };
+    std::map<unsigned long long, PsCameraMatrix> m_psCameraMatrices;
+    // Why a CB write had no targets: no VS bound, VS unparsed, VS without matrices, buffer at no VS slot, at a VS slot
+    // without a matrix; and the bindings dropped by state resets.
+    unsigned             m_untargetedWhy[5] = {};
+    unsigned             m_bindResetsThisFrame = 0;
     // Draw-level stereo coverage: why a draw's geometry could not be corrected.
     unsigned             m_drawsVSUnparsedThisFrame     = 0;
     unsigned             m_drawsVSNoMatrixThisFrame     = 0;
@@ -529,6 +560,10 @@ private:
     void TeachBoundMatrices(bool screenSpace);
     void LogFrameStats(unsigned frame);
     void PatchBoundCBsForDraw();
+    void PatchCameraMatrices(StageIdx stage);
+    void UnshiftOverlayCBs();
+    void RestoreRightCB(Buffer11Proxy* b);
+    bool WriteWholeRightCB(Buffer11Proxy* b, const std::vector<unsigned char>& bytes);
     void BeginDraw(UINT vertexCount);
 
     // Stage 4e.2: VS binding snapshot for targeted CB stereo math. m_boundVS
@@ -551,6 +586,12 @@ private:
 
     // Analysis of the bound vertex [0], pixel [1] and compute [2] shader, taken when the game sets them.
     const ShaderAnalysis11Result* m_boundInfo[3] = {};
+    // The bound domain shader and its analysis: tessellated geometry projects there, not in the vertex shader.
+    ID3D11DomainShader*           m_boundDS     = nullptr;
+    const ShaderAnalysis11Result* m_boundDSInfo = nullptr;
+    void TrackStageShader(StageIdx stage, void* shader);
+    void PatchStageCBsForDraw(StageIdx stage, void* shader, const ShaderAnalysis11Result* info, float eyeShift);
+    unsigned                      m_dsBuffersPatchedThisFrame = 0;
 
     // The game's per-game behaviour (ProfileFeature.h), built from its profile on first use.
     ProfileFeatures m_features;
@@ -583,6 +624,8 @@ public:
     ID3D11ShaderResourceView* LeftSRV(bool pixel, UINT slot) const;
     ID3D11ShaderResourceView* RightSRV(bool pixel, UINT slot) const;
     UINT                      NumTargets() const { return m_numRTVs; }
+    // The bound pass draws an overlay (HUD, menu): into the back buffer, without a depth test.
+    bool                      OverlayPass() const { return m_omBackBuffer && !m_depthTestOn; }
     ID3D11RenderTargetView*   LeftTarget(UINT i) const { return i < kMaxRTVs ? m_rtvLeft[i] : nullptr; }
     ID3D11DepthStencilView*   LeftDepth() const { return m_dsvLeft; }
     // The right copy reads the left eye's VS/HS/DS/GS constants (a light's view is the same for both eyes).
@@ -593,6 +636,8 @@ public:
     float                     EyeShiftSign() const;
     float                     CameraP00() const;
     bool                      LightViewPass() const;
+    bool                      VertexCameraMatrices() const;
+    bool                      UiProjectionParallax() const;
     // Over every feature: the bound camera and the right camera's move (ProfileFeature::BoundCameraMove).
     bool                      BoundCameraMove(CameraMove& out);
     // During EditRightConstants: the edit is for a dispatch (else a draw), and the buffer the bound shaders read as a

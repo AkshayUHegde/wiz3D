@@ -37,6 +37,8 @@ public:
     std::vector<std::pair<int, UINT>> Variables(const std::string& name, bool usedOnly) const;
     // The last of them; false when there is none.
     bool Variable(const std::string& name, bool usedOnly, int& cbSlot, UINT& offset) const;
+    // Every float4x4 cbuffer variable the shader reads: (cb slot, byte offset).
+    std::vector<std::pair<int, UINT>> UsedMatrices() const;
     // Every texture, cbuffer and variable name, as "texture t9 Name", "cbuffer cb0 Name", "variable cb0+192 Name".
     std::vector<std::string> Names() const;
     // The cb slot of a cbuffer by name, -1 = none.
@@ -93,6 +95,8 @@ public:
     // What the shared stereo code asks of every feature.
     virtual float EyeShiftSign() const { return 1.f; }       // -1 while drawing into an x-flipped target
     virtual bool  LightViewPass() const { return false; }    // the bound pass renders a light's view
+    virtual bool  VertexCameraMatrices() const { return false; }   // vertex shaders' declared camera matrices are patched
+    virtual bool  UiProjectionParallax() const { return false; }   // far-off focals take the scene camera's parallax
     virtual float CameraP00() const { return 0.f; }          // the scene camera's p00, 0 = unknown
     // The camera of the block the bound shaders read, and the right camera's move from it. false = none bound.
     virtual bool  BoundCameraMove(Context11Proxy&, CameraMove&) const { return false; }
@@ -115,6 +119,8 @@ std::unique_ptr<ProfileFeature> MakeStereoTexture(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeMirroredTarget(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeHudDepth(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeLightViewPasses(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeVertexCameraMatrices(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeUiProjectionParallax(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeAdditionalMatrices(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeRightCamera(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeRayCorners(const ProfileEntry* entry);

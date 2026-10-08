@@ -39,6 +39,9 @@ struct ShaderAnalysis11Result
     int                   reflectTexSlot  = -1;
     // AdditionalMatrixName matrices the shader reads: cb slot and first register each.
     std::vector<std::pair<int, UINT>> namedMatrices;
+    // Pixel and compute shaders: every float4x4 cbuffer variable read (cb slot, byte offset), for the right eye's
+    // camera matrices at the draw or dispatch.
+    std::vector<std::pair<int, UINT>> readMatrices;
     // HudDepth: the w the game gives a HUD element under 3D Vision (MP3's ApparentDepth).
     int                   apparentDepthCB     = -1;
     UINT                  apparentDepthOffset = 0;
