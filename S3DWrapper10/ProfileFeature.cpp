@@ -11,6 +11,7 @@
 #include "AdapterFunctions.h"              // DDILog
 #include "..\S3DAPI\ShaderProfileData.h"   // g_ProfileData
 #include <cstdarg>
+#include <mutex>
 
 namespace wiz3d
 {
@@ -186,29 +187,48 @@ const std::string& EntryValue(const ProfileEntry& entry, const char* attr)
 ProfileFeatures CreateProfileFeatures()
 {
     typedef std::unique_ptr<ProfileFeature> (*Factory)(const ProfileEntry*);
-    // Profile element -> feature, called in this order at every draw point.
-    static const struct { const char* element; Factory make; } kRegistry[] =
+    // Profile element -> feature, called in this order at every draw point. needsCamera: it moves with RightCamera's camera.
+    static const struct { const char* element; Factory make; bool needsCamera; } kRegistry[] =
     {
-        { "StereoTexture",        &MakeStereoTexture      },
-        { "MirroredTarget",       &MakeMirroredTarget     },
-        { "HudDepth",             &MakeHudDepth           },
-        { "LightViewPasses",      &MakeLightViewPasses    },
-        { "AdditionalMatrixName", &MakeAdditionalMatrices },
-        { "RightCamera",          &MakeRightCamera        },
-        { "RayCorners",           &MakeRayCorners         },
-        { "DuniaLocalLights",     &MakeDuniaLocalLights   },
-        { "CameraProjection",     &MakeCameraProjection   },
-        { "InverseCameraProjection", &MakeInverseCameraProjection },
-        { "LeftEyeTextures",      &MakeLeftEyeTextures    },
-        { "CameraRelativePlanes", &MakeCameraRelativePlanes },
+        { "StereoTexture",        &MakeStereoTexture,      false },
+        { "MirroredTarget",       &MakeMirroredTarget,     false },
+        { "HudDepth",             &MakeHudDepth,           false },
+        { "LightViewPasses",      &MakeLightViewPasses,    false },
+        { "AdditionalMatrixName", &MakeAdditionalMatrices, false },
+        { "RightCamera",          &MakeRightCamera,        false },
+        { "RayCorners",           &MakeRayCorners,         true  },
+        { "DuniaLocalLights",     &MakeDuniaLocalLights,   true  },
+        { "CameraProjection",     &MakeCameraProjection,   true  },
+        { "InverseCameraProjection", &MakeInverseCameraProjection, true },
+        { "LeftEyeTextures",      &MakeLeftEyeTextures,    false },
+        { "CameraRelativePlanes", &MakeCameraRelativePlanes, true },
     };
+    static std::once_flag s_checked;
+    std::vector<std::string> problems;
     ProfileFeatures out;
+    bool haveCamera = false;
     for (const auto& r : kRegistry)
     {
         const auto it = g_ProfileData.FeatureEntries.find(r.element);
-        std::unique_ptr<ProfileFeature> f = r.make(it == g_ProfileData.FeatureEntries.end() ? nullptr : &it->second);
-        if (f) out.push_back(std::move(f));
+        const ProfileEntry* entry = it == g_ProfileData.FeatureEntries.end() ? nullptr : &it->second;
+        std::unique_ptr<ProfileFeature> f = r.make(entry);
+        if (!f)
+        {
+            if (entry) problems.push_back(std::string("<") + r.element + "> builds nothing: a required attribute is missing, or it is off");
+            continue;
+        }
+        if (!strcmp(r.element, "RightCamera")) haveCamera = true;
+        if (r.needsCamera && !haveCamera) problems.push_back(std::string("<") + r.element + "> needs <RightCamera>; it edits nothing");
+        out.push_back(std::move(f));
     }
+    // An element no feature reads is a misspelling or belongs to another wrapper.
+    for (const auto& e : g_ProfileData.FeatureEntries)
+    {
+        bool known = false;
+        for (const auto& r : kRegistry) if (e.first == r.element) known = true;
+        if (!known) problems.push_back("<" + e.first + "> is no DX11 feature; ignored");
+    }
+    std::call_once(s_checked, [&] { for (const std::string& p : problems) FeatureLog("  profile: %s\n", p.c_str()); });
     return out;
 }
 

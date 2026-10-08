@@ -60,6 +60,8 @@ struct ShaderAnalysis11Result
     }
     // Names a feature recognised in this shader (a cbuffer, texture or variable it reads), for per-pass decisions.
     std::vector<std::string> tags;
+    // Byte offsets a feature located in this shader's cbuffers, under a key the feature chooses.
+    std::vector<std::pair<std::string, std::vector<int>>> featureOffsets;
     // Shader resources a feature named, and their t-slots (any SRV kind: texture or buffer).
     std::vector<std::pair<std::string, int>> namedSRVs;
     // Texture slots where the right eye reads the game's (left) copy: light-space maps a profile names (LeftEyeTextures).

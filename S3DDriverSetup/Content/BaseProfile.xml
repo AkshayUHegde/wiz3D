@@ -1741,20 +1741,22 @@
 		<!-- Vulkan. Forward-shifted geometry is enough; no inverse-matrix scan. -->
 		<DetectInverseMatrix Value="0"/>
 	</Profile>
-	<Profile Name="Far Cry 3">
-		<File Name="farcry3_d3d11.exe" />
-		<!-- The deferred inverses are named below instead -->
-		<DetectInverseMatrix Value="0"/>
+	<!-- Engine settings a <Profile> takes with <Engine Value="..."/>; the profile's own elements and attributes win -->
+	<Engine Name="Dunia">
 		<!-- Dunia writes constants long before binding them: patch at the draw; shadow matrices stay unshifted -->
 		<PatchConstantsAtDraw Value="1"/>
 		<CheckShadowMatrix Value="1"/>
-		<DisableD3D10Driver Value="1"/>
-		<!-- Dunia 1: Far Cry 4's per-view constants without the C; camera read from the relative view-projection.
-		     The underwater volume (a near-plane quad casting eye rays) sees the right camera's own origin -->
-		<RightCamera Buffer="ViewportShaderParameterProvider" Position="_CameraPosition_DistanceScale"
-		             InvView="_InvViewMatrix" View="_ViewMatrix" Projection="_ProjectionMatrix" InvProjection="_InvProjectionMatrix"
-		             ViewProjection="_ViewProjectionMatrix" RelativeViewProjection="_ViewRotProjectionMatrix"
-		             CameraFrom="RelativeViewProjection" MoveOriginFor="UnderwaterExtinctions" NearPlane="_CameraNearPlaneSize" />
+		<!-- The per-view constants name the whole camera; each game names its block -->
+		<RightCamera Position="_CameraPosition_DistanceScale" InvView="_InvViewMatrix" View="_ViewMatrix" Projection="_ProjectionMatrix"
+		             InvProjection="_InvProjectionMatrix" ViewProjection="_ViewProjectionMatrix" RelativeViewProjection="_ViewRotProjectionMatrix" />
+	</Engine>
+	<Profile Name="Far Cry 3">
+		<File Name="farcry3_d3d11.exe" />
+		<Engine Value="Dunia"/>
+		<!-- The camera is read from the relative view-projection. The underwater volume (a near-plane quad casting eye rays)
+		     sees the right camera's own origin -->
+		<RightCamera Buffer="ViewportShaderParameterProvider" CameraFrom="RelativeViewProjection" MoveOriginFor="UnderwaterExtinctions"
+		             NearPlane="_CameraNearPlaneSize" />
 		<!-- Water reflections are rendered x-flipped and sampled at u = 0.5 - 0.5*x/w -->
 		<MirroredTarget Value="ReflectionRealTexture" />
 		<!-- Rivers also look the reflection up through its own texture projection (mirrored: x scale -0.5) -->
@@ -1774,18 +1776,9 @@
 	</Profile>
 	<Profile Name="Far Cry 4">
 		<File Name="FarCry4.exe" />
-		<!-- The numeric inverse scan verified only intermittently here and flickered lighting; the deferred
-		     inverses are named below instead -->
-		<DetectInverseMatrix Value="0"/>
-		<!-- Dunia writes constants long before binding them: patch at the draw; shadow matrices stay unshifted -->
-		<PatchConstantsAtDraw Value="1"/>
-		<CheckShadowMatrix Value="1"/>
-		<DisableD3D10Driver Value="1"/>
-		<!-- Dunia: the per-view constants name the whole camera -->
-		<RightCamera Buffer="CViewportShaderParameterProvider" Position="_CameraPosition_DistanceScale _CameraPosition_DistanceScale_Previous"
-		             InvView="_InvViewMatrix" View="_ViewMatrix" Projection="_ProjectionMatrix" InvProjection="_InvProjectionMatrix"
-		             ViewProjection="_ViewProjectionMatrix"
-		             RelativeViewProjection="_ViewRotProjectionMatrix _ViewRotProjectionMatrix_Previous" />
+		<Engine Value="Dunia"/>
+		<!-- The previous frame's relative view-projection moves too -->
+		<RightCamera Buffer="CViewportShaderParameterProvider" RelativeViewProjection="_ViewRotProjectionMatrix _ViewRotProjectionMatrix_Previous" />
 		<!-- Deferred lighting and the sun-shadow resolve rebuild camera-relative position from (screen, depth) -->
 		<InverseCameraProjection Value="CDeferredLightingParameterProvider._InvViewRotProjectionMatrix
 		                                CDepthReconstructionProvider._InvViewRotProjectionMatrix" Space="World" />

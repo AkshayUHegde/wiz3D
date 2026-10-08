@@ -142,10 +142,30 @@ void XmlValue::ReadData(TiXmlElement* pElem, char* pAttribute)
 #define DECLARE_FVALUE(Value) { #Value, (void *)&gInfo.Value, vtFloat }
 #define DECLARE_SVALUE(Value) { #Value, (void *)&gInfo.Value, vtString }
 
+// The <Engine Name> block a <Profile> names with <Engine Value/>: read before the profile, so the profile's own values win.
+static TiXmlNode* EngineNode( TiXmlNode* profile )
+{
+	if (!profile || strcmp(profile->Value(), "Profile") != 0 || !profile->Parent())
+		return NULL;
+	TiXmlElement* use = profile->FirstChildElement("Engine");
+	const char* name = use ? use->Attribute("Value") : NULL;
+	if (!name)
+		return NULL;
+	for( TiXmlElement* engine = profile->Parent()->FirstChildElement("Engine"); engine; engine = engine->NextSiblingElement("Engine") )
+	{
+		const char* engineName = engine->Attribute("Name");
+		if (engineName && strcmp(engineName, name) == 0)
+			return engine;
+	}
+	return NULL;
+}
+
 void ReadProfilePart1Data( TiXmlNode* node, bool print = true )
 {
 	if (node)
 	{
+		if (TiXmlNode* engine = EngineNode(node))
+			ReadProfilePart1Data(engine, print);
 #ifndef FINAL_RELEASE
 		if (print)
 		{
@@ -744,6 +764,13 @@ void ReadVectorData( TiXmlElement* itemElement, float fMultiplier )
 // An element with no rule here: its attributes, for the wrapper's per-game features (ProfileData::FeatureEntries).
 static void ReadFeatureEntry( TiXmlElement* itemElement )
 {
+	// Read elsewhere: the profile match, ReadProfilePart1Data, ReadInputData, the engine include, the config's GlobalSettings.
+	static const char* const kReadElsewhere[] = { "File", "Engine", "Presets", "RouterType", "EnableStereo", "DisableD3D10Driver",
+		"AlternativeSetFullscreenStateOrder", "RenewHookMode", "DontLockMouse", "ShowWizardAtStartup", "SwapEyes",
+		"LaserSightEnable", "StereoActive" };
+	for (int i = 0; i < _countof(kReadElsewhere); i++)
+		if ( strcmp( itemElement->Value(), kReadElsewhere[i] ) == 0 )
+			return;
 	std::map<std::string, std::string>& entry = g_ProfileData.FeatureEntries[itemElement->Value()];
 	for (const TiXmlAttribute* a = itemElement->FirstAttribute(); a; a = a->Next())
 		entry[a->Name()] = a->Value();
@@ -753,6 +780,8 @@ void ReadProfilePart2Data(TiXmlNode* node)
 {
 	if (!node)
 		return;
+	if (TiXmlNode* engine = EngineNode(node))
+		ReadProfilePart2Data(engine);
 
 	TiXmlElement* itemElement = 0;
 	static XmlValue pValItems[] = 
