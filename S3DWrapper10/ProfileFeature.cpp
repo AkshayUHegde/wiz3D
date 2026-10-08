@@ -1,0 +1,215 @@
+/*
+* Project : wiz3D
+* Copyright (C) Akshay Hegde 2026
+*/
+
+// Per-game features: the RDEF reader and the registry (see ProfileFeature.h).
+
+#include "StdAfx.h"
+#include "ProfileFeature.h"
+#include "DxbcRebuild.h"                   // FindDxbcChunk
+#include "AdapterFunctions.h"              // DDILog
+#include "..\S3DAPI\ShaderProfileData.h"   // g_ProfileData
+#include <cstdarg>
+
+namespace wiz3d
+{
+
+void FeatureLog(const char* fmt, ...)
+{
+    if (!gInfo.CollectDebugInformation) return;
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
+    va_end(ap);
+    if (n != 0) DDILog("%s", buf);
+}
+
+// RDEF layout: header 28 B (+'RD11' at 28 on SM5), resource binds 32 B, cbuffers 24 B, variables 24 B (SM5: 40 B).
+RdefView::RdefView(const void* bytecode, SIZE_T length)
+{
+    DWORD size = 0;
+    const BYTE* rd = FindDxbcChunk(bytecode, length, 0x46454452 /* 'RDEF' */, size);
+    if (!rd || size < 28) return;
+    m_rd = rd;
+    m_size = size;
+    m_varStride = ((size >= 32 && Rd32(28) == 0x31314452 /* 'RD11' */) || rd[17] >= 5) ? 40u : 24u;
+}
+
+DWORD RdefView::Rd32(DWORD off) const
+{
+    DWORD v = 0;
+    if (m_rd && off + 4 <= m_size) memcpy(&v, m_rd + off, 4);
+    return v;
+}
+
+const char* RdefView::Str(DWORD off) const
+{
+    for (DWORD i = off; m_rd && i < m_size; ++i) if (!m_rd[i]) return (const char*)m_rd + off;
+    return "";
+}
+
+int RdefView::TextureSlot(const std::string& name) const
+{
+    const DWORD resCount = Rd32(8), resOff = Rd32(12);
+    if (!m_rd || name.empty() || resOff + resCount * 32u > m_size) return -1;
+    int slot = -1;
+    for (DWORD i = 0; i < resCount; ++i)
+        if (Rd32(resOff + i * 32u + 4) == 2 /* D3D_SIT_TEXTURE */ && name == Str(Rd32(resOff + i * 32u)))
+            slot = (int)Rd32(resOff + i * 32u + 20);
+    return slot;
+}
+
+bool RdefView::FindVariable(const std::string& name, std::string& cbuffer, int& slot, UINT& offset, UINT& size) const
+{
+    const DWORD cbCount = Rd32(0), cbOff = Rd32(4), resCount = Rd32(8), resOff = Rd32(12);
+    if (!m_rd || name.empty() || cbOff + cbCount * 24u > m_size || resOff + resCount * 32u > m_size) return false;
+    for (DWORD c = 0; c < cbCount; ++c)
+    {
+        const DWORD cb = cbOff + c * 24u, varCount = Rd32(cb + 4), varOff = Rd32(cb + 8);
+        if (varOff + varCount * m_varStride > m_size) continue;
+        int s = -1;
+        for (DWORD i = 0; i < resCount; ++i)
+            if (Rd32(resOff + i * 32u + 4) == 0 && !strcmp(Str(Rd32(resOff + i * 32u)), Str(Rd32(cb))))
+                s = (int)Rd32(resOff + i * 32u + 20);
+        if (s < 0) continue;
+        for (DWORD v = 0; v < varCount; ++v)
+        {
+            const DWORD var = varOff + v * m_varStride;
+            if (name != Str(Rd32(var))) continue;
+            cbuffer = Str(Rd32(cb));
+            slot = s;
+            offset = Rd32(var + 4);
+            size = Rd32(var + 8);
+            return true;
+        }
+    }
+    return false;
+}
+
+int RdefView::SrvSlot(const std::string& name) const
+{
+    const DWORD resCount = Rd32(8), resOff = Rd32(12);
+    if (!m_rd || name.empty() || resOff + resCount * 32u > m_size) return -1;
+    for (DWORD i = 0; i < resCount; ++i)
+    {
+        const DWORD type = Rd32(resOff + i * 32u + 4);
+        // D3D_SIT_TEXTURE 2, STRUCTURED 5, BYTEADDRESS 7
+        if ((type == 2 || type == 5 || type == 7) && name == Str(Rd32(resOff + i * 32u)))
+            return (int)Rd32(resOff + i * 32u + 20);
+    }
+    return -1;
+}
+
+std::vector<std::pair<int, UINT>> RdefView::Variables(const std::string& name, bool usedOnly) const
+{
+    std::vector<std::pair<int, UINT>> out;
+    const DWORD cbCount = Rd32(0), cbOff = Rd32(4), resCount = Rd32(8), resOff = Rd32(12);
+    if (!m_rd || name.empty() || cbOff + cbCount * 24u > m_size || resOff + resCount * 32u > m_size) return out;
+    for (DWORD c = 0; c < cbCount; ++c)
+    {
+        const DWORD cb = cbOff + c * 24u, varCount = Rd32(cb + 4), varOff = Rd32(cb + 8);
+        if (varOff + varCount * m_varStride > m_size) continue;
+        // The cbuffer's slot is the D3D_SIT_CBUFFER binding of the same name.
+        int slot = -1;
+        for (DWORD i = 0; i < resCount; ++i)
+            if (Rd32(resOff + i * 32u + 4) == 0 && !strcmp(Str(Rd32(resOff + i * 32u)), Str(Rd32(cb))))
+                slot = (int)Rd32(resOff + i * 32u + 20);
+        if (slot < 0) continue;
+        for (DWORD v = 0; v < varCount; ++v)
+        {
+            const DWORD var = varOff + v * m_varStride;
+            if (name != Str(Rd32(var))) continue;
+            if (usedOnly && !(Rd32(var + 12) & 2 /* D3D_SVF_USED */)) continue;
+            out.push_back(std::make_pair(slot, (UINT)Rd32(var + 4)));
+        }
+    }
+    return out;
+}
+
+bool RdefView::Variable(const std::string& name, bool usedOnly, int& cbSlot, UINT& offset) const
+{
+    const std::vector<std::pair<int, UINT>> all = Variables(name, usedOnly);
+    if (all.empty()) return false;
+    cbSlot = all.back().first;
+    offset = all.back().second;
+    return true;
+}
+
+int RdefView::CBufferSlot(const std::string& name) const
+{
+    const DWORD resCount = Rd32(8), resOff = Rd32(12);
+    if (!m_rd || name.empty() || resOff + resCount * 32u > m_size) return -1;
+    for (DWORD i = 0; i < resCount; ++i)
+        if (Rd32(resOff + i * 32u + 4) == 0 /* D3D_SIT_CBUFFER */ && name == Str(Rd32(resOff + i * 32u)))
+            return (int)Rd32(resOff + i * 32u + 20);
+    return -1;
+}
+
+std::vector<std::string> RdefView::Names() const
+{
+    std::vector<std::string> out;
+    const DWORD cbCount = Rd32(0), cbOff = Rd32(4), resCount = Rd32(8), resOff = Rd32(12);
+    if (!m_rd || resOff + resCount * 32u > m_size) return out;
+    char line[256];
+    for (DWORD i = 0; i < resCount; ++i)
+    {
+        const DWORD type = Rd32(resOff + i * 32u + 4);
+        if (type != 2 /* D3D_SIT_TEXTURE */ && type != 0 /* D3D_SIT_CBUFFER */) continue;
+        sprintf_s(line, "%s %s%u %s", type ? "texture" : "cbuffer", type ? "t" : "cb", Rd32(resOff + i * 32u + 20),
+                  Str(Rd32(resOff + i * 32u)));
+        out.push_back(line);
+    }
+    if (cbOff + cbCount * 24u > m_size) return out;
+    for (DWORD c = 0; c < cbCount; ++c)
+    {
+        const DWORD cb = cbOff + c * 24u, varCount = Rd32(cb + 4), varOff = Rd32(cb + 8);
+        if (varOff + varCount * m_varStride > m_size) continue;
+        for (DWORD v = 0; v < varCount; ++v)
+        {
+            const DWORD var = varOff + v * m_varStride;
+            sprintf_s(line, "variable %s+%u %s", Str(Rd32(cb)), Rd32(var + 4), Str(Rd32(var)));
+            out.push_back(line);
+        }
+    }
+    return out;
+}
+
+const std::string& EntryValue(const ProfileEntry& entry, const char* attr)
+{
+    static const std::string none;
+    const ProfileEntry::const_iterator it = entry.find(attr);
+    return it == entry.end() ? none : it->second;
+}
+
+ProfileFeatures CreateProfileFeatures()
+{
+    typedef std::unique_ptr<ProfileFeature> (*Factory)(const ProfileEntry*);
+    // Profile element -> feature, called in this order at every draw point.
+    static const struct { const char* element; Factory make; } kRegistry[] =
+    {
+        { "StereoTexture",        &MakeStereoTexture      },
+        { "MirroredTarget",       &MakeMirroredTarget     },
+        { "HudDepth",             &MakeHudDepth           },
+        { "LightViewPasses",      &MakeLightViewPasses    },
+        { "AdditionalMatrixName", &MakeAdditionalMatrices },
+        { "RightCamera",          &MakeRightCamera        },
+        { "RayCorners",           &MakeRayCorners         },
+        { "DuniaLocalLights",     &MakeDuniaLocalLights   },
+        { "CameraProjection",     &MakeCameraProjection   },
+        { "InverseCameraProjection", &MakeInverseCameraProjection },
+        { "LeftEyeTextures",      &MakeLeftEyeTextures    },
+        { "CameraRelativePlanes", &MakeCameraRelativePlanes },
+    };
+    ProfileFeatures out;
+    for (const auto& r : kRegistry)
+    {
+        const auto it = g_ProfileData.FeatureEntries.find(r.element);
+        std::unique_ptr<ProfileFeature> f = r.make(it == g_ProfileData.FeatureEntries.end() ? nullptr : &it->second);
+        if (f) out.push_back(std::move(f));
+    }
+    return out;
+}
+
+} // namespace wiz3d

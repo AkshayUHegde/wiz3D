@@ -19,8 +19,21 @@ Buffer11Proxy::Buffer11Proxy(ID3D11Buffer* real, Device11Proxy* parent)
 {
 }
 
+ID3D11Buffer* Buffer11Proxy::RightCopy(int variant)
+{
+    if (!(variant & 1) || !m_realRight) return m_realRight;
+    if (!m_realRightMoved && m_parent && m_parent->GetReal())
+    {
+        D3D11_BUFFER_DESC d = {};
+        m_realRight->GetDesc(&d);
+        if (FAILED(m_parent->GetReal()->CreateBuffer(&d, nullptr, &m_realRightMoved))) m_realRightMoved = nullptr;
+    }
+    return m_realRightMoved;
+}
+
 Buffer11Proxy::~Buffer11Proxy()
 {
+    if (m_realRightMoved) { m_realRightMoved->Release(); m_realRightMoved = nullptr; }
     if (m_realRight) { m_realRight->Release(); m_realRight = nullptr; }
     if (m_real) { m_real->Release(); m_real = nullptr; }
 }

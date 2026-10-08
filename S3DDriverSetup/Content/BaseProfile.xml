@@ -1722,6 +1722,8 @@
 		     held in pixel-shader constant buffers; the numeric inverse hunt keeps
 		     right-eye lighting on right-eye geometry. -->
 		<DetectInverseMatrix Value="1"/>
+		<!-- Spot shadow maps: depth-only passes into targets not the screen's size render the light's view -->
+		<LightViewPasses Value="1" />
 	</Profile>
 	<Profile Name="Mass Effect Andromeda">
 		<File Name="MassEffectAndromeda.exe" />
@@ -1741,7 +1743,27 @@
 	</Profile>
 	<Profile Name="Far Cry 3">
 		<File Name="farcry3_d3d11.exe" />
-		<DetectInverseMatrix Value="1"/>
+		<!-- The deferred inverses are named below instead -->
+		<DetectInverseMatrix Value="0"/>
+		<!-- Dunia writes constants long before binding them: patch at the draw; shadow matrices stay unshifted -->
+		<PatchConstantsAtDraw Value="1"/>
+		<CheckShadowMatrix Value="1"/>
+		<DisableD3D10Driver Value="1"/>
+		<!-- Dunia 1: Far Cry 4's per-view constants without the C; camera read from the relative view-projection.
+		     The underwater volume (a near-plane quad casting eye rays) sees the right camera's own origin -->
+		<RightCamera Buffer="ViewportShaderParameterProvider" Position="_CameraPosition_DistanceScale"
+		             InvView="_InvViewMatrix" View="_ViewMatrix" Projection="_ProjectionMatrix" InvProjection="_InvProjectionMatrix"
+		             ViewProjection="_ViewProjectionMatrix" RelativeViewProjection="_ViewRotProjectionMatrix"
+		             CameraFrom="RelativeViewProjection" MoveOriginFor="UnderwaterExtinctions" NearPlane="_CameraNearPlaneSize" />
+		<!-- Water reflections are rendered x-flipped and sampled at u = 0.5 - 0.5*x/w -->
+		<MirroredTarget Value="ReflectionRealTexture" />
+		<!-- Rivers also look the reflection up through its own texture projection (mirrored: x scale -0.5) -->
+		<CameraProjection Value="WaterReflectionParameterProvider._WaterReflectionTransform" Space="World" />
+		<!-- The sun-shadow resolve and the spot/point lights rebuild camera-relative position from (screen, depth) -->
+		<InverseCameraProjection Value="$Globals.InvViewRotProjectionMatrix" Space="World" />
+		<!-- Light-space maps (sun, spot, sky occlusion) are the same for both eyes -->
+		<LeftEyeTextures Value="ShadowSampler_TextureObject SpotShadowSampler OcclusionShadowSampler0 OcclusionAtlasShadowMapSampler
+		                        OcclusionShadowMapBlurredSampler OcclusionShadowMapBlurredPointSampler ProjectedShadowVolumeSampler" />
 	</Profile>
 	<Profile Name="BioShock Infinite">
 		<File Name="BioShockInfinite.exe" />
@@ -1752,13 +1774,30 @@
 	</Profile>
 	<Profile Name="Far Cry 4">
 		<File Name="FarCry4.exe" />
-		<!-- Its InvProjection shares a buffer with a Projection no shader uses for
-		     position, so the inverse verified only intermittently and flickered
-		     lighting on hair, props and glass; lighting is correct without it. -->
+		<!-- The numeric inverse scan verified only intermittently here and flickered lighting; the deferred
+		     inverses are named below instead -->
 		<DetectInverseMatrix Value="0"/>
+		<!-- Dunia writes constants long before binding them: patch at the draw; shadow matrices stay unshifted -->
+		<PatchConstantsAtDraw Value="1"/>
+		<CheckShadowMatrix Value="1"/>
+		<DisableD3D10Driver Value="1"/>
+		<!-- Dunia: the per-view constants name the whole camera -->
+		<RightCamera Buffer="CViewportShaderParameterProvider" Position="_CameraPosition_DistanceScale _CameraPosition_DistanceScale_Previous"
+		             InvView="_InvViewMatrix" View="_ViewMatrix" Projection="_ProjectionMatrix" InvProjection="_InvProjectionMatrix"
+		             ViewProjection="_ViewProjectionMatrix"
+		             RelativeViewProjection="_ViewRotProjectionMatrix _ViewRotProjectionMatrix_Previous" />
+		<!-- Deferred lighting and the sun-shadow resolve rebuild camera-relative position from (screen, depth) -->
+		<InverseCameraProjection Value="CDeferredLightingParameterProvider._InvViewRotProjectionMatrix
+		                                CDepthReconstructionProvider._InvViewRotProjectionMatrix" Space="World" />
+		<!-- Light-space maps (terrain and vista sun shadows, the spot-light atlas) are the same for both eyes -->
+		<LeftEyeTextures Value="SectorAtlasTexture_UINT_TextureObject VistaShadowTexture_TextureObject SpotShadowSampler_TextureObject" />
+		<!-- GameWorks ShadowLib (soft shadows, PCSS) is 3D Vision aware: it reads the stereo texel and de-shifts itself -->
+		<StereoTexture Value="3DVisionTexel" />
 	</Profile>
 	<Profile Name="Battlefield Bad Company 2">
 		<File Name="BFBC2Game.exe" />
+		<!-- iZ3D's DX9/DX10 tuning, kept for reference: on DX11 its mono render targets left the right eye
+		     a copy of the left, and its preset assumes the DX9-only SeparationScale of 1%
 		<SeparationScale Value="0.01"/>
 		<CreateSquareRTInMono Value="1" />
 		<CreateRTThatLessThanBBInMono Value="1" />
@@ -1768,7 +1807,9 @@
 		<AlwaysModifyShaders Value="1"/>
 		<VertexShaderModificationMethod Value="2"/>
 		<PresenterSleepTime Value="-2"/>
-		<DX10MonoNonIndexedDraw Value="1"/>
+		<DX10MonoNonIndexedDraw Value="1"/> -->
+		<!-- DX11 as tested in stereo: inverse view-projections hunted numerically -->
+		<DetectInverseMatrix Value="1"/>
 		<!-- <Mono>
 			// DX10 GUI
 			<VertexShader CRC="0x52B986A4"/>
@@ -1779,13 +1820,13 @@
 			<VertexShader CRC="0xB03E7DAC"/>
 			<VertexShader CRC="0xE5FC210C"/>
 		</Mono> -->
-		<Presets>
+		<!-- <Presets>
 			<Preset Index="0">
 				<One_div_ZPS Value="-0.079400" />
 				<StereoBase Value="0.400000" />
 				<AutoFocusEnable Value="0" />
 			</Preset>
-		</Presets>
+		</Presets> -->
 	</Profile>
 	<Profile Name="Just Cause 2">
 		<File Name="JustCause2.exe"/>
@@ -3489,6 +3530,21 @@
             </Preset>
         </Presets>
     </Profile>
+	<Profile Name="MaxPayne3">
+		<File Name="MaxPayne3.exe" />
+		<!-- Deferred lighting reconstructs position with inverse view-projections -->
+		<DetectInverseMatrix Value="1"/>
+		<!-- RAGE's own 3D Vision path: its lighting undoes the shift through this texture; row 1 = eye offset along gViewInverse row 0 -->
+		<StereoTexture Value="StereoParmsTex" EyeOffset="gViewInverse" TanX="gDeferredProjParams" />
+		<!-- Planar mirrors and water are rendered x-flipped -->
+		<MirroredTarget Value="ReflectTextureSampler" />
+		<!-- Particle sprites offset their corners after this matrix -->
+		<AdditionalMatrixName Value="gWorldViewProj" />
+		<!-- HUD elements carry their own depth; the reticle is the centred sprite -->
+		<HudDepth Value="ApparentDepth" Rect="TransPos" />
+		<!-- Spot shadow maps: depth-only passes into targets not the screen's size -->
+		<LightViewPasses Value="1" />
+	</Profile>
 	<!--should be last-->
 	<Profile Name="Half-Life 2">
 		<File Name="hl2.exe"/>

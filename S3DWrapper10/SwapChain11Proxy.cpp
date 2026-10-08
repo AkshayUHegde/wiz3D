@@ -51,6 +51,9 @@ SwapChain11Proxy::SwapChain11Proxy(IDXGISwapChain* real, IDXGISwapChain1* real1,
     // The DX9 paths' KeyboardHook: refcounted, own polling thread, writes
     // gInfo.Input — which is what the COM-wrap stereo math reads.
     gKbdHook.initialize(&gInfo.Input);
+    gKbdHook.m_Access.Enter();
+    m_savedInput = gInfo.Input;
+    gKbdHook.m_Access.Leave();
     // Cache the higher-version chains so QI can return `this` for them.
     if (m_real)
     {
@@ -217,6 +220,7 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
     m_bbFormat = desc.BufferDesc.Format;
     // The ZPS hotkey step is expressed in pixels and scaled by this width.
     gKbdHook.setBackBufferWidth(m_bbWidth);
+    m_parent->SetPresentSize(m_bbWidth, m_bbHeight);
 
     ID3D11Device* dev = m_parent->GetReal();
     if (!dev) return E_FAIL;
@@ -419,12 +423,13 @@ void SwapChain11Proxy::DoComposite()
     m_parent->GetReal()->GetImmediateContext(&ctx);
     if (!ctx) return;
 
-    if (WeaveSelected() && RunSRWeave(ctx))
-    {
-        ctx->Release();
-        return;
-    }
-    DrawCompositePass(ctx, m_realBBRTV, m_bbWidth, m_bbHeight);
+    // Only the topology goes back (MP3's loading screen draws a strip without re-setting it); restoring the whole
+    // state turned its intro videos black.
+    D3D11_PRIMITIVE_TOPOLOGY gameTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    ctx->IAGetPrimitiveTopology(&gameTopology);
+    if (!(WeaveSelected() && RunSRWeave(ctx)))
+        DrawCompositePass(ctx, m_realBBRTV, m_bbWidth, m_bbHeight);
+    if (gameTopology != D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED) ctx->IASetPrimitiveTopology(gameTopology);
     ctx->Release();
 }
 
@@ -750,11 +755,31 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
         FrameTrace("--- composite end ---\n");
 }
 
+// A game that exits without releasing its swap chain never reaches the destructor's write, so changes are saved here.
+void SwapChain11Proxy::PersistSettings()
+{
+    gKbdHook.m_Access.Enter();
+    DataInput now = gInfo.Input;
+    gKbdHook.m_Access.Leave();
+    const ULONGLONG t = GetTickCount64();
+    if (m_savedInput.IsChanged(now))
+    {
+        m_savedInput = now;
+        m_writeSettingsAt = t + 5000;
+    }
+    else if (m_writeSettingsAt && t >= m_writeSettingsAt)
+    {
+        WriteInputData(&m_savedInput);
+        m_writeSettingsAt = 0;
+    }
+}
+
 void SwapChain11Proxy::OnPresentBoundaryPost()
 {
     if (FrameTraceActive())
         FrameTrace("=== Present #%d POST ===\n", s_FramePresentCounter++);
     FrameTraceTickFrame();
+    PersistSettings();
     // Stage 4b.8: POST-PRESENT housekeeping. Real Present has flipped the
     // BB; clear the recording vector and arm it for frame N+1. We arm
     // unconditionally (not just on the first call) so a context that's

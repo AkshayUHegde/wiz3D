@@ -1,0 +1,135 @@
+/*
+* Project : wiz3D
+* Copyright (C) Akshay Hegde 2026
+*/
+
+// Per-game behaviour as ProfileFeatures, one per <Profile> element, called by the game-agnostic core at fixed draw points.
+// Adding one: a class in its own Feature*.cpp, plus its element in the registry in ProfileFeature.cpp.
+
+#pragma once
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <d3d11.h>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace wiz3d
+{
+
+class Context11Proxy;
+class Buffer11Proxy;
+struct ShaderAnalysis11Result;
+
+// One shader's reflection (its RDEF chunk), queried by name.
+class RdefView
+{
+public:
+    RdefView(const void* bytecode, SIZE_T length);
+    // The t-slot of a texture binding, -1 = none.
+    int TextureSlot(const std::string& name) const;
+    // The t-slot of any shader resource (texture, structured or byte-address buffer), -1 = none.
+    int SrvSlot(const std::string& name) const;
+    // Every cbuffer variable of that name: (cb slot, byte offset). usedOnly = only where the shader reads it.
+    std::vector<std::pair<int, UINT>> Variables(const std::string& name, bool usedOnly) const;
+    // The last of them; false when there is none.
+    bool Variable(const std::string& name, bool usedOnly, int& cbSlot, UINT& offset) const;
+    // Every texture, cbuffer and variable name, as "texture t9 Name", "cbuffer cb0 Name", "variable cb0+192 Name".
+    std::vector<std::string> Names() const;
+    // The cb slot of a cbuffer by name, -1 = none.
+    int CBufferSlot(const std::string& name) const;
+    // A cbuffer variable by name alone (the first cbuffer bound in this shader that declares it): its cbuffer, slot,
+    // byte offset and size. false = none.
+    bool FindVariable(const std::string& name, std::string& cbuffer, int& slot, UINT& offset, UINT& size) const;
+
+private:
+    const BYTE* m_rd = nullptr;
+    DWORD       m_size = 0;
+    DWORD       m_varStride = 24;
+    DWORD       Rd32(DWORD off) const;
+    const char* Str(DWORD off) const;
+};
+
+// A profile element's attributes, name -> value.
+typedef std::map<std::string, std::string> ProfileEntry;
+
+// The left camera's p00 and the right camera's move: d along view x, world = d * the camera's right axis (right, unit).
+struct CameraMove
+{
+    float p00 = 0.f, d = 0.f;
+    float world[3] = {};
+    float right[3] = {};
+};
+// One attribute, "" when absent.
+const std::string& EntryValue(const ProfileEntry& entry, const char* attr);
+
+class ProfileFeature
+{
+public:
+    virtual ~ProfileFeature() {}
+
+    // Shader creation (device side, every stage): locate this feature's names in the shader; a cbuffer the feature edits
+    // for the right eye is noted on the shader (ShaderAnalysis11Result::NoteRightCB).
+    virtual void OnShaderCreated(const RdefView&, ShaderAnalysis11Result&) const {}
+
+    // A right draw's or dispatch's copy of a noted cbuffer (the game's bytes plus earlier features' edits), in a pass at
+    // the presented aspect: edit it for the right eye in place; true = edited.
+    virtual bool EditRightConstants(Context11Proxy&, const std::string& cbuffer, unsigned char* data, size_t size)
+    { return false; }
+
+    // Draw points (context side), in order: targets bound; the game's (left) draw about to run; the right copy bound;
+    // the right copy drawn; both eyes done. Then once per Present (report = this Present writes the log rows).
+    virtual void OnTargetsSet(Context11Proxy&) {}
+    virtual void OnLeftDraw(Context11Proxy&) {}
+    virtual void OnRightDraw(Context11Proxy&) {}
+    virtual void OnRightDispatch(Context11Proxy&) {}    // a right dispatch's resources are bound (compute)
+    virtual void OnRightDrawDone(Context11Proxy&) {}
+    virtual void OnDrawDone(Context11Proxy&) {}
+    virtual void OnFrameEnd(Context11Proxy&, unsigned frame, bool report) {}
+
+    // What the shared stereo code asks of every feature.
+    virtual float EyeShiftSign() const { return 1.f; }       // -1 while drawing into an x-flipped target
+    virtual bool  LightViewPass() const { return false; }    // the bound pass renders a light's view
+    virtual float CameraP00() const { return 0.f; }          // the scene camera's p00, 0 = unknown
+    // The camera of the block the bound shaders read, and the right camera's move from it. false = none bound.
+    virtual bool  BoundCameraMove(Context11Proxy&, CameraMove&) const { return false; }
+    // The bound pass needs the right camera's origin moved (it rebuilds position as camera position + ray * depth); its
+    // edits go to a second right copy (Context11Proxy::MovedOrigin).
+    virtual bool  MovedOriginPass(Context11Proxy&) const { return false; }
+};
+
+// A feature's setup lines (names found, targets learned), written only with CollectDebugInformation; its per-frame
+// rows are gated the same way by OnFrameEnd's report flag.
+void FeatureLog(const char* fmt, ...);
+
+typedef std::vector<std::unique_ptr<ProfileFeature>> ProfileFeatures;
+
+// The features the game's profile names (g_ProfileData), in registry order.
+ProfileFeatures CreateProfileFeatures();
+
+// The factories the registry calls; null when the profile has no such element.
+std::unique_ptr<ProfileFeature> MakeStereoTexture(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeMirroredTarget(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeHudDepth(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeLightViewPasses(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeAdditionalMatrices(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeRightCamera(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeRayCorners(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeDuniaLocalLights(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeCameraProjection(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeInverseCameraProjection(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeLeftEyeTextures(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeCameraRelativePlanes(const ProfileEntry* entry);
+
+// Stereo state the core owns, for features to read or feed.
+namespace stereo
+{
+float Convergence();               // zero-parallax distance in world units, 0 = convergence off
+float FallbackB(float eyeShift);   // the shear from the last shifted camera matrix, for when the camera's p00 is unknown
+void  PublishCameraP00(float p00); // the scene camera's p00, used for scaled matrices (0 = unknown)
+}
+
+} // namespace wiz3d

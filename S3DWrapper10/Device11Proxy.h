@@ -149,6 +149,10 @@ public:
     void SetLogicalBackBufferSize(UINT w, UINT h) { m_logicalWidth = w; m_logicalHeight = h; }
     UINT GetLogicalBackBufferWidth()  const       { return m_logicalWidth; }
     UINT GetLogicalBackBufferHeight() const       { return m_logicalHeight; }
+    // The presented swap chain's size (SwapChain11Proxy), kept apart from the above so texture classification is untouched.
+    void SetPresentSize(UINT w, UINT h)           { m_presentWidth = w; m_presentHeight = h; }
+    UINT GetPresentWidth()  const                 { return m_presentWidth; }
+    UINT GetPresentHeight() const                 { return m_presentHeight; }
 
     // 1b-iv back-buffer-RTV identity tracking. The flow is:
     //   SwapChainProxy::GetBuffer(0)             -> RegisterBackBufferTexture
@@ -214,6 +218,8 @@ private:
     LONG             m_refs;
     UINT             m_logicalWidth;
     UINT             m_logicalHeight;
+    UINT             m_presentWidth  = 0;
+    UINT             m_presentHeight = 0;
 
     // 1b-iv state. We don't AddRef any of these — game manages lifetimes;
     // we just identity-track. A released-and-reallocated pointer would be
