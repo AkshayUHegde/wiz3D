@@ -16,11 +16,12 @@
 #define DEFAULT_ZNEAR		1.f
 #define DEFAULT_ZFAR		1e+7f
 #define DEFAULT_ONE_DIV_ZPS	1.f / (1.f + DEFAULT_ZNEAR)
-// 2.5% / 1px was too coarse to tune with: Battlefield 3 settles at StereoBase
-// 0.028, so a single press of the old step moved it by 71% of its whole
-// working value and convergence by many times its own.
-#define STEP_STEREOBASE		PERCENT_TO_SEPARATION(0.5f)
-#define STEP_ONE_DIV_ZPS	0.25f		//--- in pixels ---
+#define STEP_STEREOBASE		PERCENT_TO_SEPARATION(2.5f)
+#define STEP_ONE_DIV_ZPS	1.f			//--- in pixels ---
+// The hotkeys' steps, finer than the ones above (which autofocus and the NvAPI bridge use): a small working
+// StereoBase still tunes in useful increments.
+#define KEY_STEP_STEREOBASE		PERCENT_TO_SEPARATION(0.5f)
+#define KEY_STEP_ONE_DIV_ZPS	0.25f		//--- in pixels ---
 #define MIN_ONE_DIV_ZPS	   -1e+7f
 #define MAX_ONE_DIV_ZPS		1e+7f
 #define STEP_MULTIPLIER		0.001f
