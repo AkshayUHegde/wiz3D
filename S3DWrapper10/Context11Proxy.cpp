@@ -150,6 +150,7 @@ Context11Proxy::~Context11Proxy()
     ClearFrameCommands();
     ReleaseStereoShiftCBs();
     ReleaseUavTwins(~0u);
+    ResetEyeTracking();
     {
         std::lock_guard<std::mutex> g(CtxLock());
         auto& v = CtxList();
@@ -924,18 +925,45 @@ void Context11Proxy::SetPresentHookActive(bool active)
     m_presentHookActive = active && !gInfo.DuplicateDraws;
 }
 
+// A tracked binding holds a reference, as the runtime does for a bound object (new one taken before the old dropped).
+template<class T> static void HoldRef(T*& slot, T* p)
+{
+    if (p) p->AddRef();
+    if (slot) slot->Release();
+    slot = p;
+}
+template<class T> static void DropRef(T*& slot)
+{
+    if (slot) { slot->Release(); slot = nullptr; }
+}
+
+// Everything reads as unbound: after ClearState, a state-clearing ExecuteCommandList or a state swap.
 void Context11Proxy::ResetEyeTracking()
 {
+    for (int st = 0; st < ST_COUNT; ++st)
+    {
+        SRVEyeSlots& s = m_srvSlots[st];
+        for (UINT i = 0; i < s.high; ++i) { DropRef(s.left[i]); DropRef(s.right[i]); }
+        CBEyeSlots& c = m_cbSlots[st];
+        for (UINT i = 0; i < c.high; ++i) { DropRef(c.left[i]); DropRef(c.right[i]); DropRef(c.proxy[i]); }
+    }
+    for (UINT i = 0; i < kMaxRTVs; ++i) { DropRef(m_rtvLeft[i]); DropRef(m_rtvRight[i]); DropRef(m_rtvGame[i]); }
+    DropRef(m_dsvLeft);
+    DropRef(m_dsvRight);
+    DropRef(m_dsvGame);
+    for (UINT i = 0; i < m_csUAVSlots.high; ++i) { DropRef(m_csUAVSlots.left[i]); DropRef(m_csUAVSlots.right[i]); }
+    for (UINT i = 0; i < kMaxVSCBSlots; ++i) DropRef(m_boundVSCBs[i]);
+    for (UINT i = 0; i < kMaxPSCBSlots; ++i) DropRef(m_boundPSCBs[i]);
+    ClearOmUavRefs();
     memset(m_srvSlots, 0, sizeof(m_srvSlots));
     memset(m_cbSlots,  0, sizeof(m_cbSlots));
-    memset(m_rtvLeft,  0, sizeof(m_rtvLeft));
-    memset(m_rtvRight, 0, sizeof(m_rtvRight));
+    m_csUAVSlots  = {};
     m_numRTVs     = 0;
-    m_dsvLeft     = nullptr;
-    m_dsvRight    = nullptr;
+    m_numRTVGame  = 0;
     m_omAnyStereo = false;
     m_omHasUAVs   = false;
     m_omMonoDSV   = false;
+    m_omUavBound  = false;
 }
 
 void Context11Proxy::TrackSRVs(StageIdx stage, UINT StartSlot, UINT NumViews,
@@ -948,8 +976,8 @@ void Context11Proxy::TrackSRVs(StageIdx stage, UINT StartSlot, UINT NumViews,
         UINT slot = StartSlot + i;
         if (slot >= kMaxSRVs) break;
         ID3D11ShaderResourceView* p = ppSRVs ? ppSRVs[i] : nullptr;
-        s.left[slot]  = UnwrapSRVForEye(p, false);
-        s.right[slot] = UnwrapSRVForEye(p, true);
+        HoldRef(s.left[slot],  UnwrapSRVForEye(p, false));
+        HoldRef(s.right[slot], UnwrapSRVForEye(p, true));
         if (slot + 1 > s.high) s.high = slot + 1;
     }
     s.anyStereo = false;
@@ -979,9 +1007,9 @@ void Context11Proxy::TrackCBs(StageIdx stage, UINT StartSlot, UINT NumBuffers,
                 right = bp->GetRealRight() ? bp->GetRealRight() : left;
             }
         }
-        s.left[slot]  = left;
-        s.right[slot] = right;
-        s.proxy[slot] = proxy;
+        HoldRef(s.left[slot],  left);
+        HoldRef(s.right[slot], right);
+        HoldRef(s.proxy[slot], proxy);
         s.first[slot] = pFirst ? pFirst[i] : 0;
         s.num[slot]   = pNum ? pNum[i] : 0;
         s.size[slot]  = 0;
@@ -1011,34 +1039,37 @@ void Context11Proxy::TrackOM(UINT NumViews, ID3D11RenderTargetView* const* ppRTV
     m_omUavBound = false;
     ClearOmUavRefs();
     m_numRTVs = NumViews <= kMaxRTVs ? NumViews : kMaxRTVs;
-    memset(m_rtvLeft,  0, sizeof(m_rtvLeft));
-    memset(m_rtvRight, 0, sizeof(m_rtvRight));
     bool anyRTVStereo = false;
-    for (UINT i = 0; i < m_numRTVs; ++i)
+    for (UINT i = 0; i < kMaxRTVs; ++i)
     {
-        ID3D11RenderTargetView* p = ppRTVs ? ppRTVs[i] : nullptr;
-        m_rtvLeft[i]  = p;
+        ID3D11RenderTargetView* p = (ppRTVs && i < m_numRTVs) ? ppRTVs[i] : nullptr;
+        ID3D11RenderTargetView* left = p;
         // Mono targets must be written exactly once, so the right-eye pass
         // leaves them unbound rather than blending into them a second time.
-        m_rtvRight[i] = nullptr;
+        ID3D11RenderTargetView* right = nullptr;
         if (auto* rp = TryUnwrapRTV(p))
         {
-            m_rtvLeft[i]  = rp->GetReal();
-            m_rtvRight[i] = rp->GetRealRight();
-            if (rp->GetRealRight()) anyRTVStereo = true;
+            left  = rp->GetReal();
+            right = rp->GetRealRight();
+            if (right) anyRTVStereo = true;
         }
+        HoldRef(m_rtvLeft[i], left);
+        HoldRef(m_rtvRight[i], right);
     }
     // A mono depth-stencil stays bound for the right pass: nulling it would
     // drop depth testing entirely, which is worse than testing against depth
     // the left pass already wrote. Counted so we can see if MP3 hits it.
-    m_dsvLeft = m_dsvRight = pDSV;
+    ID3D11DepthStencilView* dsvLeft = pDSV;
+    ID3D11DepthStencilView* dsvRight = pDSV;
     bool dsvStereo = false;
     if (auto* dp = TryUnwrapDSV(pDSV))
     {
-        m_dsvLeft  = dp->GetReal();
-        m_dsvRight = dp->GetRealRight() ? dp->GetRealRight() : dp->GetReal();
-        dsvStereo  = (dp->GetRealRight() != nullptr);
+        dsvLeft   = dp->GetReal();
+        dsvRight  = dp->GetRealRight() ? dp->GetRealRight() : dp->GetReal();
+        dsvStereo = (dp->GetRealRight() != nullptr);
     }
+    HoldRef(m_dsvLeft, dsvLeft);
+    HoldRef(m_dsvRight, dsvRight);
     m_omMonoDSV   = (pDSV != nullptr) && !dsvStereo;
     m_omAnyStereo = anyRTVStereo || dsvStereo;
 
@@ -1050,10 +1081,9 @@ void Context11Proxy::RecordGameFacingOM(UINT NumViews,
                                         ID3D11DepthStencilView* pDSV)
 {
     m_numRTVGame = NumViews <= kMaxRTVs ? NumViews : kMaxRTVs;
-    memset(m_rtvGame, 0, sizeof(m_rtvGame));
-    for (UINT i = 0; i < m_numRTVGame; ++i)
-        m_rtvGame[i] = ppRTVs ? ppRTVs[i] : nullptr;
-    m_dsvGame = pDSV;
+    for (UINT i = 0; i < kMaxRTVs; ++i)
+        HoldRef(m_rtvGame[i], (ppRTVs && i < m_numRTVGame) ? ppRTVs[i] : nullptr);
+    HoldRef(m_dsvGame, pDSV);
 }
 
 void STDMETHODCALLTYPE Context11Proxy::OMGetRenderTargets(
@@ -1114,13 +1144,15 @@ void Context11Proxy::TrackCSUAVs(UINT StartSlot, UINT NumUAVs,
         const UINT slot = StartSlot + i;
         if (slot >= kMaxUAVs) break;
         ID3D11UnorderedAccessView* v = pp ? pp[i] : nullptr;
-        s.left[slot]  = UnwrapUAVForEye(v, false);
-        s.right[slot] = UnwrapUAVForEye(v, true);
-        if (s.left[slot] != s.right[slot]) s.anyStereo = true;
+        HoldRef(s.left[slot],  UnwrapUAVForEye(v, false));
+        HoldRef(s.right[slot], UnwrapUAVForEye(v, true));
         if (slot + 1 > s.high) s.high = slot + 1;
         m_csInitCount[slot] = initialCounts ? initialCounts[i] : ~0u;
         m_csInitFresh[slot] = initialCounts != nullptr;
     }
+    s.anyStereo = false;
+    for (UINT i = 0; i < s.high; ++i)
+        if (s.left[i] != s.right[i]) { s.anyStereo = true; break; }
 }
 
 void Context11Proxy::BindCSUAVs(bool right)
@@ -1402,8 +1434,8 @@ void STDMETHODCALLTYPE Context11Proxy::STAGE_PREFIX##SetConstantBuffers1(       
     {                                                                                                    \
         ID3D11Buffer* p = ppConstantBuffers ? ppConstantBuffers[i] : nullptr;                            \
         UINT slot = StartSlot + i;                                                                       \
-        if (STAGE_IDX == ST_VS && slot < kMaxVSCBSlots) m_boundVSCBs[slot] = p;                          \
-        if (STAGE_IDX == ST_PS && slot < kMaxPSCBSlots) m_boundPSCBs[slot] = p;                          \
+        if (STAGE_IDX == ST_VS && slot < kMaxVSCBSlots) HoldRef(m_boundVSCBs[slot], p);                  \
+        if (STAGE_IDX == ST_PS && slot < kMaxPSCBSlots) HoldRef(m_boundPSCBs[slot], p);                  \
         if (p)                                                                                           \
         {                                                                                                \
             if (auto* bp = wiz3d::TryUnwrapBuffer(static_cast<ID3D11Resource*>(p)))                      \
@@ -1837,7 +1869,7 @@ void STDMETHODCALLTYPE Context11Proxy::VSSetConstantBuffers(
         // 4e.2 slot snapshot — stored even when m_presentHookActive is off,
         // because Unmap path always uses it.
         UINT slot = StartSlot + i;
-        if (slot < kMaxVSCBSlots) m_boundVSCBs[slot] = p;
+        if (slot < kMaxVSCBSlots) HoldRef(m_boundVSCBs[slot], p);
 
         if (p)
         {
@@ -1888,7 +1920,7 @@ void STDMETHODCALLTYPE Context11Proxy::PSSetConstantBuffers(
     {
         ID3D11Buffer* p = ppConstantBuffers ? ppConstantBuffers[i] : nullptr;
         UINT slot = StartSlot + i;
-        if (slot < kMaxPSCBSlots) m_boundPSCBs[slot] = p;
+        if (slot < kMaxPSCBSlots) HoldRef(m_boundPSCBs[slot], p);
 
         if (p)
         {
@@ -3798,6 +3830,15 @@ void STDMETHODCALLTYPE Context11Proxy::ClearState()
         [this]() { m_real->ClearState(); });
 }
 
+// The swapped-in state's bindings were never tracked; start from none rather than from the swapped-out state's.
+void STDMETHODCALLTYPE Context11Proxy::SwapDeviceContextState(ID3DDeviceContextState* pState, ID3DDeviceContextState** ppPreviousState)
+{
+    if (!m_real1) return;
+    m_real1->SwapDeviceContextState(pState, ppPreviousState);
+    ResetEyeTracking();
+    m_modVSShader = nullptr;
+}
+
 // ExecuteCommandList submits a previously-built command list (typically from
 // a deferred context). Without recording, deferred-context games (some
 // DA2-era engines) submit entire batches of state + draws via this single
@@ -3813,6 +3854,12 @@ void STDMETHODCALLTYPE Context11Proxy::ExecuteCommandList(
     // summary can tell us whether MP3 actually takes this path.
     ++m_cmdListsThisFrame;
     m_real->ExecuteCommandList(pCommandList, RestoreContextState);
+    // Not restoring leaves the context in its default state, as ClearState does.
+    if (!RestoreContextState)
+    {
+        ResetEyeTracking();
+        m_modVSShader = nullptr;
+    }
     if (!m_presentHookActive) return;
     ComRefHolder cmdRef(pCommandList);
     m_frameCommands.emplace_back(

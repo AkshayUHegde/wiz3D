@@ -59,6 +59,16 @@ bool KeyboardHook::IsKeyWorkInMono(EventId id)
 	return false;
 }
 
+// A hotkey's convergence step: at most a tenth of the current value, so a small StereoBase still tunes finely, and at
+// least a twentieth of the unclamped step, so the value can still cross zero.
+static float ClampConvergenceStep(float delta, float current)
+{
+	float cap = (current < 0 ? -current : current) * 0.1f;
+	if (cap < delta * 0.05f)
+		cap = delta * 0.05f;
+	return delta < cap ? delta : cap;
+}
+
 void KeyboardHook::KeyboardProcedure()
 {
 	int i;
@@ -126,22 +136,10 @@ void KeyboardHook::KeyboardProcedure()
 
 				case INCREASE_ZPS:
 					{
-						if(gInfo.Input.GetActivePreset()->StereoBase >= 0.1 * STEP_STEREOBASE)
+						if(gInfo.Input.GetActivePreset()->StereoBase >= 0.1 * KEY_STEP_STEREOBASE)
 						{
-							float delta = STEP_ONE_DIV_ZPS * m_rBackBufferWidth * m_Scale / gInfo.Input.GetActivePreset()->StereoBase;
-							// Dividing by StereoBase keeps a press worth a constant
-							// on-screen disparity, but blows up when separation is
-							// small: Battlefield 3 works at StereoBase 0.028 with
-							// One_div_ZPS 0.000498, where one press moved convergence
-							// by nearly five times its own value. Cap the step at a
-							// tenth of the current value, with a floor so zero can
-							// still be escaped. At normal settings the cap never binds.
-							{
-								float cur = gInfo.Input.GetActivePreset()->One_div_ZPS;
-								float cap = (cur < 0 ? -cur : cur) * 0.1f;
-								if (cap < 1e-6f) cap = 1e-6f;
-								if (delta > cap) delta = cap;
-							}
+							float delta = KEY_STEP_ONE_DIV_ZPS * m_rBackBufferWidth * m_Scale / gInfo.Input.GetActivePreset()->StereoBase;
+							delta = ClampConvergenceStep(delta, gInfo.Input.GetActivePreset()->One_div_ZPS);
 							gInfo.Input.GetActivePreset()->One_div_ZPS -= delta;
 							if(gInfo.Input.GetActivePreset()->One_div_ZPS < MIN_ONE_DIV_ZPS)
 								gInfo.Input.GetActivePreset()->One_div_ZPS = MIN_ONE_DIV_ZPS;
@@ -150,22 +148,10 @@ void KeyboardHook::KeyboardProcedure()
 					}
 				case DECREASE_ZPS:
 					{
-						if(gInfo.Input.GetActivePreset()->StereoBase >= 0.1 * STEP_STEREOBASE)
+						if(gInfo.Input.GetActivePreset()->StereoBase >= 0.1 * KEY_STEP_STEREOBASE)
 						{
-							float delta = STEP_ONE_DIV_ZPS * m_rBackBufferWidth * m_Scale / gInfo.Input.GetActivePreset()->StereoBase;
-							// Dividing by StereoBase keeps a press worth a constant
-							// on-screen disparity, but blows up when separation is
-							// small: Battlefield 3 works at StereoBase 0.028 with
-							// One_div_ZPS 0.000498, where one press moved convergence
-							// by nearly five times its own value. Cap the step at a
-							// tenth of the current value, with a floor so zero can
-							// still be escaped. At normal settings the cap never binds.
-							{
-								float cur = gInfo.Input.GetActivePreset()->One_div_ZPS;
-								float cap = (cur < 0 ? -cur : cur) * 0.1f;
-								if (cap < 1e-6f) cap = 1e-6f;
-								if (delta > cap) delta = cap;
-							}
+							float delta = KEY_STEP_ONE_DIV_ZPS * m_rBackBufferWidth * m_Scale / gInfo.Input.GetActivePreset()->StereoBase;
+							delta = ClampConvergenceStep(delta, gInfo.Input.GetActivePreset()->One_div_ZPS);
 							gInfo.Input.GetActivePreset()->One_div_ZPS += delta;
 							if(gInfo.Input.GetActivePreset()->One_div_ZPS > MAX_ONE_DIV_ZPS)
 								gInfo.Input.GetActivePreset()->One_div_ZPS = MAX_ONE_DIV_ZPS;      
@@ -173,13 +159,13 @@ void KeyboardHook::KeyboardProcedure()
 						break;
 					}  
 				case INCREASE_STEREOBASE:
-					gInfo.Input.GetActivePreset()->StereoBase += OFFSET(gInfo.Input.GetActivePreset()->StereoBase, STEP_STEREOBASE);
+					gInfo.Input.GetActivePreset()->StereoBase += OFFSET(gInfo.Input.GetActivePreset()->StereoBase, KEY_STEP_STEREOBASE);
 					if (gInfo.Input.GetActivePreset()->StereoBase > MAX_STEREOBASE) 
 						gInfo.Input.GetActivePreset()->StereoBase = MAX_STEREOBASE;
 					break;
 
 				case DECREASE_STEREOBASE:
-					gInfo.Input.GetActivePreset()->StereoBase -= OFFSET(gInfo.Input.GetActivePreset()->StereoBase, STEP_STEREOBASE);
+					gInfo.Input.GetActivePreset()->StereoBase -= OFFSET(gInfo.Input.GetActivePreset()->StereoBase, KEY_STEP_STEREOBASE);
 					if (gInfo.Input.GetActivePreset()->StereoBase < 0) 
 						gInfo.Input.GetActivePreset()->StereoBase = 0;
 					break;

@@ -237,7 +237,7 @@ public:
     void STDMETHODCALLTYPE GSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->GSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
     void STDMETHODCALLTYPE PSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->PSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
     void STDMETHODCALLTYPE CSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers, UINT* pFirstConstant, UINT* pNumConstants) override                           { if (m_real1) m_real1->CSGetConstantBuffers1(StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants); }
-    void STDMETHODCALLTYPE SwapDeviceContextState(ID3DDeviceContextState* pState, ID3DDeviceContextState** ppPreviousState) override                                                              { if (m_real1) m_real1->SwapDeviceContextState(pState, ppPreviousState); }
+    void STDMETHODCALLTYPE SwapDeviceContextState(ID3DDeviceContextState* pState, ID3DDeviceContextState** ppPreviousState) override;
     void STDMETHODCALLTYPE ClearView(ID3D11View* pView, const FLOAT Color[4], const D3D11_RECT* pRect, UINT NumRects) override;
     void STDMETHODCALLTYPE DiscardView1(ID3D11View* pResourceView, const D3D11_RECT* pRects, UINT NumRects) override;
 
@@ -401,9 +401,8 @@ private:
     {
         ID3D11Buffer* left[kMaxCBs];
         ID3D11Buffer* right[kMaxCBs];
-        // The wrapper behind left[]/right[], so a draw can ask whether the
-        // constants it is about to consume were actually eye-shifted. Not
-        // AddRef'd, same as left/right: the game holds the binding.
+        // The wrapper behind left[]/right[], so a draw can ask whether the constants it is about to consume were
+        // actually eye-shifted. Each slot holds a reference, as the runtime does for a bound object.
         Buffer11Proxy* proxy[kMaxCBs];
         // D3D11.1 partial binds (*SetConstantBuffers1): constant range per
         // slot, num 0 = whole buffer; size is the buffer's constant count so
@@ -416,14 +415,16 @@ private:
         bool anyRange;
     };
 
-    SRVEyeSlots m_srvSlots[ST_COUNT];
-    CBEyeSlots  m_cbSlots[ST_COUNT];
+    // Every tracked pointer holds a reference (TrackSRVs, TrackCBs, TrackOM, TrackCSUAVs), dropped by ResetEyeTracking:
+    // a game may release an object while it is bound, and the right eye still binds it.
+    SRVEyeSlots m_srvSlots[ST_COUNT] = {};
+    CBEyeSlots  m_cbSlots[ST_COUNT] = {};
 
-    ID3D11RenderTargetView* m_rtvLeft[kMaxRTVs];
-    ID3D11RenderTargetView* m_rtvRight[kMaxRTVs];
+    ID3D11RenderTargetView* m_rtvLeft[kMaxRTVs] = {};
+    ID3D11RenderTargetView* m_rtvRight[kMaxRTVs] = {};
     UINT                    m_numRTVs;
-    ID3D11DepthStencilView* m_dsvLeft;
-    ID3D11DepthStencilView* m_dsvRight;
+    ID3D11DepthStencilView* m_dsvLeft = nullptr;
+    ID3D11DepthStencilView* m_dsvRight = nullptr;
     // Decides on its own whether a draw is duplicated — a pass writing a mono
     // target issues once, as StereoCommandBuffer does with bStereoDraw.
     bool                    m_omAnyStereo;
@@ -434,9 +435,8 @@ private:
     // the left pass wrote, which can reject its geometry.
     bool                    m_omMonoDSV;
 
-    // Game-facing OM bindings, mirroring whatever is currently bound. Safe to
-    // return un-AddRef'd from storage because D3D holds a ref on bound views
-    // and every OMSet overwrites this.
+    // Game-facing OM bindings, mirroring whatever is currently bound; each holds a reference, so OMGetRenderTargets
+    // can hand them out after the game released its own.
     ID3D11RenderTargetView* m_rtvGame[kMaxRTVs] = {};
     ID3D11DepthStencilView* m_dsvGame           = nullptr;
     UINT                    m_numRTVGame        = 0;
@@ -557,9 +557,9 @@ private:
     // Stage 4e.2: VS binding snapshot for targeted CB stereo math. m_boundVS
     // is the game's vertex shader pointer most recently set via VSSetShader.
     // m_boundVSCBs[i] is the wrapped buffer pointer set at VS CB slot i via
-    // VSSetConstantBuffers. Neither is AddRef'd — the game owns lifetime,
-    // and at worst the analyzer cache miss falls us back to the heuristic
-    // scan. Used inside Unmap to ask Device11Proxy::LookupShaderProjection
+    // VSSetConstantBuffers. The shader is a lookup key only, not AddRef'd; each
+    // buffer holds a reference, since the draw path queries it (TryUnwrapBuffer).
+    // Used inside Unmap to ask Device11Proxy::LookupShaderProjection
     // whether the bound VS has a known projection-matrix register in the CB
     // being mapped, so per-eye writes target only that register.
 public:
