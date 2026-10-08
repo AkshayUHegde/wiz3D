@@ -22,9 +22,8 @@ namespace wiz3d
 namespace
 {
 
-std::mutex                              s_projLock;
-std::map<std::string, std::vector<int>> s_projOffsets;   // per element and shader: byte offsets of the named matrices
-std::set<std::string>                   s_projLogged;    // element+offset pairs already logged
+std::mutex            s_logLock;
+std::set<std::string> s_projLogged;   // element+offset pairs already logged
 
 // 4x4 inverse (Gauss-Jordan, partial pivot); false when singular.
 bool Invert4(const double m[4][4], double out[4][4])
@@ -66,6 +65,7 @@ public:
             Target t;
             t.buffer = dot == std::string::npos ? EntryValue(e, "Buffer") : n.substr(0, dot);
             t.name = dot == std::string::npos ? n : n.substr(dot + 1);
+            t.key = (m_inverse ? "inv:" : "fwd:") + t.buffer + "." + t.name;
             if (!t.buffer.empty() && !t.name.empty()) m_targets.push_back(t);
         }
         for (const Target& t : m_targets) if (m_buffers.find(t.buffer) == std::string::npos) m_buffers += t.buffer + " ";
@@ -82,10 +82,10 @@ public:
             for (const auto& v : rdef.Variables(t.name, false)) if (v.first == slot) offs.push_back((int)v.second);
             if (offs.empty()) continue;
             info.NoteRightCB(t.buffer, slot);
-            std::lock_guard<std::mutex> g(s_projLock);
-            s_projOffsets[ShaderKey(t, info.crc32)] = offs;
+            info.featureOffsets.emplace_back(t.key, offs);
+            std::lock_guard<std::mutex> g(s_logLock);
             for (int off : offs)
-                if (s_projLogged.insert(Key(t) + "+" + std::to_string(off)).second)
+                if (s_projLogged.insert(t.key + "+" + std::to_string(off)).second)
                     FeatureLog("  %sCameraProjection: %s.%s at +%d, %s space (cb%d in CRC=0x%08lX)\n", m_inverse ? "Inverse" : "",
                            t.buffer.c_str(), t.name.c_str(), off, m_world ? "world" : "view", slot, info.crc32);
         }
@@ -96,14 +96,11 @@ public:
         const ShaderAnalysis11Result* shader = ctx.EditingShader();
         if (!shader) return false;
         std::vector<int> offs;
+        for (const Target& t : m_targets)
         {
-            std::lock_guard<std::mutex> g(s_projLock);
-            for (const Target& t : m_targets)
-            {
-                if (t.buffer != cbuffer) continue;
-                auto it = s_projOffsets.find(ShaderKey(t, shader->crc32));
-                if (it != s_projOffsets.end()) offs.insert(offs.end(), it->second.begin(), it->second.end());
-            }
+            if (t.buffer != cbuffer) continue;
+            for (const auto& f : shader->featureOffsets)
+                if (f.first == t.key) offs.insert(offs.end(), f.second.begin(), f.second.end());
         }
         if (offs.empty()) return false;
         CameraMove cam;
@@ -152,15 +149,12 @@ public:
     }
 
 private:
-    struct Target { std::string buffer, name; };
+    struct Target { std::string buffer, name, key; };
     bool                     m_inverse, m_world;
     std::vector<Target>      m_targets;
     std::string              m_buffers;   // for the row
     unsigned                 m_edited = 0, m_rejected = 0, m_skipped = 0;
     float                    m_lastScale = 0.f;
-
-    std::string Key(const Target& t) const { return (m_inverse ? "inv:" : "fwd:") + t.buffer + "." + t.name; }
-    std::string ShaderKey(const Target& t, DWORD crc) const { return Key(t) + "@" + std::to_string(crc); }
 };
 
 std::unique_ptr<ProfileFeature> Make(const ProfileEntry* e, bool inverse)
