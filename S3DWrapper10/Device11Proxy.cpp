@@ -221,8 +221,11 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
 Device11Proxy::~Device11Proxy()
 {
     {
+        // Release() has already dropped m_real, so the entry is found by its proxy; a stale one sends a new device at the same
+        // address into this freed object.
         std::lock_guard<std::mutex> g(s_realDevLock);
-        s_realToDevice.erase(m_real);
+        for (auto it = s_realToDevice.begin(); it != s_realToDevice.end();)
+            it = it->second == this ? s_realToDevice.erase(it) : std::next(it);
     }
     if (m_dxgiDeviceProxy)
     {

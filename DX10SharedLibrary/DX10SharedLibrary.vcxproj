@@ -210,6 +210,7 @@
     <ClCompile Include="..\S3DWrapper10\FeatureCameraProjection.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureLeftEyeTextures.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureCameraRelativePlanes.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureScreenRayMatrix.cpp" />
     <ClCompile Include="..\S3DWrapper10\DXGIDeviceProxy.cpp" />
     <ClCompile Include="..\S3DWrapper10\proxy_factory.cpp" />
     <ClCompile Include="..\S3DWrapper10\Texture2D11Proxy.cpp" />
