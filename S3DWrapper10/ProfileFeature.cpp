@@ -234,6 +234,7 @@ ProfileFeatures CreateProfileFeatures()
         { "InverseCameraProjection", &MakeInverseCameraProjection, true },
         { "LeftEyeTextures",      &MakeLeftEyeTextures,    false },
         { "CameraRelativePlanes", &MakeCameraRelativePlanes, true },
+        { "ScreenRayMatrix",      &MakeScreenRayMatrix,    false },
     };
     static std::once_flag s_checked;
     std::vector<std::string> problems;

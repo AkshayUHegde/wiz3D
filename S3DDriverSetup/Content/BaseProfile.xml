@@ -1763,6 +1763,17 @@
 		     shadows are perspective projections that must not be shifted. -->
 		<DetectInverseMatrix Value="1"/>
 		<CheckShadowMatrix Value="1"/>
+		<!-- UE3 reuses one constant buffer per slot across shaders: patch each for the shader about to read it -->
+		<PatchConstantsAtDraw Value="1"/>
+		<!-- Shadow depths are depth-only passes into light-sized targets -->
+		<LightViewPasses Value="1" />
+		<!-- The shadow projection reads a light-space depth map, the same for both eyes -->
+		<LeftEyeTextures Value="ShadowDepthTexture" />
+		<!-- Shadow projection and deferred lights scale a screen-to-world ray by scene depth; light functions map
+		     (screen * depth) straight into light space -->
+		<ScreenRayMatrix Value="$Globals.ScreenToTranslatedWorldMatrix" Screen="$Globals.ScreenToLight"
+		                 Consumer="$Globals.TranslatedWorldToShadowMatrix"
+		                 Positions="$Globals.PointPositionAndInverseRadius $Globals.SpotPositionAndInverseRadius" />
 	</Profile>
 	<Profile Name="Far Cry 4">
 		<File Name="FarCry4.exe" />

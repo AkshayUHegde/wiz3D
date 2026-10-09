@@ -803,6 +803,9 @@
     <ClCompile Include="..\S3DWrapper10\FeatureCameraRelativePlanes.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureScreenRayMatrix.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\DXGIDeviceProxy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

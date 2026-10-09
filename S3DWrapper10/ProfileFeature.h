@@ -129,6 +129,7 @@ std::unique_ptr<ProfileFeature> MakeCameraProjection(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeInverseCameraProjection(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeLeftEyeTextures(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeCameraRelativePlanes(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeScreenRayMatrix(const ProfileEntry* entry);
 
 // Stereo state the core owns, for features to read or feed.
 namespace stereo
