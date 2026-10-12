@@ -213,6 +213,12 @@ const std::string& EntryValue(const ProfileEntry& entry, const char* attr)
     return it == entry.end() ? none : it->second;
 }
 
+bool ProfileSwitchOn(const char* element)
+{
+    const auto it = g_ProfileData.FeatureEntries.find(element);
+    return it != g_ProfileData.FeatureEntries.end() && EntryValue(it->second, "Value") != "0";
+}
+
 ProfileFeatures CreateProfileFeatures()
 {
     typedef std::unique_ptr<ProfileFeature> (*Factory)(const ProfileEntry*);
@@ -235,6 +241,20 @@ ProfileFeatures CreateProfileFeatures()
         { "LeftEyeTextures",      &MakeLeftEyeTextures,    false },
         { "CameraRelativePlanes", &MakeCameraRelativePlanes, true },
         { "ScreenRayMatrix",      &MakeScreenRayMatrix,    false },
+        { "ClipSpaceSprites",     &MakeClipSpaceSprites,   false },
+        { "ClipSpaceRays",        &MakeClipSpaceRays,      false },
+        { "RingKeepsShifts",      &MakeRingKeepsShifts,    false },
+        { "KeepBareProjections",  &MakeKeepBareProjections, false },
+        { "WholeBufferRanges",    &MakeWholeBufferRanges,  false },
+        { "ViewMatrices",         &MakeViewMatrices,       false },
+        { "DeferredContexts",     &MakeDeferredContexts,   false },
+        { "PixelRayBasis",        &MakePixelRayBasis,      false },
+        { "RawResources",         &MakeRawResources,       false },
+        { "ConstantBlocks",       &MakeConstantBlocks,     false },
+        { "ComputeOutputsPerEye", &MakeComputeOutputsPerEye, false },
+        { "IndirectArgsPerEye",   &MakeIndirectArgsPerEye, false },
+        { "CameraInverses",       &MakeCameraInverses,     false },
+        { "CodeMatrices",         &MakeCodeMatrices,       false },
     };
     static std::once_flag s_checked;
     std::vector<std::string> problems;

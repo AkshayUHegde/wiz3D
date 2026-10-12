@@ -314,9 +314,20 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
     for (const auto& f : s_shaderFeatures) f->OnShaderCreated(rdef, info);
     // Vertex stage too: a second camera matrix outside the position chain (last frame's, for per-object velocity).
     if (!strcmp(tag, "Pixel") || !strcmp(tag, "Compute") || !strcmp(tag, "Vertex")) info.readMatrices = rdef.UsedMatrices();
+    // CodeMatrices, reflection stripped: a vertex shader's matrices from the code that builds its outputs, a pixel or
+    // compute shader's from four dp4 of one vector (Andromeda's lighting unprojection).
+    const bool fromCode = !rdef.Present() && CodeMatricesOn();
+    if (!strcmp(tag, "Vertex") && fromCode) info.readMatrices = info.dp4OutputMatrices;
+    if ((!strcmp(tag, "Pixel") || !strcmp(tag, "Compute")) && fromCode)
+    {
+        info.readMatrices.clear();
+        CodeMatrixReads(pBytecode, byteLength, info.readMatrices, info.viewMatrices);
+    }
     static std::atomic<size_t> s_keptBytes(0);
     const size_t kKeepBudget = sizeof(void*) == 8 ? (256u << 20) : (64u << 20);
-    if (strcmp(tag, "Compute") != 0 || s_keptBytes.load() + byteLength > kKeepBudget) info.bytecode.reset();
+    // A sprite shader that reads its world position keeps its code whatever the stage or budget: its right eye draws a twin.
+    if ((strcmp(tag, "Compute") != 0 || s_keptBytes.load() + byteLength > kKeepBudget) && info.spriteWorldInput < 0)
+        info.bytecode.reset();
     else s_keptBytes += byteLength;
     if (analyzed && !info.projection.matrixData.cb.empty())
     {
@@ -698,6 +709,15 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateBuffer(
     HRESULT hr = m_real->CreateBuffer(pDesc, pInitialData, ppBuffer);
     if (FAILED(hr) || !ppBuffer || !*ppBuffer) return hr;
     auto* bufProxy = new Buffer11Proxy(*ppBuffer, this);
+    // ConstantBlocks: a constant buffer over 4096 constants is a ring the game binds by 11.1 range (Frostbite 3); its
+    // shadow is the game's write target (Context11Proxy::Map).
+    if (gInfo.DuplicateDraws && ConstantBlocksOn() && pDesc && (pDesc->BindFlags & D3D11_BIND_CONSTANT_BUFFER) &&
+        pDesc->ByteWidth > 65536)
+    {
+        bufProxy->MakeRing(pDesc->ByteWidth);
+        NVDM_TRACE_FIRST_N(8, "  Device11Proxy::CreateBuffer: ring constant buffer %u B (usage=%d)\n",
+                           pDesc->ByteWidth, (int)pDesc->Usage);
+    }
 
     // Right-eye sibling for CBs and UAV-capable buffers. Alloc failure is
     // non-fatal: the sibling stays null and that buffer's data stays shared.
@@ -751,7 +771,7 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateTexture2D(
 
     const char* monoReason = "";
     const bool doubleIt = ShouldDoubleTexture2D(pDesc, pBBSize,
-                                                pInitialData != nullptr, &monoReason);
+                                                pInitialData != nullptr, &monoReason, ComputeOutputsPerEyeOn());
     // Every RT/DS-capable or doubled create, uncapped: one mono link in the visible chain flattens the output to the
     // left eye, and the capped trace below never reaches the level-load creates.
     if (gInfo.CollectDebugInformation && pDesc &&
@@ -947,6 +967,7 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateUnorderedAccessView(
     }
 
     auto* uavProxy = new UAV11Proxy(*ppUAView, realRightUAV, this);
+    if (ComputeOutputsPerEyeOn()) uavProxy->SetTexture(tex2Proxy);   // a right-eye bind marks the sibling written
     *ppUAView = static_cast<ID3D11UnorderedAccessView*>(uavProxy);
     return hr;
 }

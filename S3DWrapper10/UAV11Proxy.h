@@ -14,6 +14,7 @@ namespace wiz3d
 {
 
 class Device11Proxy;
+class Texture2D11Proxy;
 
 class UAV11Proxy : public ID3D11UnorderedAccessView
 {
@@ -37,11 +38,16 @@ public:
     ID3D11UnorderedAccessView*   GetReal()       const { return m_realLeft;  }
     ID3D11UnorderedAccessView*   GetRealRight()  const { return m_realRight; }
     Device11Proxy*               GetParent()     const { return m_parent;    }
+    // The viewed Texture2D proxy, when the view is of one, held by reference: a right-eye bind marks its right copy
+    // written (Texture2D11Proxy::MarkRightWritten).
+    void                         SetTexture(Texture2D11Proxy* t);
+    Texture2D11Proxy*            Texture()       const { return m_texture;   }
 
 private:
     ID3D11UnorderedAccessView* m_realLeft;
     ID3D11UnorderedAccessView* m_realRight;
     Device11Proxy*             m_parent;
+    Texture2D11Proxy*          m_texture = nullptr;   // one reference held
     LONG                       m_refs;
 };
 

@@ -29,6 +29,8 @@ class RdefView
 {
 public:
     RdefView(const void* bytecode, SIZE_T length);
+    // false: the shader ships without RDEF (its reflection stripped), so no name lookup can succeed.
+    bool Present() const { return m_rd != nullptr; }
     // The t-slot of a texture binding, -1 = none.
     int TextureSlot(const std::string& name) const;
     // The t-slot of any shader resource (texture, structured or byte-address buffer), -1 = none.
@@ -97,6 +99,10 @@ public:
     virtual bool  LightViewPass() const { return false; }    // the bound pass renders a light's view
     virtual bool  VertexCameraMatrices() const { return false; }   // vertex shaders' declared camera matrices are patched
     virtual bool  UiProjectionParallax() const { return false; }   // far-off focals take the scene camera's parallax
+    virtual bool  RingKeepsShifts() const { return false; }  // a ring's right bytes never lose a shift in place
+    virtual bool  KeepBareProjections() const { return false; }   // pixel and compute shaders' view-to-clip stays the game's
+    virtual bool  WholeBufferRanges() const { return false; }     // a whole-buffer rebind's 11.1 count rounds up to 16
+    virtual bool  ViewMatrices() const { return false; }     // pixel and compute shaders' camera views move with the eye
     virtual float CameraP00() const { return 0.f; }          // the scene camera's p00, 0 = unknown
     // The camera of the block the bound shaders read, and the right camera's move from it. false = none bound.
     virtual bool  BoundCameraMove(Context11Proxy&, CameraMove&) const { return false; }
@@ -130,6 +136,34 @@ std::unique_ptr<ProfileFeature> MakeInverseCameraProjection(const ProfileEntry* 
 std::unique_ptr<ProfileFeature> MakeLeftEyeTextures(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeCameraRelativePlanes(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeScreenRayMatrix(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeClipSpaceSprites(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeClipSpaceRays(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeRingKeepsShifts(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeKeepBareProjections(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeWholeBufferRanges(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeViewMatrices(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeDeferredContexts(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakePixelRayBasis(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeRawResources(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeConstantBlocks(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeComputeOutputsPerEye(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeIndirectArgsPerEye(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeCameraInverses(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeCodeMatrices(const ProfileEntry* entry);
+
+// The game's profile has the element and it is not Value="0" (for switches the core asks outside a context).
+bool ProfileSwitchOn(const char* element);
+
+// <RawResources>: copies resolve a real texture the game reached past the wrapper to its proxy (FeatureRawResources.cpp).
+bool RawResourcesOn();
+void NoteRawResolved();
+
+// Core switches, each in its own Feature*.cpp; absent, the core runs as it does for every other game.
+bool ConstantBlocksOn();         // constant blocks rebuilt per draw and dispatch, 11.1 ring buffers included
+bool ComputeOutputsPerEyeOn();   // UAV textures doubled like render targets
+bool IndirectArgsPerEyeOn();     // structure-count destinations given a right sibling
+bool CameraInversesOn();         // any camera's unprojection matched and patched with its own focal
+bool CodeMatricesOn();           // matrices of shaders without reflection found from their code
 
 // Stereo state the core owns, for features to read or feed.
 namespace stereo

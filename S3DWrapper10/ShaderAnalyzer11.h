@@ -42,6 +42,12 @@ struct ShaderAnalysis11Result
     // Pixel and compute shaders: every float4x4 cbuffer variable read (cb slot, byte offset), for the right eye's
     // camera matrices at the draw or dispatch.
     std::vector<std::pair<int, UINT>> readMatrices;
+    // Outputs other than SV_Position built by four dp4 with consecutive registers of one cbuffer: (cb slot, byte offset)
+    // of each float4x4, what a vertex shader without RDEF is known to read.
+    std::vector<std::pair<int, UINT>> dp4OutputMatrices;
+    // Pixel and compute shaders without RDEF: 3x4 affines read as mul/mad columns cbN[k..k + 2] of one vector's x, y, z
+    // (cb slot, byte offset of the first register), matched at the draw against the camera's view (ViewMatrices).
+    std::vector<std::pair<int, UINT>> viewMatrices;
     // HudDepth: the w the game gives a HUD element under 3D Vision (MP3's ApparentDepth).
     int                   apparentDepthCB     = -1;
     UINT                  apparentDepthOffset = 0;
@@ -66,6 +72,22 @@ struct ShaderAnalysis11Result
     std::vector<std::pair<std::string, int>> namedSRVs;
     // Texture slots where the right eye reads the game's (left) copy: light-space maps a profile names (LeftEyeTextures).
     std::vector<int> leftSRVSlots;
+    // The output signature's elements in order, for a geometry shader that takes this vertex shader's outputs.
+    struct OutputElement { std::string name; UINT index, reg, mask, type, sysValue; };
+    std::vector<OutputElement> outputs;
+    // SV_Position is the vertex input with w = 1.0: the vertex buffer holds NDC the CPU projected (ClipSpaceSprites).
+    bool clipSpacePosition = false;
+    // SV_Position's x, y and z built from vertex inputs alone (no constant-buffer or system-value term, z an input's),
+    // w = 1.0: sprites the CPU projected and the shader rotates and scales (Andromeda's flares; ClipSpaceSprites 3).
+    bool clipSpaceBuilt = false;
+    // With clipSpaceBuilt: the input holding the sprite's world position and the camera position the shader measures
+    // it from (cbN[k].xyz added to it), for the sprite's own depth (ClipSpaceSprites 3); -1 = none.
+    int  spriteWorldInput = -1;
+    int  spriteCameraCB = -1;
+    UINT spriteCameraReg = 0;
+    // With clipSpacePosition: the index in outputs of a float3 the shader copies from an input, a per-vertex world
+    // ray (Frostbite's sky quad carries its frustum corner rays this way); -1 = none (ClipSpaceRays).
+    int rayOutput = -1;
     // The bytecode: during shader creation for every stage, kept afterwards for compute shaders only (null past the
     // keep budget).
     std::shared_ptr<const std::vector<BYTE>> bytecode;
@@ -80,5 +102,10 @@ bool AnalyzeShader11(const void* pBytecode, SIZE_T byteLength,
 
 // A DXBC chunk's data (after its tag and size) and size, by four-character tag; null when the blob has none.
 const BYTE* FindDxbcChunk(const void* blob, SIZE_T blobLen, DWORD tag, DWORD& outSize);
+
+// What a shader without RDEF reads, from its code (cb slot, byte offset): float4x4s, and 3x4 affines read as columns
+// that may be the camera's view (ShaderAnalysis11Result::viewMatrices).
+void CodeMatrixReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& mats,
+                     std::vector<std::pair<int, UINT>>& views);
 
 } // namespace wiz3d

@@ -2,6 +2,7 @@
 
 #include "StdAfx.h"
 #include "UAV11Proxy.h"
+#include "Texture2D11Proxy.h"
 #include "Device11Proxy.h"
 #include "proxy_factory.h"
 
@@ -20,8 +21,16 @@ UAV11Proxy::UAV11Proxy(ID3D11UnorderedAccessView* realLeft, ID3D11UnorderedAcces
 
 UAV11Proxy::~UAV11Proxy()
 {
+    if (m_texture)   { m_texture->Release();   m_texture   = nullptr; }
     if (m_realRight) { m_realRight->Release(); m_realRight = nullptr; }
     if (m_realLeft)  { m_realLeft->Release();  m_realLeft  = nullptr; }
+}
+
+void UAV11Proxy::SetTexture(Texture2D11Proxy* t)
+{
+    if (t) t->AddRef();
+    if (m_texture) m_texture->Release();
+    m_texture = t;
 }
 
 ULONG STDMETHODCALLTYPE UAV11Proxy::Release()

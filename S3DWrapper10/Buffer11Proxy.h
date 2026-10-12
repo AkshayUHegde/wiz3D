@@ -105,6 +105,29 @@ public:
     { m_patchedSeq = m_writeSeq; m_patchedCRC = crc; m_patchedShift = shift; }
     static const size_t kMaxShadowBytes = 64 * 1024;
 
+    // A D3D11.1 ring constant buffer (over 4096 constants, read through ranged binds): the game writes this shadow, and
+    // Context11Proxy::SyncBoundConstants copies each bound range into the real buffers at the draw.
+    void MakeRing(size_t byteWidth) { m_ring = true; m_ringShadow.assign(byteWidth, 0); m_ringForeign.assign((byteWidth + 255) / 256, 0); }
+    bool IsRing() const { return m_ring; }
+    unsigned char* RingData() { return m_ringShadow.data(); }
+    size_t RingSize() const { return m_ringShadow.size(); }
+    unsigned WriteSeq() const { return m_writeSeq; }
+    void MarkRingWritten() { ++m_writeSeq; }
+    // Pages (256 B) a GPU copy filled behind the shadow: the real buffers hold them, the shadow does not, until the
+    // copy is read back (Context11Proxy::ServiceRingReadbacks). A block touching one is left as the game made it.
+    void MarkForeign(size_t off, size_t n)  { for (size_t p = off / 256; p * 256 < off + n && p < m_ringForeign.size(); ++p) m_ringForeign[p] = 1; }
+    void ClearForeign(size_t off, size_t n) { for (size_t p = off / 256; p * 256 < off + n && p < m_ringForeign.size(); ++p) m_ringForeign[p] = 0; }
+    bool AnyForeign(size_t off, size_t n) const
+    {
+        for (size_t p = off / 256; p * 256 < off + n && p < m_ringForeign.size(); ++p) if (m_ringForeign[p]) return true;
+        return false;
+    }
+    // What our in-place writes last left in the right sibling, the game's bytes they were built from, and their eye
+    // shift (Context11Proxy::MergeRightRing); sized on first use.
+    std::vector<unsigned char>& RightMirror() { return m_rightMirror; }
+    std::vector<unsigned char>& GameAtRightWrite() { return m_gameAtRightWrite; }
+    float& RightMirrorShift() { return m_rightMirrorShift; }
+
     // What the right sibling holds beyond the shadow bytes: forward (geometry) shifts and inverse patches applied to
     // them; plain shadow is neither. A copy into the buffer counts as unknown, i.e. shifted.
     void SetRightFromShadow(bool v) { m_rightForward = v ? 0 : 1; m_rightInverse = 0; }
@@ -163,6 +186,11 @@ private:
     unsigned       m_invCheckSeq = 0xFFFFFFFFu;
     float          m_invCheckShift = 0.f, m_invCheckConv = 0.f;
     std::vector<unsigned char> m_shadow;
+    bool           m_ring = false;
+    std::vector<unsigned char> m_ringShadow;
+    std::vector<unsigned char> m_ringForeign;
+    std::vector<unsigned char> m_rightMirror, m_gameAtRightWrite;
+    float          m_rightMirrorShift = 0.f;
     std::vector<MatrixTarget> m_learned;
     std::bitset<256> m_lightRegs, m_cameraRegs;
     unsigned       m_rightSeq = 0;
