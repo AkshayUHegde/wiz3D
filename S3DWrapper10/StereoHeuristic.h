@@ -111,7 +111,9 @@ inline bool ShouldDoubleDepthStencilTexture(UINT Width, UINT Height, const SIZE*
 // stencil / neither, then dispatch to the matching heuristic. Returns true
 // if a right-eye sibling should be created. hasInitialData separates
 // resolve/copy destinations (never seeded) from ordinary material textures.
-inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE* pBBSize, bool hasInitialData = false, const char** outReason = nullptr)
+// computePerEye: the profile's <ComputeOutputsPerEye>.
+inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE* pBBSize, bool hasInitialData = false,
+                                  const char** outReason = nullptr, bool computePerEye = false)
 {
     if (outReason) *outReason = "";
     if (!pDesc) return false;
@@ -128,7 +130,10 @@ inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE*
         pDesc->Width >= 640 && pDesc->Height >= 360 && !IsBlockCompressedFormat(pDesc->Format))
         return true;
     // UAV textures stay single, as NVIDIA's heuristics have it: a compute output written outside a duplicated
-    // dispatch would leave its sibling uninitialised.
+    // dispatch would leave its sibling uninitialised. ComputeOutputsPerEye doubles them (Texture2D11Proxy::RightUnwritten).
+    if (computePerEye && (pDesc->BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0 && pDesc->Usage == D3D11_USAGE_DEFAULT &&
+        !hasInitialData && !IsBlockCompressedFormat(pDesc->Format))
+        return true;
     if (outReason) *outReason = "noRTBind";
     return false;
 }

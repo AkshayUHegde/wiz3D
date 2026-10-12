@@ -339,9 +339,10 @@ struct StereoMatrixState
 
     // Exact inverse of x += b*w - b*conv: P_r = P + w.e0^T is a rank-1 update of column 0, so by Sherman-Morrison the
     // correction K = P_r^-1 * P subtracts a multiple of row 0 from every row. conv == 0 leaves the shear only.
-    void PatchInverse(float* f, bool transposed, float eyeShift, float conv) const
+    // p00 > 0: the inverted camera's own focal, for b; 0 takes the last cached one.
+    void PatchInverse(float* f, bool transposed, float eyeShift, float conv, float p00 = 0.f) const
     {
-        const float b = EyeShiftB(eyeShift);
+        const float b = p00 > 0.f ? eyeShift * p00 : EyeShiftB(eyeShift);
         float m[16];
         CanonicalizeMat4(f, transposed, m);
 

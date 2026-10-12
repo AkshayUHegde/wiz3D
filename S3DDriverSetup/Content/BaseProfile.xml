@@ -1726,10 +1726,88 @@
 		<!-- Spot shadow maps: depth-only passes into targets not the screen's size render the light's view -->
 		<LightViewPasses Value="1" />
 	</Profile>
+	<Profile Name="Battlefield Hardline">
+		<File Name="bfh.exe" />
+		<!-- Frostbite 3, 64-bit: the same deferred lighting, pooled constant buffers and spot shadow passes as Battlefield 3 -->
+		<DetectInverseMatrix Value="1"/>
+		<PatchConstantsAtDraw Value="1"/>
+		<LightViewPasses Value="1" />
+		<!-- 11.1 ring constant buffers bound by range; tiled lighting writes compute outputs and dispatches over a structure
+		     count; the lighting inverts the world view-projection; shaders found without reflection get matrices from code -->
+		<ConstantBlocks Value="1"/>
+		<ComputeOutputsPerEye Value="1"/>
+		<IndirectArgsPerEye Value="1"/>
+		<CameraInverses Value="1"/>
+		<CodeMatrices Value="1"/>
+		<!-- Lens flares and light glows are CPU-projected quads (NDC in the vertex buffer, w = 1) -->
+		<ClipSpaceSprites Value="2" />
+		<!-- The sky is a screen quad whose panorama lookup comes from a world ray per vertex, no matrix: the ray moves
+		     by the eye offset at infinity -->
+		<ClipSpaceRays Value="1" />
+		<!-- Velocity vertex shaders read prevViewProjMatrix beside crViewProjMatrix: both shifted, or the right eye's
+		     motion vectors carry the eye offset into the temporal AA -->
+		<VertexCameraMatrices Value="1" />
+	</Profile>
 	<Profile Name="Mass Effect Andromeda">
 		<File Name="MassEffectAndromeda.exe" />
-		<!-- Frostbite 3, same deferred lighting as Battlefield 3. -->
+		<!-- Frostbite 3: Battlefield Hardline's settings -->
 		<DetectInverseMatrix Value="1"/>
+		<PatchConstantsAtDraw Value="1"/>
+		<LightViewPasses Value="1" />
+		<ConstantBlocks Value="1"/>
+		<ComputeOutputsPerEye Value="1"/>
+		<IndirectArgsPerEye Value="1"/>
+		<!-- Lamps: the lighting's unprojections take their own camera's focal, not a shadow or UI camera's drawn before -->
+		<CameraInverses Value="1"/>
+		<!-- Every shader ships without reflection: the matrices it reads are found from its code -->
+		<CodeMatrices Value="1"/>
+		<!-- Flares and glows: CPU-projected sprites the shader rotates (w = 1), each moved by its world position's depth;
+		     their z is no depth -->
+		<ClipSpaceSprites Value="3" />
+		<ClipSpaceRays Value="1" />
+		<!-- Character velocity shaders read last frame's view-projection beside this frame's -->
+		<VertexCameraMatrices Value="1" />
+		<!-- Flicker: a right ring range rewritten in place keeps its shifts for draws queued before it -->
+		<RingKeepsShifts Value="1" />
+		<!-- Reflections project view-space hits rebuilt from the eye's own depth with a bare projection -->
+		<KeepBareProjections Value="1" />
+		<!-- Decals cast their rays from the camera's view: the right eye's moves by the eye offset -->
+		<ViewMatrices Value="1" />
+		<!-- Point-light shadows: odd-sized whole buffers bound beside ring ranges; 11.1 dropped the right rebind -->
+		<WholeBufferRanges Value="1" />
+		<Mono>
+			<!-- HUD and menu: each element through its own 45-degree perspective into an off-screen UI target, depth test off -->
+			<VertexShader CRC="0xD5BFAB46" />
+			<VertexShader CRC="0xEF5E807F" />
+		</Mono>
+	</Profile>
+	<Profile Name="Ryse: Son of Rome">
+		<File Name="Ryse.exe" />
+		<!-- CryEngine, 64-bit, deferred: lighting and the shadow mask rebuild position from depth in pixel-shader buffers -->
+		<DetectInverseMatrix Value="1"/>
+		<!-- Per-batch and per-instance constant buffers are reused across shaders: patch each for the shader about to read it,
+		     every bound block in one place -->
+		<PatchConstantsAtDraw Value="1"/>
+		<ConstantBlocks Value="1"/>
+		<!-- Sun cascades and spot/point shadow maps: depth-only passes into targets not the screen's size render the light's view -->
+		<LightViewPasses Value="1"/>
+		<!-- The tiled lighting dispatch writes its outputs per eye; unprojections take their own camera's focal; a shader
+		     without reflection has its matrices found from its code -->
+		<ComputeOutputsPerEye Value="1"/>
+		<CameraInverses Value="1"/>
+		<CodeMatrices Value="1"/>
+		<!-- Texture streaming uploads through a deferred context (r_texturesstreamingDeferred): it records a right-eye twin -->
+		<DeferredContexts Value="1"/>
+		<!-- Character blur in the right eye: velocity vertex shaders read last frame's camera beside this frame's -->
+		<VertexCameraMatrices Value="1"/>
+		<!-- Decals (world), object and light shadows (camera-relative), the sun-shadow resolve (shadow space) and the tiled
+		     lighting (frustum corners) rebuild position from depth with the left camera's pixel basis -->
+		<PixelRayBasis Buffer="PER_BATCH" Value="vWBasisX vWBasisY vWBasisZ" Origin="g_WorldViewPos"
+		               Consumer="g_mLightShadowProj" ShadowOrigin="vCamPos" Magnitudes="vBasisMagnitudes"
+		               Corners="FrustumTL FrustumTR FrustumBL" CornerOrigin="WorldViewPos"/>
+		<!-- The refraction (fire heat haze) copies the scene from the real texture behind its target: the right eye's copy
+		     must come from the right eye's scene -->
+		<RawResources Value="1"/>
 	</Profile>
 	<!-- Engine settings a <Profile> takes with <Engine Value="..."/>; the profile's own elements and attributes win -->
 	<Engine Name="Dunia">

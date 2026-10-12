@@ -22,6 +22,7 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // bundled lib/d3d10 dxgitype.h still
 #include <map>
 #include <algorithm>
 #include "ProfileFeature.h"
+#include "ShaderPatch11.h"   // right-eye shader twins
 
 namespace wiz3d
 {
@@ -65,6 +66,8 @@ struct ComRefHolder
 
 class Device11Proxy;
 class Buffer11Proxy;
+class Texture2D11Proxy;
+struct EyeShiftMatrix;
 struct ShaderAnalysis11Result;
 
 class Context11Proxy : public ID3D11DeviceContext3
@@ -336,6 +339,8 @@ private:
     void DoResolveSubresource(
         ID3D11Resource* pDstResource, UINT DstSubresource,
         ID3D11Resource* pSrcResource, UINT SrcSubresource, DXGI_FORMAT Format);
+    // Under <RawResources>: a real left texture the game reached past the wrapper, as its proxy; else p as given.
+    ID3D11Resource* GameResource(ID3D11Resource* p) const;
     void DoClearRenderTargetView(
         ID3D11RenderTargetView* pRenderTargetView, const FLOAT ColorRGBA[4]);
     void DoClearDepthStencilView(
@@ -406,6 +411,13 @@ private:
         UINT first[kMaxCBs];
         UINT num[kMaxCBs];
         UINT size[kMaxCBs];
+        // The write sequence, offset, shader set and shift each eye's real buffer last received for this slot's block,
+        // so SyncBoundConstants writes a block once per change.
+        unsigned syncSeq[2][kMaxCBs];
+        UINT     syncOff[2][kMaxCBs];
+        DWORD    syncCrc[kMaxCBs];
+        float    syncShift[kMaxCBs];
+        unsigned syncHash[kMaxCBs];   // the right version's block bytes (ring): rewritten only when they or the union change
         UINT high;
         bool anyStereo;
         bool anyRange;
@@ -433,6 +445,8 @@ private:
     // Overlay state: the swap chain's back buffer is the first target and the depth test is off (null state = on).
     bool                    m_omBackBuffer = false;
     bool                    m_depthTestOn  = true;
+    bool                    m_depthWriteOn = true;
+    D3D11_PRIMITIVE_TOPOLOGY m_topology    = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 
     // Game-facing OM bindings, mirroring whatever is currently bound; each holds a reference, so OMGetRenderTargets
     // can hand them out after the game released its own.
@@ -564,7 +578,62 @@ private:
     void UnshiftOverlayCBs();
     void RestoreRightCB(Buffer11Proxy* b);
     bool WriteWholeRightCB(Buffer11Proxy* b, const std::vector<unsigned char>& bytes);
+    // ConstantBlocks: bound constant blocks (a small buffer whole, or a ring's 11.1 range) rebuilt for the right eye at
+    // the draw or dispatch, and a ring's ranges copied to the real left buffer.
+    void SyncBoundConstants(bool right, bool plainOnly, bool fromDispatch);
+    bool WriteRingRange(ID3D11Buffer* real, size_t off, const unsigned char* p, size_t n);
+    void MergeRightRing(Buffer11Proxy* b, size_t off, unsigned char* p, size_t n, float eyeShift);
+    bool ClassifyDeclaredMatrix(const ShaderAnalysis11Result* info, UINT slot, DWORD reg, const float* f, EyeShiftMatrix& out);
+    bool BareProjectionKept(StageIdx st, const ShaderAnalysis11Result* info, UINT slot, const float* f,
+                            const EyeShiftMatrix& em);
+    bool ClassifyViewMatrix(const ShaderAnalysis11Result* info, UINT slot, size_t off, const unsigned char* block, size_t n,
+                            EyeShiftMatrix& out);
+    // A GPU copy into a ring bypasses the shadow: the copied range is read back from the real buffer a frame later
+    // (no stall) and the shadow takes it; until then its pages are foreign and left alone.
+    struct RingReadback { Buffer11Proxy* b; size_t off, n; unsigned frame; };
+    std::vector<RingReadback> m_ringReadbacks;
+    std::map<UINT, ID3D11Buffer*> m_ringStaging;   // readback staging buffers by size
+    void NoteRingCopy(Buffer11Proxy* b, size_t off, size_t n);
+    void ServiceRingReadbacks();
+    bool RingReadBack(ID3D11Buffer* b, size_t off, size_t n, unsigned char* out);
     void BeginDraw(UINT vertexCount);
+    // ClipSpaceSprites: a vertex shader passing NDC positions through (w = 1) gets, for the right eye only, a geometry
+    // shader that moves x by the eye offset at the vertex's own depth; one per such vertex shader, null = unbuildable.
+    std::map<DWORD, ID3D11GeometryShader*> m_clipSpaceGS;
+    ID3D11Buffer* m_clipSpaceCB = nullptr;
+    bool          m_clipSpaceBound = false;
+    float         m_clipSpaceK[4] = {};
+    unsigned      m_clipSpaceDrawsThisFrame = 0, m_clipSpaceNoCameraThisFrame = 0;
+    ID3D11GeometryShader* ClipSpaceShiftShader(const ShaderAnalysis11Result* info);
+    // Right-eye shader twins (ShaderPatch11) by stage, plan tag and game CRC (null shader = unpatchable). One is bound for
+    // one right draw or dispatch with its constants in m_twinCB; UnbindTwin restores the game's shader and slot binding.
+    struct ShaderTwin { ID3D11DeviceChild* shader = nullptr; UINT slot = 0; };
+    std::map<unsigned long long, ShaderTwin> m_twins;
+    ID3D11Buffer*       m_twinCB = nullptr;
+    int                 m_twinStage = -1;            // the stage a twin is bound on, -1 = none
+    ID3D11DeviceChild*  m_twinSavedShader = nullptr;
+    ID3D11Buffer*       m_twinSavedCB = nullptr;
+    UINT                m_twinSavedSlot = 0, m_twinSavedFirst = 0, m_twinSavedNum = 0;
+    float               m_twinConst[16] = {};        // the bound twin's constants
+    UINT                m_twinConstCount = 0;
+    DWORD               m_twinCrc = 0;
+    int                 m_twinTag = 0;
+    bool UnbindTwin();
+    // ClipSpaceSprites 3, the first twin client: sprites that read their world position (SpriteDepth11).
+    unsigned            m_spriteTwinDrawsThisFrame = 0;
+    bool BindSpriteDepth(const ShaderAnalysis11Result* info);
+    bool SpriteDepthRow(const ShaderAnalysis11Result* info, float row[4]);
+    // ClipSpaceRays: the same for a pass-through vertex shader carrying a world ray per vertex; the geometry shader
+    // moves the ray by the eye offset at infinity, the position stays (the sky quad keeps covering the screen).
+    std::map<DWORD, ID3D11GeometryShader*> m_clipSpaceRayGS;
+    bool          m_clipSpaceRays = false;
+    unsigned      m_clipSpaceRayDrawsThisFrame = 0;
+    ID3D11GeometryShader* ClipSpaceRayShader(const ShaderAnalysis11Result* info);
+    // ClipSpaceSprites 1: a copy of the right depth buffer and its shader view, per right DSV, for sprites without a z.
+    struct ClipSpaceDepth { ID3D11Texture2D* tex; ID3D11ShaderResourceView* srv; UINT w, h; unsigned frame; };
+    std::map<ID3D11DepthStencilView*, ClipSpaceDepth> m_clipSpaceDepth;
+    bool ClipSpaceDepthViews(ClipSpaceDepth& out);
+    bool SceneZRowFromBoundVS(float& m22, float& m23);
 
     // Stage 4e.2: VS binding snapshot for targeted CB stereo math. m_boundVS
     // is the game's vertex shader pointer most recently set via VSSetShader.
@@ -589,6 +658,10 @@ private:
     // The bound domain shader and its analysis: tessellated geometry projects there, not in the vertex shader.
     ID3D11DomainShader*           m_boundDS     = nullptr;
     const ShaderAnalysis11Result* m_boundDSInfo = nullptr;
+    // The game's geometry and hull shaders (keys only): a right draw adds its own geometry shader only where the game
+    // has none (ClipSpaceSprites).
+    ID3D11GeometryShader*         m_boundGS     = nullptr;
+    ID3D11HullShader*             m_boundHS     = nullptr;
     void TrackStageShader(StageIdx stage, void* shader);
     void PatchStageCBsForDraw(StageIdx stage, void* shader, const ShaderAnalysis11Result* info, float eyeShift);
     unsigned                      m_dsBuffersPatchedThisFrame = 0;
@@ -637,6 +710,10 @@ public:
     float                     CameraP00() const;
     bool                      LightViewPass() const;
     bool                      VertexCameraMatrices() const;
+    bool                      RingKeepsShifts() const;
+    bool                      KeepBareProjections() const;
+    bool                      WholeBufferRanges() const;
+    bool                      ViewMatrices() const;
     bool                      UiProjectionParallax() const;
     // Over every feature: the bound camera and the right camera's move (ProfileFeature::BoundCameraMove).
     bool                      BoundCameraMove(CameraMove& out);
@@ -656,6 +733,21 @@ public:
     const ShaderAnalysis11Result* BoundCompute() const { return m_boundInfo[2]; }
     ID3D11ShaderResourceView* ComputeSRVForRight(UINT slot) const;
     void                      SubstituteComputeSRV(UINT slot, ID3D11ShaderResourceView* v);
+    // ClipSpaceSprites, at a right draw: the depth shift's geometry shader bound for a pass-through vertex shader
+    // (true = bound); taken off after the draw; this frame's counts (shifted draws, draws without a scene camera).
+    bool                      BindClipSpaceShift(int mode);   // 2 = no depth read: a z of 0 is at infinity
+    void                      UnbindClipSpaceShift();
+    bool                      BindClipSpaceRayShift();
+    unsigned                  ClipSpaceRayCount() { const unsigned n = m_clipSpaceRayDrawsThisFrame; m_clipSpaceRayDrawsThisFrame = 0; return n; }
+    void                      ClipSpaceCounts(unsigned& shifted, unsigned& noCamera)
+    { shifted = m_clipSpaceDrawsThisFrame; noCamera = m_clipSpaceNoCameraThisFrame; m_clipSpaceDrawsThisFrame = m_clipSpaceNoCameraThisFrame = 0; }
+    unsigned                  SpriteTwinCount() { const unsigned n = m_spriteTwinDrawsThisFrame; m_spriteTwinDrawsThisFrame = 0; return n; }
+    // Shader twins' plan tags (ShaderPatch11 clients).
+    enum TwinTag { kTwinSpriteDepth = 1 };
+    // A twin of the bound `st` shader under `plan` (built once per tag and CRC), bound for the coming right draw or
+    // dispatch with `count` floats (16 at most) in its cbuffer; false = none (unpatchable, no code kept).
+    bool                      BindTwin(StageIdx st, const ShaderAnalysis11Result* info, int tag, const ShaderPatchPlan& plan,
+                                       const float* consts, UINT count);
     unsigned                  FlippedWritesThisFrame() const { return m_flippedWritesThisFrame; }
 private:
 

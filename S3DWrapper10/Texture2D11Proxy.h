@@ -23,6 +23,7 @@ namespace wiz3d
 {
 
 class Device11Proxy;
+bool ComputeOutputsPerEyeOn();   // FeatureComputeOutputsPerEye.cpp
 
 class Texture2D11Proxy : public ID3D11Texture2D
 {
@@ -62,7 +63,7 @@ public:
     void             MarkBackBuffer()      { m_backBuffer = true; }
     bool             IsBackBuffer()  const { return m_backBuffer; }
     // A sampled-only right copy that no mirror has written holds nothing of the game's (a texture streamed past the
-    // wrapper); the right eye samples the left until a mirror fills it.
+    // wrapper); the right eye samples the left until a mirror, or under ComputeOutputsPerEye a right UAV bind, fills it.
     void             MarkRightWritten()    { m_rightWritten = true; }
     bool             RightUnwritten() const
     {
@@ -71,7 +72,9 @@ public:
         {
             D3D11_TEXTURE2D_DESC d = {};
             m_realLeft->GetDesc(&d);
-            m_sampledOnly = (d.BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS)) ? 0 : 1;
+            const UINT perEye = D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL |
+                                (ComputeOutputsPerEyeOn() ? 0u : (UINT)D3D11_BIND_UNORDERED_ACCESS);
+            m_sampledOnly = (d.BindFlags & perEye) ? 0 : 1;
         }
         return m_sampledOnly == 1;
     }
