@@ -491,6 +491,7 @@ static float ProfileShaderMultiplier(Device11Proxy* parent, void* vs);
 void Context11Proxy::BeginDraw(UINT vertexCount)
 {
     ++m_drawsThisFrame;
+    m_drawVertices = vertexCount;
     if (m_activeEye != Eye::Right)
     {
         TeachBoundMatrices(vertexCount <= 6);
@@ -2677,6 +2678,13 @@ namespace stereo
 float Convergence()               { return StereoConvergence(); }
 float FallbackB(float eyeShift)   { return EyeShiftB(eyeShift); }
 void  PublishCameraP00(float p00) { s_camP00 = p00; }
+float SceneP00()                  { return s_camP00 > 0.f ? s_camP00 : s_sceneP00; }
+bool  SceneZRow(float& m22, float& m23)
+{
+    if (!s_sceneZRowFrame || s_frameId - s_sceneZRowFrame > 1 || s_sceneZRow[1] == 0.f) return false;
+    m22 = s_sceneZRow[0]; m23 = s_sceneZRow[1];
+    return true;
+}
 }
 
 // The analysis finds a projection-shaped matrix, not necessarily the camera's: orthographic (HUD) and light or shadow

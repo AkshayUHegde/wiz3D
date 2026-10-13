@@ -447,6 +447,7 @@ private:
     bool                    m_depthTestOn  = true;
     bool                    m_depthWriteOn = true;
     D3D11_PRIMITIVE_TOPOLOGY m_topology    = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    UINT                     m_drawVertices = 0;   // the draw's vertex (index) count per instance, UINT_MAX = indirect
 
     // Game-facing OM bindings, mirroring whatever is currently bound; each holds a reference, so OMGetRenderTargets
     // can hand them out after the game released its own.
@@ -701,6 +702,10 @@ public:
     bool                      OverlayPass() const { return m_omBackBuffer && !m_depthTestOn; }
     ID3D11RenderTargetView*   LeftTarget(UINT i) const { return i < kMaxRTVs ? m_rtvLeft[i] : nullptr; }
     ID3D11DepthStencilView*   LeftDepth() const { return m_dsvLeft; }
+    // The game's own geometry stage (GS, HS or DS) is bound; the draw's primitive topology and vertex count.
+    bool                      GeometryStageBound() const { return m_boundGS || m_boundHS || m_boundDS; }
+    D3D11_PRIMITIVE_TOPOLOGY  Topology() const { return m_topology; }
+    UINT                      DrawVertices() const { return m_drawVertices; }
     // The right copy reads the left eye's VS/HS/DS/GS constants (a light's view is the same for both eyes).
     void                      BindLeftGeometryConstants();
     // Writes a whole CB's right sibling (a feature's rewrite of the game's last bytes); counts as a right write.

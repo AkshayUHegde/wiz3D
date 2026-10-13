@@ -150,6 +150,9 @@ std::unique_ptr<ProfileFeature> MakeComputeOutputsPerEye(const ProfileEntry* ent
 std::unique_ptr<ProfileFeature> MakeIndirectArgsPerEye(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeCameraInverses(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeCodeMatrices(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeFactory2SwapChains(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeHudSceneDepth(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeStereoScissor(const ProfileEntry* entry);
 
 // The game's profile has the element and it is not Value="0" (for switches the core asks outside a context).
 bool ProfileSwitchOn(const char* element);
@@ -164,6 +167,7 @@ bool ComputeOutputsPerEyeOn();   // UAV textures doubled like render targets
 bool IndirectArgsPerEyeOn();     // structure-count destinations given a right sibling
 bool CameraInversesOn();         // any camera's unprojection matched and patched with its own focal
 bool CodeMatricesOn();           // matrices of shaders without reflection found from their code
+bool Factory2SwapChainsOn();     // Factory2 swap chains wrapped on any factory, not only CreateDXGIFactory2's
 
 // Stereo state the core owns, for features to read or feed.
 namespace stereo
@@ -171,6 +175,8 @@ namespace stereo
 float Convergence();               // zero-parallax distance in world units, 0 = convergence off
 float FallbackB(float eyeShift);   // the shear from the last shifted camera matrix, for when the camera's p00 is unknown
 void  PublishCameraP00(float p00); // the scene camera's p00, used for scaled matrices (0 = unknown)
+float SceneP00();                  // the frame's scene camera p00 (0 = unknown)
+bool  SceneZRow(float& m22, float& m23);   // its projection's z row (z_ndc = m22 + m23 / w); false = none this frame
 }
 
 } // namespace wiz3d

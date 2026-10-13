@@ -94,14 +94,15 @@ public:
         ctx.RetryEdit();   // these follow the vertex stage's ray, not only these bytes
         float b = 0.f;
         const float* ray = BoundRay(ctx, eyeShift, b);
-        if (!ray)
+        // Without rays the scene camera's shear serves the Screen matrices; consumers and positions need a ray's axis.
+        if (!ray && m_rays.empty() && !screens.empty()) { b = stereo::FallbackB(eyeShift); ++m_fromCamera; }
+        else if (!ray)
         {
             if (!screens.empty() || !uses.empty()) ++m_noRay;
             return edited;
         }
         // The b*C/w term is the fixed position offset b*C*r0 of the ray's camera.
         const float c = stereo::Convergence();
-        const float offset[3] = { b * c * ray[0], b * c * ray[1], b * c * ray[2] };
         for (int off : screens)
         {
             if ((size_t)off + 64 > size) continue;
@@ -110,6 +111,8 @@ public:
             ++m_screened;
             edited = true;
         }
+        if (!ray) return edited;
+        const float offset[3] = { b * c * ray[0], b * c * ray[1], b * c * ray[2] };
         // Applied to the position: r3 += sum offset_i * r_i.
         for (int off : uses)
         {
@@ -134,15 +137,16 @@ public:
     void OnFrameEnd(Context11Proxy&, unsigned frame, bool report) override
     {
         if (report)
-            DDILog("  [frame %u] screen rays (this frame): rays skewed %u, screen matrices moved %u, consumers given the eye offset %u,"
-                   " positions moved %u, rejected %u (not a camera ray), matrices without a bound ray %u\n", frame, m_skewed,
-                   m_screened, m_moved, m_positionsMoved, m_rejected, m_noRay);
-        m_skewed = m_screened = m_moved = m_positionsMoved = m_rejected = m_noRay = 0;
+            DDILog("  [frame %u] screen rays (this frame): rays skewed %u, screen matrices moved %u (by the scene camera %u),"
+                   " consumers given the eye offset %u, positions moved %u, rejected %u (not a camera ray), matrices without a"
+                   " bound ray %u\n", frame, m_skewed, m_screened, m_fromCamera, m_moved, m_positionsMoved, m_rejected, m_noRay);
+        m_skewed = m_screened = m_fromCamera = m_moved = m_positionsMoved = m_rejected = m_noRay = 0;
     }
 
 private:
     std::vector<Named> m_rays, m_screens, m_consumers, m_positions;
-    unsigned           m_skewed = 0, m_screened = 0, m_moved = 0, m_positionsMoved = 0, m_rejected = 0, m_noRay = 0;
+    unsigned           m_skewed = 0, m_screened = 0, m_fromCamera = 0, m_moved = 0, m_positionsMoved = 0, m_rejected = 0;
+    unsigned           m_noRay = 0;
 
     static void Note(const RdefView& rdef, ShaderAnalysis11Result& info, const std::vector<Named>& names, const char* what)
     {
@@ -200,9 +204,10 @@ private:
 
 } // namespace
 
+// No Value (a game without rays, UE3's forward renderer): the Screen matrices take the scene camera's shear.
 std::unique_ptr<ProfileFeature> MakeScreenRayMatrix(const ProfileEntry* e)
 {
-    if (!e || EntryValue(*e, "Value").empty()) return nullptr;
+    if (!e || (EntryValue(*e, "Value").empty() && EntryValue(*e, "Screen").empty())) return nullptr;
     return std::unique_ptr<ProfileFeature>(new ScreenRayMatrixFeature(*e));
 }
 

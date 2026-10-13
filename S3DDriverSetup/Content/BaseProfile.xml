@@ -1663,6 +1663,35 @@
 			</Preset>
 		</Presets>
 	</Profile>
+	<!-- Ahead of the 2010 Mass Effect 2 (and the 2012 Mass Effect 3), which share the exe names: the Legendary Edition runs
+	     64-bit from Binaries\Win64, and its launcher passes -SeekFreeLoadingPCConsole -->
+	<Profile Name="Mass Effect Legendary Edition">
+		<File Name="MassEffect1.exe" />
+		<File Name="MassEffect2.exe" CmdLine="Win64" />
+		<File Name="MassEffect2.exe" CmdLine="-SeekFreeLoadingPCConsole" />
+		<File Name="MassEffect3.exe" CmdLine="Win64" />
+		<File Name="MassEffect3.exe" CmdLine="-SeekFreeLoadingPCConsole" />
+		<!-- The swap chain comes from CreateSwapChainForHwnd on a CreateDXGIFactory factory -->
+		<Factory2SwapChains Value="1"/>
+		<!-- Unreal Engine 3, forward. No CheckShadowMatrix: its orthographic test takes a world-space camera far from the origin
+		     (the lens flares' canvas transform) for a light; the shadow depths are light-view passes anyway -->
+		<DetectInverseMatrix Value="1"/>
+		<!-- UE3 rewrites $Globals before each draw and reuses one buffer per slot: patch each for the shader about to read it -->
+		<PatchConstantsAtDraw Value="1"/>
+		<!-- Shadow depths are depth-only passes into light-sized targets; the projection reads them the same for both eyes -->
+		<LightViewPasses Value="1" />
+		<LeftEyeTextures Value="ShadowDepthTexture" />
+		<!-- Velocity vertex shaders read PrevViewProjectionMatrix beside the frame's ViewProjectionMatrix -->
+		<VertexCameraMatrices Value="1"/>
+		<!-- Projected shadows, fog and light functions map (screen x*W, y*W, W, 1) through these; no ray is bound, so they
+		     take the scene camera's shear -->
+		<ScreenRayMatrix Screen="$Globals.ScreenToShadowMatrix $Globals.ScreenToWorld $Globals.ScreenToLight"/>
+		<!-- The mono HUD takes the scene's depth: the crosshair the centre's; pieces in the middle band, and the world markers and
+		     coronas parked at the near plane, the depth under them. Bars at the top and bottom, and sceneless frames, stay flat -->
+		<HudSceneDepth Crosshair="0.06" Band="0.6" MinSceneDraws="200" NearQuads="2"/>
+		<!-- Each light's pass is scissored to its mono screen bounds, which the right eye's lit area shifts out of -->
+		<StereoScissor Value="1"/>
+	</Profile>
 	<Profile Name="Mass Effect 2">
 		<File Name="MassEffect2.exe"/>
 		<File Name="MassEffect.exe"/>
