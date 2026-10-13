@@ -1,11 +1,5 @@
-/* wiz3D - ID3D11DeviceContext proxy implementation (Option B Stage 2)
- *
- * Pure passthrough port of NvDirectMode/d3d11/Context11Proxy. The stage-3 BB
- * tracking and stage-4 magic-header capture were stripped for the MVP — the
- * job here is to prove COM identity + refcounting are right, not to do any
- * stereo work yet. OMSet/RSSetViewports/CopyResource/CopySubresourceRegion
- * are forwarded unchanged; per-eye behaviour will be re-added in Stage 4.
- */
+/* wiz3D - ID3D11DeviceContext proxy implementation
+ * Each stereo draw and dispatch runs again for the right eye, with right-eye copies bound and constants patched. */
 
 #include "StdAfx.h"
 #include "Context11Proxy.h"
@@ -1510,8 +1504,7 @@ bool Context11Proxy::BeginRightEyeDraw()
     // Stereo toggled off: skip the whole right-eye pass, not just the shift.
     if (!gInfo.Input.StereoActive) return false;
     if (m_activeEye != Eye::Left) return false;
-    // Skipping UAV draws outright left GTA V's bloom bright-pass RTV black in
-    // the right eye — its histogram UAVs are shared, so demand only stereo RTs.
+    // A draw that also writes UAVs runs again only when one of its render targets is stereo; the UAVs stay shared.
     if (m_omHasUAVs)
     {
         if (!(m_omUavBound && m_omAnyStereo))
@@ -1526,9 +1519,8 @@ bool Context11Proxy::BeginRightEyeDraw()
         ++m_drawsMonoThisFrame;
         return false;
     }
-    // Before the right eye binds anything: give it constants patched for the
-    // shader that is about to run, not for whatever was bound at write time.
-    // An overlay (back buffer, no depth test) keeps the game's bytes: its projection draws the HUD at screen depth.
+    // Before the right eye binds anything, its constants are patched for the shader about to run, not the one bound at
+    // write time. An overlay (back buffer, no depth test) keeps the game's bytes, so the HUD stays at screen depth.
     const bool overlay = OverlayPass();
     if (overlay) ++m_overlayDrawsThisFrame;
     const bool blocks = ConstantBlocksOn();
@@ -3238,7 +3230,7 @@ static bool DetectInverseInCB(const unsigned char* data, size_t byteCount,
 }
 
 // CameraInverses: the focal of the camera an unprojection inverts, 0 = not a camera's. The last cached focal is
-// whatever camera drew before (a spot light's shadow or a UI view moved Andromeda's lamps).
+// whatever camera drew before, which may be a light's or a UI view's.
 static float InverseFocal(const float* f, bool transposed)
 {
     float canon[16];
@@ -3315,7 +3307,7 @@ static void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
                 continue;
             }
             // And orthogonal x and w bases: UE3 reuses one buffer per slot, so a learned register also lands on
-            // material blocks {color, unit direction} that pass the w test (BioShock Infinite's white flashes).
+            // material blocks {color, unit direction} that pass the w test.
             if (!BasesOrthogonal(f, transposed, lxn, lwn))
             {
                 if (outRejected) ++*outRejected;
@@ -3971,11 +3963,8 @@ bool Context11Proxy::WriteWholeRightCB(Buffer11Proxy* b, const std::vector<unsig
     return true;
 }
 
-// The camera matrices a pixel or compute shader reads (RDEF): an inverse view-projection (deferred and tiled lighting)
-// and last frame's view-projection (motion blur). They are written before the frame's camera reaches the detector's
-// ring, so they are identified at the right draw or dispatch; what a shader's register held once it holds every time.
-// Last frame's camera (motion blur's P * V_prev * V_cur^-1) is no ring entry while the camera moves, yet it keeps the
-// scene camera's x scale with a unit w basis and orthogonal bases; no light or HUD matrix declared next to it does.
+// A pixel or compute shader's declared camera matrices (inverse or last frame's view-projection), matched at the right
+// draw since they precede the detector's ring: the scene camera's x scale, a unit w basis and orthogonal bases.
 static bool CameraFamily(const float* f, bool transposed)
 {
     const float scene = s_camP00 > 0.f ? s_camP00 : s_sceneP00;
@@ -4140,7 +4129,7 @@ HRESULT STDMETHODCALLTYPE Context11Proxy::Map(
         pMappedResource->RowPitch = pMappedResource->DepthPitch = (UINT)buf->RingSize();
         return S_OK;
     }
-    // Texture1D/3D too: our proxy passed through as a real resource had d3d11 dereference it (GTA V maps a volume LUT).
+    // Texture1D/3D too: d3d11 must get the real resource, never our proxy.
     ID3D11Resource*   realRes = UnwrapResourceForEye(pResource, false);
     HRESULT hr = m_real->Map(realRes, Subresource, MapType, MapFlags, pMappedResource);
     if (FAILED(hr) || !pMappedResource) return hr;
@@ -4177,7 +4166,7 @@ HRESULT STDMETHODCALLTYPE Context11Proxy::Map(
 }
 
 // The registers the bound VS reads as projection matrices at the slots this buffer occupies. boundToVS: it is bound to
-// that VS, so "none here" is final, as UE3 reuses one buffer per slot (BioShock Infinite's white flashes).
+// that VS, so "none here" is final, as UE3 reuses one buffer per slot.
 static void AnalyzerTargetsForCB(Device11Proxy* parent, void* boundVS,
                                  ID3D11Buffer* const* boundVSCBs,
                                  ID3D11Resource* pResource,

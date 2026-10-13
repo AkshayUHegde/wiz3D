@@ -4,7 +4,7 @@
 */
 
 // <WholeBufferRanges Value="1"/>: a slot bound whole and rebound through *SetConstantBuffers1 has its size rounded up to
-// 16 constants; 11.1 drops the whole call otherwise (Andromeda's point-light shadows kept the left buffers).
+// 16 constants, since 11.1 drops the whole call when a range is not a multiple of 16.
 
 #include "StdAfx.h"
 #include "ProfileFeature.h"

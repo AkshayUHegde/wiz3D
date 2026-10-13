@@ -233,7 +233,7 @@ bool PositionBuiltFromInputs(const shader_analyzer::TShaderList& shList, unsigne
         }
     };
     // Branches run from the state at their if and merge at the endif; in a loop a write only adds, and only a loop earns a
-    // second pass (one from the end's values gave Andromeda's flare rotation later constant-buffer terms).
+    // second pass, since one seeded from the end's values would mix later constant-buffer terms into earlier writes.
     for (int pass = 0; pass < (hasLoop ? 2 : 1); ++pass)
     {
         unsigned loops = 0;

@@ -517,7 +517,7 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateRenderTargetView(
 }
 
 // The device holds its immediate context for its lifetime, as D3D11 does: UE3 releases the one D3D11CreateDevice gave
-// it and fetches it again, which freed our proxy under a live device (BioShock Infinite faulted at device setup).
+// it and fetches it again later.
 void Device11Proxy::SetImmediateContextProxy(Context11Proxy* ctxProxy)
 {
     if (m_ctxProxy == ctxProxy) return;

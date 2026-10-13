@@ -207,7 +207,7 @@ private:
     ID3D11Device1*   m_real1;
     ID3D11Device2*   m_real2;
     ID3D11Device3*   m_real3;
-    Context11Proxy*  m_ctxProxy;       // not owned — created in dllmain, freed on Release chain
+    Context11Proxy*  m_ctxProxy;       // strong ref for the device's lifetime (SetImmediateContextProxy)
     DXGIDeviceProxy* m_dxgiDeviceProxy;// strong ref (released in ~Device11Proxy)
     CRITICAL_SECTION m_dxgiCacheLock;
     LONG             m_refs;

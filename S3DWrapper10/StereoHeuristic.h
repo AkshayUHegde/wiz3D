@@ -63,9 +63,7 @@ inline bool IsShadowFormat_Stage3(DXGI_FORMAT Format)
     }
 }
 
-// Render-target Texture2D: decides whether to double the resource for stereo.
-// Mirrors ResourceWrapper::IsStereoRenderTargetTexture (S3DWrapper10/
-// ResourceWrapper.cpp:207) at the COM layer.
+// Render-target Texture2D: whether to double it for stereo, as ResourceWrapper::IsStereoRenderTargetTexture does.
 // outReason names the first heuristic that vetoed doubling (diagnostics only).
 inline bool ShouldDoubleRenderTargetTexture(DXGI_FORMAT Format, UINT Width, UINT Height, const SIZE* pBBSize, const char** outReason = nullptr)
 {
@@ -107,11 +105,8 @@ inline bool ShouldDoubleDepthStencilTexture(UINT Width, UINT Height, const SIZE*
     return result;
 }
 
-// Helper: given a Texture2D desc, classify it as a render-target / depth-
-// stencil / neither, then dispatch to the matching heuristic. Returns true
-// if a right-eye sibling should be created. hasInitialData separates
-// resolve/copy destinations (never seeded) from ordinary material textures.
-// computePerEye: the profile's <ComputeOutputsPerEye>.
+// Whether a Texture2D gets a right-eye sibling: depth-stencil and render-target rules, then resolve/copy destinations
+// (created without initial data). computePerEye: the profile's <ComputeOutputsPerEye>.
 inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE* pBBSize, bool hasInitialData = false,
                                   const char** outReason = nullptr, bool computePerEye = false)
 {
@@ -121,9 +116,8 @@ inline bool ShouldDoubleTexture2D(const D3D11_TEXTURE2D_DESC* pDesc, const SIZE*
         return ShouldDoubleDepthStencilTexture(pDesc->Width, pDesc->Height, pBBSize, outReason);
     if ((pDesc->BindFlags & D3D11_BIND_RENDER_TARGET) != 0)
         return ShouldDoubleRenderTargetTexture(pDesc->Format, pDesc->Width, pDesc->Height, pBBSize, outReason);
-    // SRV-only textures created empty, MSAA ones included, are resolve/copy destinations: a mono one flattens both eyes
-    // to the left image downstream (BC2's MSAA resolve, BF3's G-buffer depth copy). The Resolve/Copy mirrors fill both.
-    // A block-compressed one is a streamed asset (never a render or resolve destination) and stays single.
+    // SRV-only textures created empty, MSAA ones included, are resolve/copy destinations (a mono one would flatten both
+    // eyes to the left image); the Resolve/Copy mirrors fill both. Block-compressed ones are streamed assets: single.
     if ((pDesc->BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0 &&
         (pDesc->BindFlags & D3D11_BIND_UNORDERED_ACCESS) == 0 &&
         pDesc->Usage == D3D11_USAGE_DEFAULT && !hasInitialData &&

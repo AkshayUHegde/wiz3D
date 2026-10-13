@@ -3,9 +3,8 @@
 * Copyright (C) Akshay Hegde 2026
 */
 
-// <VertexCameraMatrices Value="1"/>: a vertex shader's declared float4x4 outside its position chain is matched against
-// the camera, current or last frame's, at the right draw and shifted with it. 4A's per-object motion blur reads
-// mblur_previous beside m_VP: with the current clip shifted and the previous not, every moving object smears.
+// <VertexCameraMatrices Value="1"/>: a vertex shader's declared float4x4 outside its position chain that matches the
+// camera, current or last frame's, is shifted with it at the right draw (per-object motion blur's previous matrix).
 
 #include "StdAfx.h"
 #include "ProfileFeature.h"

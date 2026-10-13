@@ -1,9 +1,5 @@
-/* NvDirectMode - ID3D11DeviceContext proxy
- *
- * Stage 1b-i: passthrough wrapper. Stage 1b-iv hooks OMSetRenderTargets +
- * OMSetRenderTargetsAndUnorderedAccessViews to redirect viewport per active
- * eye when a wrapped backbuffer RTV is bound at slot 0.
- */
+/* wiz3D - ID3D11DeviceContext proxy
+ * Each stereo draw and dispatch runs again for the right eye, with right-eye copies bound and constants patched. */
 
 #pragma once
 
@@ -73,8 +69,7 @@ struct ShaderAnalysis11Result;
 class Context11Proxy : public ID3D11DeviceContext3
 {
 public:
-    // D3D11 spec maxima. Undersizing makes the runtime read past our unwrap
-    // arrays into stack garbage and AV (Metro 2033, Max Payne 3, De Blob).
+    // D3D11 spec maxima: smaller unwrap arrays let the runtime read past them into stack garbage.
     static constexpr UINT kMaxSRVs      = 128; // D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT
     static constexpr UINT kMaxSamplers  = 16;  // D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT
     static constexpr UINT kMaxCBs       = 15;  // D3D11_1_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT
@@ -291,15 +286,8 @@ public:
     void ClearFrameCommands();
     void ReplayFrameCommands(Eye eye);
 
-    // Stage 4b.4: gate for whether OMSet/state-setters actually push into
-    // m_frameCommands. Set true the first time SwapChain11Proxy's Present
-    // hook fires on our parent's swap chain (so we know the vector will be
-    // flushed each frame). Stays false for games whose swap chain bypasses
-    // us (e.g. D3D11CreateDevice + factory->CreateSwapChain), so we never
-    // accumulate an unbounded recording. The 4b.8 factory hook will close
-    // that gap; until then it's safer to skip recording than to leak.
-    // Refuses to arm while gInfo.DuplicateDraws is set — one gate keeps the
-    // whole record-and-replay path dormant without touching every state setter.
+    // Arms recording into m_frameCommands once our swap chain's Present runs, so the recording is flushed each frame.
+    // It never arms while gInfo.DuplicateDraws is set, which keeps the whole record-and-replay path dormant.
     void SetPresentHookActive(bool active);
     bool IsPresentHookActive() const { return m_presentHookActive; }
 
@@ -636,14 +624,8 @@ private:
     bool ClipSpaceDepthViews(ClipSpaceDepth& out);
     bool SceneZRowFromBoundVS(float& m22, float& m23);
 
-    // Stage 4e.2: VS binding snapshot for targeted CB stereo math. m_boundVS
-    // is the game's vertex shader pointer most recently set via VSSetShader.
-    // m_boundVSCBs[i] is the wrapped buffer pointer set at VS CB slot i via
-    // VSSetConstantBuffers. The shader is a lookup key only, not AddRef'd; each
-    // buffer holds a reference, since the draw path queries it (TryUnwrapBuffer).
-    // Used inside Unmap to ask Device11Proxy::LookupShaderProjection
-    // whether the bound VS has a known projection-matrix register in the CB
-    // being mapped, so per-eye writes target only that register.
+    // The bound vertex shader (a lookup key, not AddRef'd) and its constant buffers (referenced; the draw path queries
+    // them): Unmap shifts only the registers that shader reads as projection matrices in the buffer being written.
     static constexpr UINT kMaxVSCBSlots = 15;
     ID3D11VertexShader*  m_boundVS;
     ID3D11Buffer*        m_boundVSCBs[kMaxVSCBSlots];

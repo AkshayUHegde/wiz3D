@@ -1810,6 +1810,21 @@
 			<VertexShader CRC="0xEF5E807F" />
 		</Mono>
 	</Profile>
+	<Profile Name="NieR:Automata">
+		<File Name="NieRAutomata.exe" />
+		<File Name="NieRAutomataCompat.exe" />
+		<!-- The swap chain comes from CreateSwapChainForHwnd on a CreateDXGIFactory factory -->
+		<Factory2SwapChains Value="1"/>
+		<!-- Camera constants are written while a matrix-less shader is bound: patch each buffer for the shader about to draw -->
+		<PatchConstantsAtDraw Value="1"/>
+		<!-- The sun-shadow resolve and the light shafts rebuild world position as InvView * (depth * ndc / focal), a ray
+		     with no skew term: the right camera's origin and skew go into their view matrices -->
+		<RightCamera Buffer="SceneBuffer" InvView="g_ViewInverseMatrix" View="g_View" Projection="g_Proj"
+		             ViewProjection="g_ViewProjection" MoveOriginFor="g_Shadow_Tex" FocalRays="1"/>
+		<!-- The title's logo and vines are camera-facing cards a unit or two from the camera, far nearer than the
+		     convergence: in a menu they are the menu's own layers and sit at the screen -->
+		<HudSceneDepth MenuLayers="25" MinSceneDraws="200"/>
+	</Profile>
 	<Profile Name="Ryse: Son of Rome">
 		<File Name="Ryse.exe" />
 		<!-- CryEngine, 64-bit, deferred: lighting and the shadow mask rebuild position from depth in pixel-shader buffers -->

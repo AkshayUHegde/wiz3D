@@ -3,8 +3,8 @@
 * Copyright (C) Akshay Hegde 2026
 */
 
-// <HudSceneDepth Crosshair="r" Band="y0 y1" NearQuads="k"/>: a HUD piece, or a camera-facing quad parked within
-// k near planes (a world marker, a corona), takes the parallax of the left eye's scene depth at its centre.
+// <HudSceneDepth Crosshair="r" Band="y0 y1" NearQuads="k" MenuLayers="k"/>: a HUD piece, or a camera-facing quad within k
+// near planes (a world marker, a corona), takes the parallax of the scene depth at its centre; in a menu it sits at the screen.
 
 #include "StdAfx.h"
 #include <stdlib.h>
@@ -58,8 +58,8 @@ struct Layout
 class HudSceneDepthFeature : public ProfileFeature
 {
 public:
-    HudSceneDepthFeature(float crosshair, const float rect[4], unsigned minScene, float nearQuads)
-        : m_crosshair(crosshair), m_minScene(minScene), m_nearQuads(nearQuads)
+    HudSceneDepthFeature(float crosshair, const float rect[4], unsigned minScene, float nearQuads, float menuLayers)
+        : m_crosshair(crosshair), m_minScene(minScene), m_nearQuads(nearQuads), m_menuLayers(menuLayers)
     { for (int i = 0; i < 4; ++i) m_rect[i] = rect[i]; }
     ~HudSceneDepthFeature()
     {
@@ -110,22 +110,27 @@ public:
         m_bound = false;
         const bool overlay = ctx.OverlayPass();
         const ShaderAnalysis11Result* vs = ctx.BoundShader(false);
+        bool menuLayer = false;
         if (overlay)
         {
+            if (m_crosshair <= 0.f && !(m_rect[3] > m_rect[2])) return;   // no crosshair or band: the HUD stays as drawn
             ++m_hudDraws;
             if (m_sceneDraws < m_minScene) { ++m_menuDraws; return; }
         }
         else
         {
-            // A one-quad draw of a camera-matrix shader; the geometry shader tests each triangle for the near plane.
-            if (!(m_nearQuads > 0.f) || ctx.DrawVertices() > 6 || !vs || !vs->parsed || vs->projection.matrixData.cb.empty())
+            // A one-quad draw of a camera-matrix shader; the geometry shader tests each triangle for the near plane. In a menu
+            // (last frame drew fewer scene draws than MinSceneDraws) such a quad is the menu's own layer (NieR's title logo).
+            menuLayer = m_menuLayers > 0.f && m_lastSceneDraws < m_minScene;
+            if (!(menuLayer || m_nearQuads > 0.f) || ctx.DrawVertices() > 6 || !vs || !vs->parsed ||
+                vs->projection.matrixData.cb.empty())
                 return;
             ++m_quadDraws;
         }
         const D3D11_PRIMITIVE_TOPOLOGY topo = ctx.Topology();
         float m22 = 0.f, m23 = 0.f;
         const float p00 = stereo::SceneP00();
-        if (!vs || !m_scene || m_sceneFrame != m_frame || ctx.GeometryStageBound() || !(p00 > 0.f) ||
+        if (!vs || (!menuLayer && (!m_scene || m_sceneFrame != m_frame)) || ctx.GeometryStageBound() || !(p00 > 0.f) ||
             !stereo::SceneZRow(m22, m23) ||
             (topo != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST && topo != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP))
         { ++(overlay ? m_skipped : m_quadSkipped); return; }
@@ -133,7 +138,8 @@ public:
         const float zn = m23 < 0.f ? -m23 / m22 : m23 / (1.f - m22);
         if (!overlay && !(zn > 0.f && zn < 1e30f)) { ++m_quadSkipped; return; }
         ID3D11GeometryShader* gs = Shader(ctx, *vs);
-        if (!gs || !DepthCopy(ctx)) { ++(overlay ? m_skipped : m_quadSkipped); return; }
+        // A menu layer only loses the camera's shift: no scene depth is read.
+        if (!gs || !(menuLayer ? ConstantBuffer(ctx) : DepthCopy(ctx))) { ++(overlay ? m_skipped : m_quadSkipped); return; }
         // shift(z) = b + m41 / w with w = m23 / (z - m22): linear in the stored depth z, bounded by 0.25 units and infinity.
         const float eyeShift = wiz3D_GetEffectiveEyeShift() * ctx.EyeShiftSign();
         const float b = eyeShift * p00, m41 = -b * stereo::Convergence();
@@ -141,9 +147,9 @@ public:
         // A near quad's right vertices carry the camera's own clip-space shift b * w + m41, taken off before its new one.
         const float k[20] = { b - m41 * m22 / m23, m41 / m23, (std::min)(nearShift, b), (std::max)(nearShift, b),
                               (float)m_w, (float)m_h, b < 0.f ? -1.f : 1.f, kFullScreen,
-                              m_crosshair, (float)m_w / (float)m_h, overlay ? 0.f : 1.f, 0.f,
+                              m_crosshair, (float)m_w / (float)m_h, overlay ? 0.f : 1.f, menuLayer ? 1.f : 0.f,
                               m_rect[0], m_rect[1], m_rect[2], m_rect[3],
-                              b, m41, zn * 0.99f, zn * m_nearQuads };
+                              b, m41, zn * 0.99f, zn * (menuLayer ? m_menuLayers : m_nearQuads) };
         D3D11_MAPPED_SUBRESOURCE map = {};
         if (FAILED(ctx.Real()->Map(m_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map)) || !map.pData) { ++m_skipped; return; }
         memcpy(map.pData, k, sizeof k);
@@ -154,7 +160,7 @@ public:
         ctx.Real()->GSSetConstantBuffers(0, 1, &m_cb);
         ctx.Real()->GSSetShaderResources(0, 1, &m_srv);
         m_bound = true;
-        ++(overlay ? m_shifted : m_quadTested);
+        ++(overlay ? m_shifted : menuLayer ? m_menuLayerTested : m_quadTested);
     }
 
     // The game had no geometry shader bound: it goes back to none, its slot 0 bindings as they were.
@@ -175,10 +181,11 @@ public:
         if (report)
             DDILog("  [frame %u] hud scene depth (this frame): HUD draws %u, given the scene depth %u, flat in a menu %u (scene"
                    " draws %u), left as drawn %u (no scene depth, camera or usable shader) | one-quad camera draws %u, tested"
-                   " for the near plane %u, left as drawn %u\n", frame, m_hudDraws, m_shifted, m_menuDraws, m_sceneDraws,
-                   m_skipped, m_quadDraws, m_quadTested, m_quadSkipped);
+                   " for the near plane %u, as menu layers %u, left as drawn %u\n", frame, m_hudDraws, m_shifted, m_menuDraws,
+                   m_sceneDraws, m_skipped, m_quadDraws, m_quadTested, m_menuLayerTested, m_quadSkipped);
+        m_lastSceneDraws = m_sceneDraws;
         m_hudDraws = m_shifted = m_skipped = m_menuDraws = m_sceneDraws = 0;
-        m_quadDraws = m_quadTested = m_quadSkipped = 0;
+        m_quadDraws = m_quadTested = m_quadSkipped = m_menuLayerTested = 0;
     }
 
 private:
@@ -187,9 +194,11 @@ private:
     static constexpr float kFullScreen = 1.9f;
     unsigned m_minScene;                          // fewer scene draws before the HUD = a menu, left flat
     float    m_nearQuads;                         // near-plane multiples a quad may sit within, 0 = off
-    unsigned m_quadDraws = 0, m_quadTested = 0, m_quadSkipped = 0;
+    float    m_menuLayers;                        // the same for a menu's own layers, which sit at the screen; 0 = off
+    unsigned m_quadDraws = 0, m_quadTested = 0, m_quadSkipped = 0, m_menuLayerTested = 0;
     unsigned m_sceneFrame = ~0u;                  // the frame the scene depth was last bound
     unsigned m_sceneDraws = 0, m_menuDraws = 0;
+    unsigned m_lastSceneDraws = ~0u;              // the previous frame's scene draws (unknown = not a menu)
     std::map<DWORD, ID3D11GeometryShader*> m_gs;   // per HUD vertex shader, null = unbuildable (m_bySource holds them)
     std::map<std::string, Layout> m_bySource;      // per generated source
     ID3D11Buffer*             m_cb = nullptr;
@@ -230,16 +239,23 @@ private:
             FeatureLog("  HudSceneDepth: scene depth %ux%u fmt %u -> copy hr=0x%08lX\n", d.Width, d.Height, (unsigned)d.Format,
                        (unsigned long)hr);
         }
+        const bool cb = ConstantBuffer(ctx);
+        if (!m_srv || !cb) return false;
+        if (m_copiedFrame != m_frame) { ctx.Real()->CopyResource(m_copy, m_scene); m_copiedFrame = m_frame; }
+        return true;
+    }
+
+    // The geometry shader's constants, made on first use.
+    bool ConstantBuffer(Context11Proxy& ctx)
+    {
         if (!m_cb)
         {
             D3D11_BUFFER_DESC bd = {};
             bd.ByteWidth = 80; bd.Usage = D3D11_USAGE_DYNAMIC; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
             bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-            if (FAILED(dev->CreateBuffer(&bd, nullptr, &m_cb))) m_cb = nullptr;
+            if (FAILED(ctx.Parent()->GetReal()->CreateBuffer(&bd, nullptr, &m_cb))) m_cb = nullptr;
         }
-        if (!m_srv || !m_cb) return false;
-        if (m_copiedFrame != m_frame) { ctx.Real()->CopyResource(m_copy, m_scene); m_copiedFrame = m_frame; }
-        return true;
+        return m_cb != nullptr;
     }
 
     // The geometry shader over a HUD vertex shader's outputs as declared; null when one is a system value beside the position.
@@ -293,12 +309,12 @@ private:
             "    float2 c = (e0 + e1) * 0.5, ext = abs(e1 - e0);\n"
             "    float s = 0;\n"
             "    if (!use || (wiz3D_sel.z == 0 && min(ext.x, ext.y) >= wiz3D_size.w)) u = 0;\n"
-            "    else if (wiz3D_sel.z > 0) s = wiz3D_nearest(c);\n"
+            "    else if (wiz3D_sel.z > 0) s = %s;\n"
             "    else if (wiz3D_sel.x > 0 && length(c * a) < wiz3D_sel.x) s = wiz3D_shift(float2(0, 0));\n"
             "    else if (c.x > wiz3D_rect.x && c.x < wiz3D_rect.y && c.y > wiz3D_rect.z && c.y < wiz3D_rect.w) s = wiz3D_nearest(c);\n"
             "    [unroll] for (int n = 0; n < 3; ++n)\n    {\n        V v = i[n];\n"
             "        v.wiz3D_POS.x += s * v.wiz3D_POS.w - u[n];\n        o.Append(v);\n    }\n}\n",
-            pos);
+            pos, m_menuLayers > 0.f ? "wiz3D_sel.w > 0 ? 0 : wiz3D_nearest(c)" : "wiz3D_nearest(c)");
         src += body;
         // The source depends only on the vertex shader's outputs, which many materials share: one build per layout, compiled
         // on a worker; the shader is created here, as the game's device may be single-threaded.
@@ -352,10 +368,11 @@ std::unique_ptr<ProfileFeature> MakeHudSceneDepth(const ProfileEntry* e)
     else if (n == 1) { rect[2] = -v[0]; rect[3] = v[0]; }
     const bool region = rect[3] > rect[2];
     const float nearQuads = (float)atof(EntryValue(*e, "NearQuads").c_str());
-    if (crosshair <= 0.f && !region && !(nearQuads > 0.f)) return nullptr;
+    const float menuLayers = (float)atof(EntryValue(*e, "MenuLayers").c_str());
+    if (crosshair <= 0.f && !region && !(nearQuads > 0.f) && !(menuLayers > 0.f)) return nullptr;
     const std::string minScene = EntryValue(*e, "MinSceneDraws");
     return std::unique_ptr<ProfileFeature>(new HudSceneDepthFeature(crosshair, rect,
-        minScene.empty() ? 200u : (unsigned)atoi(minScene.c_str()), nearQuads));
+        minScene.empty() ? 200u : (unsigned)atoi(minScene.c_str()), nearQuads, menuLayers));
 }
 
 } // namespace wiz3d

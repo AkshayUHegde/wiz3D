@@ -1,14 +1,5 @@
-/* wiz3D - ID3D11Buffer proxy (Option B Stage 3c.1)
- *
- * Passthrough wrap of ID3D11Buffer. Carries a sticky "ever bound to a
- * vertex-pipeline stage" flag the Stage 4c projection-matrix heuristic
- * uses to filter PS-only / CS-only CBs out of the eye-shift modify path.
- *
- * Buffers are not stereo-doubled — there's no analogue to a right-eye RT
- * for a buffer (Stage 4c modifies CB bytes per eye via Map/Unmap instead).
- * So unlike Texture2D11Proxy this is just identity + metadata, single real
- * pointer.
- */
+/* wiz3D - ID3D11Buffer proxy
+ * A constant or UAV buffer's right-eye copy, and the game's bytes and matrix targets its right constants come from. */
 
 #pragma once
 
@@ -162,7 +153,7 @@ public:
     }
     void NoteMovedWrite() { ++m_movedSeq; }
 
-    // Inverse-detection backoff: a buffer that keeps scanning clean is rescanned only sparsely (BioShock Infinite).
+    // Inverse-detection backoff: a buffer that keeps scanning clean is rescanned only sparsely.
     bool ShouldScanForInverse()
     {
         const unsigned n = m_invScans++;

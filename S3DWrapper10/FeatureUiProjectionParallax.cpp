@@ -3,9 +3,8 @@
 * Copyright (C) Akshay Hegde 2026
 */
 
-// <UiProjectionParallax Value="1"/>: a clean projection whose focal lies beyond 2x from the scene camera's is a UI
-// projection, not another FOV (a weapon's stays within), and its draw takes the scene camera's parallax. 4A's 3D menu
-// draws the selected item with its own projection; it moved a seventh as far as the others.
+// <UiProjectionParallax Value="1"/>: a clean projection whose focal is over 2x the scene camera's is a UI projection,
+// not another FOV (a weapon's stays within); its draw takes the scene camera's parallax (4A's 3D menu items).
 
 #include "StdAfx.h"
 #include "ProfileFeature.h"

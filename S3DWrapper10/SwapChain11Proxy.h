@@ -41,8 +41,8 @@ namespace wiz3d
 class Device11Proxy;
 class Texture2D11Proxy;
 
-// IDXGISwapChain4, so QI for SwapChain2/3/4 returns `this`: handing back the real chain let Win11-era games (GTA V)
-// Present and GetBuffer behind our back, mixing real and wrapped back buffers.
+// IDXGISwapChain4, so QI for SwapChain2/3/4 returns `this`: a game handed the real chain would Present and GetBuffer
+// past the proxy, mixing real and wrapped back buffers.
 class SwapChain11Proxy : public IDXGISwapChain4
 {
 public:

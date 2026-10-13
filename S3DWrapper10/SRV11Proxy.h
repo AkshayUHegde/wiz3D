@@ -40,7 +40,7 @@ public:
     ID3D11ShaderResourceView*  GetRealRight()  const { return m_realRight; }
     Device11Proxy*             GetParent()     const { return m_parent;    }
     // The viewed Texture2D proxy, when the view is of one: per-eye binding asks it whether its right copy holds anything.
-    // Held by reference: the game drops its own once the view exists (Metro's level load crashed on the freed proxy).
+    // Held by reference: a game may release its texture once the view exists.
     void                       SetTexture(Texture2D11Proxy* t);
     Texture2D11Proxy*          Texture()       const { return m_texture;   }
 
