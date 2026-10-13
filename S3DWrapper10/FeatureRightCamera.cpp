@@ -4,7 +4,7 @@
 */
 
 // <RightCamera Buffer Position InvView View Projection InvProjection ViewProjection RelativeViewProjection MoveOriginFor
-// CameraFrom NearPlane/>: the right eye's copy of a per-view block describes the right camera (see Transform).
+// CameraFrom NearPlane FocalRays/>: the right eye's copy of a per-view block describes the right camera (see Transform).
 
 #include "StdAfx.h"
 #include "ProfileFeature.h"
@@ -77,7 +77,8 @@ public:
           m_invView(EntryValue(e, "InvView")), m_view(EntryValue(e, "View")), m_proj(EntryValue(e, "Projection")),
           m_invProj(EntryValue(e, "InvProjection")), m_viewProj(EntryValue(e, "ViewProjection")),
           m_relVP(SplitNames(EntryValue(e, "RelativeViewProjection"))), m_moveOriginFor(SplitNames(EntryValue(e, "MoveOriginFor"))),
-          m_cameraFrom(EntryValue(e, "CameraFrom")), m_nearPlanes(SplitNames(EntryValue(e, "NearPlane"))) {}
+          m_cameraFrom(EntryValue(e, "CameraFrom")), m_nearPlanes(SplitNames(EntryValue(e, "NearPlane"))),
+          m_focalRays(EntryValue(e, "FocalRays") == "1") {}
 
     void OnShaderCreated(const RdefView& rdef, ShaderAnalysis11Result& info) const override
     {
@@ -113,10 +114,11 @@ public:
         s_layout.known = true;
         FeatureLog("  RightCamera: %s (cb%d in CRC=0x%08lX): positions %u, InvView +%d, View +%d, Projection +%d,"
                " InvProjection +%d, ViewProjection +%d, relative VPs %u, near planes %u; origin moved for passes reading %u"
-               " name(s); camera from %s\n",
+               " name(s)%s; camera from %s\n",
                m_buffer.c_str(), slot, info.crc32, (unsigned)s_layout.positions.size(), s_layout.invView, s_layout.view,
                s_layout.proj, s_layout.invProj, s_layout.viewProj, (unsigned)s_layout.relVP.size(),
                (unsigned)s_layout.nearPlanes.size(), (unsigned)m_moveOriginFor.size(),
+               m_focalRays ? " (focal rays: only theirs, skew in the view)" : "",
                s_layout.fromRelVP ? "the relative view-projection" : "Projection / InvView");
     }
 
@@ -130,6 +132,8 @@ public:
     bool EditRightConstants(Context11Proxy& ctx, const std::string& cbuffer, unsigned char* data, size_t size) override
     {
         if (cbuffer != m_buffer || !s_layout.known) return false;
+        // FocalRays: screen passes rebuild from their own eye's depth with the game's projection; position chains are the core's.
+        if (m_focalRays && !ctx.MovedOrigin()) return false;
         if (!Transform(ctx, data, size, wiz3D_GetEffectiveEyeShift() * ctx.EyeShiftSign(), ctx.MovedOrigin())) return false;
         ++(ctx.MovedOrigin() ? m_moved : ctx.EditAtDispatch() ? m_atDispatch : m_atDraw);
         return true;
@@ -169,6 +173,7 @@ private:
     std::vector<std::string> m_moveOriginFor;
     std::string              m_cameraFrom;
     std::vector<std::string> m_nearPlanes;
+    bool                     m_focalRays = false;
     std::map<int, PerP00>    m_byP00;   // this frame's moved cameras, by p00 in thousandths
     CameraMove               m_scene;
     bool                     m_sceneValid = false;
@@ -253,10 +258,20 @@ private:
             // The skew moves a near-plane quad by b in NDC; |b| wider, it still spans [-1, 1].
             for (UINT n : s_layout.nearPlanes) if (n + 4 <= size) *(float*)(data + n) *= 1.f + fabsf(b);
         }
-        if (float* x = row(s_layout.proj, 0)) if (float* w = row(s_layout.proj, 3)) { for (int k = 0; k < 4; ++k) x[k] += b * w[k]; x[3] += t; }
+        // FocalRays: the ray (depth * ndc / focal) has no skew term, so the view takes it: x_view = x_ray + skew*z, with
+        // w = P3.z * z; InvView * S and S^-1 * View, the projection left as the game's.
+        const bool skewInView = movedOrigin && m_focalRays && haveP;
+        if (skewInView)
+        {
+            const float skew = -eyeShift * (float)P[3][2];
+            for (int r = 0; r < 3; ++r) if (float* iv = row(s_layout.invView, r)) iv[2] += skew * iv[0];
+            if (float* v0 = row(s_layout.view, 0)) if (float* v2 = row(s_layout.view, 2)) for (int k = 0; k < 4; ++k) v0[k] -= skew * v2[k];
+        }
+        if (!skewInView)
+            if (float* x = row(s_layout.proj, 0)) if (float* w = row(s_layout.proj, 3)) { for (int k = 0; k < 4; ++k) x[k] += b * w[k]; x[3] += t; }
         if (movedOrigin)
         {
-            for (int r = 0; r < 4; ++r) if (float* ip = row(s_layout.invProj, r)) ip[3] -= b * ip[0];
+            if (!skewInView) for (int r = 0; r < 4; ++r) if (float* ip = row(s_layout.invProj, r)) ip[3] -= b * ip[0];
         }
         else if (haveP && row(s_layout.invProj, 3))
         {

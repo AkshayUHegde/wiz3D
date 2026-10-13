@@ -58,13 +58,13 @@ inline float InverseProductDeviation(const float* c, const float* v, int i, int 
         mag += fabsf(t);
     }
     const float target = (i == j) ? 1.f : 0.f;
-    // Twice the Frostbite bound: UE3 folds viewport terms into its screen-to-world (BioShock Infinite sat just
-    // outside). True pairs score far below 1 and junk far above, so the margin is wide.
+    // Twice the Frostbite bound: UE3 folds viewport terms into its screen-to-world. True pairs score far below 1 and
+    // junk far above, so the margin is wide.
     return fabsf(acc - target) / (2e-4f * mag + 4e-3f);
 }
 
 // A NaN never raises the max-accumulated deviation (every comparison with it is false), so a NaN-filled block would
-// pass (Far Cry 3): non-finite blocks are rejected.
+// pass: non-finite blocks are rejected.
 inline bool AllFinite16(const float* f)
 {
     for (int i = 0; i < 16; ++i)
@@ -153,7 +153,7 @@ struct StereoMatrixState
 
     // Advanced once per present; entries older than kMaxAge cannot match.
     unsigned frameId = 0;
-    // In presents, and a game can present more than once per frame: at 1, entries expired mid-frame (GTA V).
+    // In presents, and a game can present more than once per frame, so 1 would expire entries mid-frame.
     static const unsigned kMaxAge = 4;
 
     bool EntryUsable(const CachedForwardVP& e, unsigned maxAge) const
@@ -328,7 +328,7 @@ struct StereoMatrixState
     }
 
     // A learned inverse is re-checked at each write: pooled buffers are reused for unrelated content, and a stale
-    // target smears the shear across arbitrary constants (Far Cry 3's flashes). The camera's re-passes trivially.
+    // target smears the shear across arbitrary constants. The camera's re-passes trivially.
     bool VerifyInverseAgainstRing(const float* f, bool transposed, bool* outShapeReject = nullptr) const
     {
         if (!AllFinite16(f)) { if (outShapeReject) *outShapeReject = true; return false; }
@@ -337,9 +337,8 @@ struct StereoMatrixState
         return MatchInverse(cand, nullptr, outShapeReject);
     }
 
-    // Exact inverse of x += b*w - b*conv: P_r = P + w.e0^T is a rank-1 update of column 0, so by Sherman-Morrison the
-    // correction K = P_r^-1 * P subtracts a multiple of row 0 from every row. conv == 0 leaves the shear only.
-    // p00 > 0: the inverted camera's own focal, for b; 0 takes the last cached one.
+    // Exact inverse of x += b*w - b*conv, a rank-1 update of column 0 (Sherman-Morrison): K = P_r^-1 * P subtracts a
+    // multiple of row 0 from every row; conv == 0 leaves the shear. b uses p00 when > 0, else the cached focal.
     void PatchInverse(float* f, bool transposed, float eyeShift, float conv, float p00 = 0.f) const
     {
         const float b = p00 > 0.f ? eyeShift * p00 : EyeShiftB(eyeShift);

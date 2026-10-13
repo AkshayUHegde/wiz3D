@@ -233,10 +233,8 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
     td.Format           = m_bbFormat;
     td.SampleDesc.Count = 1;
     td.Usage            = D3D11_USAGE_DEFAULT;
-    // RT so the game (left) + replay (right) can draw into them, SRV so
-    // the composite pass can sample them. UAV when the game asked the swap
-    // chain for it (Frostbite 3 writes its final pass through a UAV on the
-    // back buffer; Mass Effect Andromeda aborts on CreateUnorderedAccessView).
+    // RT so both eyes draw into them, SRV so the output pass samples them, UAV when the game asked the swap chain for
+    // one (Frostbite 3 writes its final pass through a UAV on the back buffer; Andromeda stops without one).
     td.BindFlags        = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     if (desc.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) td.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
@@ -445,7 +443,7 @@ bool SwapChain11Proxy::EnsureCompositeState()
 
 void SwapChain11Proxy::DoComposite()
 {
-    // Stage 4d: the output pass runs on the real context in a context state of its own, so the game's state comes back
+    // The output pass runs on the real context in a context state of its own, so the game's state comes back
     // exactly as it was (the proxy's tracking stays true).
     if (!m_parent || !m_realBBRTV || !m_leftSRV || !m_rightSRV) return;
     if (FAILED(EnsureComposite())) return;
@@ -694,20 +692,8 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
 {
     if (FrameTraceActive())
         FrameTrace("\n=== Present #%d PRE ===\n", s_FramePresentCounter);
-    // Stage 4b.8: PRE-PRESENT sweep. The game has already issued frame N's
-    // state setters and draws — those ran for the left eye via the direct
-    // passthrough in each proxy method. When UseCOMWrapReplay=1 we re-issue
-    // the recorded command stream with m_activeEye=Right so OMSet/Clear/
-    // Update/Copy/Resolve helpers bind right-eye real handles. After this,
-    // the left-eye and right-eye textures both hold their per-eye images,
-    // ready for the 4d SBS composite to flatten into the swap-chain BB.
-    //
-    // Gated behind UseCOMWrapReplay (default off) because:
-    //   - Recorded handles can dangle across ResizeBuffers / SetFullscreen
-    //     (Max Payne 3 fullscreen toggle crashes inside d3d11.dll during
-    //     replay because BB-derived RTVs have been invalidated).
-    //   - Right-eye textures aren't displayed yet (no 4c stereo math, no
-    //     4d composite) so the replay has no visible benefit, only risk.
+    // Before Present, under UseCOMWrapReplay (on by default): a recorded frame replays for the right eye when recording
+    // is armed (never under DuplicateDraws), then both eyes are composited into the back buffer.
     if (!gInfo.UseCOMWrapReplay) return;
     if (!m_parent) return;
     Context11Proxy* ctx = m_parent->GetContextProxy();
@@ -718,10 +704,7 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
     if (FrameTraceActive())
         FrameTrace("--- composite start ---\n");
 
-    // Stage 4d: composite the left + right BB siblings into the real BB.
-    // Coupled to UseCOMWrapReplay because without the replay there's no
-    // right-eye content to composite. Skipped silently if the wrapped BB
-    // wasn't allocated (game took some non-standard GetBuffer path).
+    // Both eyes into the real back buffer; skipped if the wrapped back buffer was never allocated.
     DoComposite();
     if (FrameTraceActive())
         FrameTrace("--- composite end ---\n");

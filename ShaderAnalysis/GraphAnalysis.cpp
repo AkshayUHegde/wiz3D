@@ -382,8 +382,7 @@ bool GetProjectionMatrix( const TShaderList& shList,
 	(void)retInstr;
 	auto& retCBInstr = shList[curRetCB.commandIndex];
 	// The convention is the constant buffer's consumer's (dp4 of a whole register: a row; mul/mad by one component: a
-	// column), not that of a later scale of the result (Metro's sun glow and sky: dp4, then mul; the row shift went
-	// into all four registers and bent the quad's depth).
+	// column), not that of a later scale of the result (a dp4 followed by a mul is still a row).
 	D3D10_SB_OPCODE_TYPE opType = retCBInstr.getOperation()->getType();
 #ifdef _DEBUG
 	std::string strCB = retCBInstr.toString();

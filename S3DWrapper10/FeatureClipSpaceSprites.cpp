@@ -3,9 +3,8 @@
 * Copyright (C) Akshay Hegde 2026
 */
 
-// <ClipSpaceSprites Value="1"/>: a draw whose vertex shader passes CPU-projected NDC through (w = 1: Frostbite's lens
-// flares and glows) moves for the right eye by the eye offset at the depth under it. Value="2": every such sprite at
-// infinity. Value="3": as 2, and a sprite built from a world position it reads moves by that depth (SpriteDepth11 twin).
+// <ClipSpaceSprites Value="1|2|3"/>: a vertex shader passing CPU-projected NDC (Frostbite's flares) moves for the right
+// eye by the eye offset at the depth under it; 2 = at infinity; 3 = as 2, plus world-position sprites at their depth.
 
 #include "StdAfx.h"
 #include <stdlib.h>
