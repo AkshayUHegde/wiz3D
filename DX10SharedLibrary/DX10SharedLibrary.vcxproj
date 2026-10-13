@@ -214,6 +214,9 @@
     <ClCompile Include="..\S3DWrapper10\FeatureIndirectArgsPerEye.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureCameraInverses.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureCodeMatrices.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureFactory2SwapChains.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureHudSceneDepth.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureStereoScissor.cpp" />
     <ClCompile Include="..\S3DWrapper10\DeferredContext11.cpp" />
     <ClCompile Include="..\S3DWrapper10\SpriteDepth11.cpp" />
     <ClCompile Include="..\S3DWrapper10\ShaderPatch11.cpp" />

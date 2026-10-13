@@ -389,13 +389,16 @@ STDMETHODIMP CreateSwapChain( IDXGIFactory* This, IUnknown *pDevice, DXGI_SWAP_C
 	return hResult;
 }
 
-// One place to install the slot-10 hook, so the two CreateDXGIFactory entry
-// points can't disagree about which factory IIDs deserve it.
+static void HookFactory2SwapChainSlots(void* pFactory);   // slots 15, 16 and 24, defined beside their hooks below
+
+// One place to install the swap-chain hooks, so the CreateDXGIFactory entry
+// points can't disagree about which factory IIDs deserve them.
 static void HookFactorySwapChainSlot(void* pFactory)
 {
 	if (!pFactory) return;
 	void** vt = *(void***)pFactory;
 	HookCode(vt[10], CreateSwapChain, (PVOID*)&Original_CreateSwapChain, HOOKING_FLAG);
+	HookFactory2SwapChainSlots(pFactory);
 }
 
 STDMETHODIMP Hooked_CreateDXGIFactory(REFIID riid, void **ppFactory, HMODULE hCallingModule)
@@ -479,6 +482,13 @@ HRESULT (STDMETHODCALLTYPE *Original_CreateSwapChainForComposition)(
     IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain) = NULL;
 
+namespace wiz3d { bool Factory2SwapChainsOn(); }   // FeatureFactory2SwapChains.cpp
+
+// A game that called CreateDXGIFactory2 has these swap chains wrapped; one whose factories come from CreateDXGIFactory
+// or CreateDXGIFactory1 only under its profile's <Factory2SwapChains> (Mass Effect LE), else they pass through.
+static bool s_factory2Entry = false;
+static bool WrapFactory2SwapChains() { return s_factory2Entry || wiz3d::Factory2SwapChainsOn(); }
+
 // Shared device-probe + wrap path. Pulled out of the slot-10 CreateSwapChain
 // body so the new Factory2 hooks don't redundantly duplicate ~40 lines each.
 // On entry *ppSC is the real swap chain from the runtime. On exit it points
@@ -537,6 +547,8 @@ STDMETHODIMP CreateSwapChainForHwnd(IDXGIFactory2* This, IUnknown* pDevice, HWND
     IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain)
 {
+    if (!WrapFactory2SwapChains())
+        return Original_CreateSwapChainForHwnd(This, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
     WrapperLog("\nCreateSwapChainForHwnd ENTER (Width=%u, Height=%u, Format=%d)\n",
         pDesc ? pDesc->Width : 0, pDesc ? pDesc->Height : 0,
         pDesc ? (int)pDesc->Format : -1);
@@ -561,6 +573,8 @@ STDMETHODIMP CreateSwapChainForCoreWindow(IDXGIFactory2* This, IUnknown* pDevice
     IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain)
 {
+    if (!WrapFactory2SwapChains())
+        return Original_CreateSwapChainForCoreWindow(This, pDevice, pWindow, pDesc, pRestrictToOutput, ppSwapChain);
     WrapperLog("\nCreateSwapChainForCoreWindow ENTER\n");
     HRESULT hr = Original_CreateSwapChainForCoreWindow(This, pDevice, pWindow,
         pDesc, pRestrictToOutput, ppSwapChain);
@@ -578,6 +592,8 @@ STDMETHODIMP CreateSwapChainForComposition(IDXGIFactory2* This, IUnknown* pDevic
     IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain)
 {
+    if (!WrapFactory2SwapChains())
+        return Original_CreateSwapChainForComposition(This, pDevice, pDesc, pRestrictToOutput, ppSwapChain);
     WrapperLog("\nCreateSwapChainForComposition ENTER\n");
     HRESULT hr = Original_CreateSwapChainForComposition(This, pDevice, pDesc,
         pRestrictToOutput, ppSwapChain);
@@ -588,6 +604,20 @@ STDMETHODIMP CreateSwapChainForComposition(IDXGIFactory2* This, IUnknown* pDevic
         *ppSwapChain = static_cast<IDXGISwapChain1*>(sc);
     }
     return hr;
+}
+
+// Slots 15/16/24 exist on IDXGIFactory2 and later only, probed by QI whichever entry point made the factory.
+static void HookFactory2SwapChainSlots(void* pFactory)
+{
+    IDXGIFactory2* asF2 = NULL;
+    if (FAILED(static_cast<IUnknown*>(pFactory)->QueryInterface(__uuidof(IDXGIFactory2), reinterpret_cast<void**>(&asF2))) ||
+        !asF2)
+        return;
+    void** vt2 = *(void***)asF2;
+    HookCode(vt2[15], CreateSwapChainForHwnd, (PVOID*)&Original_CreateSwapChainForHwnd, HOOKING_FLAG);
+    HookCode(vt2[16], CreateSwapChainForCoreWindow, (PVOID*)&Original_CreateSwapChainForCoreWindow, HOOKING_FLAG);
+    HookCode(vt2[24], CreateSwapChainForComposition, (PVOID*)&Original_CreateSwapChainForComposition, HOOKING_FLAG);
+    asF2->Release();
 }
 
 typedef HRESULT (STDMETHODCALLTYPE *PFNCREATEDXGIFACTORY2)(UINT Flags, REFIID riid, void **ppFactory);
@@ -615,26 +645,8 @@ STDMETHODIMP Hooked_CreateDXGIFactory2(UINT Flags, REFIID riid, void **ppFactory
     if (FAILED(hResult) || !ppFactory || !*ppFactory)
         return hResult;
 
-    // Always patch slot 10 (legacy CreateSwapChain) — it's on every factory.
-    void** vt = *(void***)(*ppFactory);
-    HookCode(vt[10], CreateSwapChain, (PVOID*)&Original_CreateSwapChain, HOOKING_FLAG);
-
-    // Slot 15/16/24 only exist on IDXGIFactory2+. Probe the returned factory
-    // via QI; bail out if it's just a Factory/Factory1 even though the entry
-    // was called via CreateDXGIFactory2.
-    IDXGIFactory2* asF2 = NULL;
-    if (SUCCEEDED((*(IUnknown**)ppFactory)->QueryInterface(__uuidof(IDXGIFactory2),
-                                                            reinterpret_cast<void**>(&asF2)))
-        && asF2)
-    {
-        void** vt2 = *(void***)asF2;
-        HookCode(vt2[15], CreateSwapChainForHwnd,
-                 (PVOID*)&Original_CreateSwapChainForHwnd, HOOKING_FLAG);
-        HookCode(vt2[16], CreateSwapChainForCoreWindow,
-                 (PVOID*)&Original_CreateSwapChainForCoreWindow, HOOKING_FLAG);
-        HookCode(vt2[24], CreateSwapChainForComposition,
-                 (PVOID*)&Original_CreateSwapChainForComposition, HOOKING_FLAG);
-        asF2->Release();
-    }
+    // Slot 10, and 15/16/24 on an IDXGIFactory2; this entry's Factory2 swap chains are always wrapped.
+    s_factory2Entry = true;
+    HookFactorySwapChainSlot(*ppFactory);
     return hResult;
 }

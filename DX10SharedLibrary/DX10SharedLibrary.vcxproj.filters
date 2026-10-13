@@ -815,6 +815,15 @@
     <ClCompile Include="..\S3DWrapper10\FeatureCodeMatrices.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureFactory2SwapChains.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureHudSceneDepth.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureStereoScissor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\DeferredContext11.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

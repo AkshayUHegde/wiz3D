@@ -255,6 +255,9 @@ ProfileFeatures CreateProfileFeatures()
         { "IndirectArgsPerEye",   &MakeIndirectArgsPerEye, false },
         { "CameraInverses",       &MakeCameraInverses,     false },
         { "CodeMatrices",         &MakeCodeMatrices,       false },
+        { "Factory2SwapChains",   &MakeFactory2SwapChains, false },
+        { "HudSceneDepth",        &MakeHudSceneDepth,      false },
+        { "StereoScissor",        &MakeStereoScissor,      false },
     };
     static std::once_flag s_checked;
     std::vector<std::string> problems;
