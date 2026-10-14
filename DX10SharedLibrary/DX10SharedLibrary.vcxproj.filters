@@ -812,6 +812,9 @@
     <ClCompile Include="..\S3DWrapper10\FeaturePixelRayBasis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureDeferredLightCamera.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\FeatureRawResources.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

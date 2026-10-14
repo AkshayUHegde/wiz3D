@@ -249,6 +249,7 @@ ProfileFeatures CreateProfileFeatures()
         { "ViewMatrices",         &MakeViewMatrices,       false },
         { "DeferredContexts",     &MakeDeferredContexts,   false },
         { "PixelRayBasis",        &MakePixelRayBasis,      false },
+        { "DeferredLightCamera",  &MakeDeferredLightCamera, false },
         { "RawResources",         &MakeRawResources,       false },
         { "ConstantBlocks",       &MakeConstantBlocks,     false },
         { "ComputeOutputsPerEye", &MakeComputeOutputsPerEye, false },

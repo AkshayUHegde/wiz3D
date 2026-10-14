@@ -144,6 +144,7 @@ std::unique_ptr<ProfileFeature> MakeWholeBufferRanges(const ProfileEntry* entry)
 std::unique_ptr<ProfileFeature> MakeViewMatrices(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeDeferredContexts(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakePixelRayBasis(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeDeferredLightCamera(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeRawResources(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeConstantBlocks(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeComputeOutputsPerEye(const ProfileEntry* entry);

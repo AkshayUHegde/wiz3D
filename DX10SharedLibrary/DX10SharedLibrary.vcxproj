@@ -213,6 +213,7 @@
     <ClCompile Include="..\S3DWrapper10\FeatureViewMatrices.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureDeferredContexts.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeaturePixelRayBasis.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureDeferredLightCamera.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureRawResources.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureConstantBlocks.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureComputeOutputsPerEye.cpp" />
