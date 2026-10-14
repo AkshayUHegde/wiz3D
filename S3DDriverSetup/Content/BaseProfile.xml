@@ -1915,6 +1915,21 @@
 		<!-- The game remakes its render targets every frame: their right copies are reused rather than allocated again -->
 		<RecycleRightCopies Value="1"/>
 	</Profile>
+	<Profile Name="GTA V">
+		<File Name="GTA5.exe" />
+		<!-- Constant buffers are filled long before their draw, and cables project in the domain shader: patch each for the
+			shader about to read it -->
+		<PatchConstantsAtDraw Value="1"/>
+		<!-- RAGE: shadow maps are depth-only passes from the light into targets not the screen's size -->
+		<LightViewPasses Value="1" />
+		<!-- Particle sprites offset their corners after this matrix -->
+		<AdditionalMatrixName Value="gWorldViewProj" />
+		<!-- GameWorks ShadowLib (soft shadows, PCSS) undoes the eye shift with the 3D Vision stereo texel -->
+		<StereoTexture Value="3DVisionTexel" />
+		<!-- Deferred lights rebuild position as gViewInverse row 3 + a ray from the vertex stage or the shear bases -->
+		<DeferredLightCamera Buffer="rage_matrices" InvView="gViewInverse" ViewProjection="gWorldViewProj" Pass="lighting_locals"
+			Rays="deferredPerspectiveShearParams0 deferredPerspectiveShearParams1 deferredPerspectiveShearParams2" />
+	</Profile>
 	<Profile Name="Far Cry 4">
 		<File Name="FarCry4.exe" />
 		<Engine Value="Dunia"/>

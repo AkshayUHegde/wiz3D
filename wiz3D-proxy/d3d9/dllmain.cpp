@@ -814,6 +814,44 @@ extern "C" __declspec(dllexport) void WINAPI DebugSetMute(void)
 }
 
 // ---------------------------------------------------------------------------
+// Preload the dxgi/d3d11 proxies beside us
+// ---------------------------------------------------------------------------
+// With the DX10/11 wrapper here and no DX9 one, we are only the DX11 game's early loader: a static d3d9 import loads us
+// before anything can pull System32's dxgi/d3d11 in by path, and the game's later by-name loads then resolve to ours.
+static void PreloadSiblingProxies(HMODULE hSelf)
+{
+    WCHAR dir[MAX_PATH];
+    GetModuleFileNameW(hSelf, dir, MAX_PATH);
+    WCHAR* pSlash = wcsrchr(dir, L'\\');
+    if (!pSlash) return;
+    *(pSlash + 1) = L'\0';
+
+    WCHAR wrapper[MAX_PATH];
+    lstrcpyW(wrapper, dir);
+    lstrcatW(wrapper, L"S3DWrapperD3D10.dll");
+    if (GetFileAttributesW(wrapper) == INVALID_FILE_ATTRIBUTES) return;
+    lstrcpyW(wrapper, dir);
+    lstrcatW(wrapper, L"S3DWrapperD3D9.dll");
+    if (GetFileAttributesW(wrapper) != INVALID_FILE_ATTRIBUTES) return;
+
+    static const WCHAR* const kNames[] = { L"dxgi.dll", L"d3d11.dll" };
+    for (const WCHAR* name : kNames)
+    {
+        WCHAR path[MAX_PATH];
+        lstrcpyW(path, dir);
+        lstrcatW(path, name);
+        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) continue;
+
+        WCHAR before[MAX_PATH] = L"none";
+        if (HMODULE resident = GetModuleHandleW(name)) GetModuleFileNameW(resident, before, MAX_PATH);
+        HMODULE h = LoadLibraryW(path);
+        WCHAR got[MAX_PATH] = L"FAILED";
+        if (h) GetModuleFileNameW(h, got, MAX_PATH);
+        Log("Sibling preload: %ls -> %ls (resident before: %ls)\n", name, got, before);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DllMain
 // ---------------------------------------------------------------------------
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
@@ -834,6 +872,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
             GetModuleFileNameW(hModule, proxyPath, MAX_PATH);
             Log("Proxy DLL: %ls\n", proxyPath);
         }
+        PreloadSiblingProxies(hModule);
         break;
 
     case DLL_PROCESS_DETACH:
