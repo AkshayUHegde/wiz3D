@@ -5,6 +5,7 @@
 #include "Device11Proxy.h"
 #include "proxy_factory.h"     // IID_wiz3D_Texture2D11Proxy
 #include "AdapterFunctions.h"  // DDILog
+#include "ProfileFeature.h"    // PrivateBackBufferRefsOn
 
 #pragma comment(lib, "dxguid.lib")
 
@@ -26,15 +27,39 @@ Texture2D11Proxy::~Texture2D11Proxy()
     // to be destroyed.
     if (m_parent && m_realLeft)
         m_parent->UnregisterRealToProxy(m_realLeft);
-    if (m_realRight) { m_realRight->Release(); m_realRight = nullptr; }
+    if (m_parent && gInfo.CollectDebugInformation) m_parent->NoteTextureFreed();
+    // RecycleRightCopies: the right copy waits for a texture created with the same desc.
+    if (m_realRight)
+    {
+        if (m_parent && RecycleRightCopiesOn()) m_parent->RecycleRight(m_realRight);
+        else m_realRight->Release();
+        m_realRight = nullptr;
+    }
     if (m_realLeft)  { m_realLeft->Release();  m_realLeft  = nullptr; }
 }
 
 ULONG STDMETHODCALLTYPE Texture2D11Proxy::Release()
 {
     LONG r = InterlockedDecrement(&m_refs);
-    if (r == 0) delete this;
-    return (ULONG)r;
+    if (r == 0) { delete this; return 0; }
+    return (ULONG)(r - m_internalRefs);
+}
+
+void Texture2D11Proxy::AddRefInternal()
+{
+    if (m_backBuffer && PrivateBackBufferRefsOn()) InterlockedIncrement(&m_internalRefs);
+    InterlockedIncrement(&m_refs);
+}
+
+void Texture2D11Proxy::ReleaseInternal()
+{
+    if (m_backBuffer && PrivateBackBufferRefsOn()) InterlockedDecrement(&m_internalRefs);
+    Release();
+}
+
+void Texture2D11Proxy::MakeRefInternal()
+{
+    if (m_backBuffer && PrivateBackBufferRefsOn()) InterlockedIncrement(&m_internalRefs);
 }
 
 HRESULT STDMETHODCALLTYPE Texture2D11Proxy::QueryInterface(REFIID riid, void** ppvObj)

@@ -568,6 +568,112 @@ void CodeMatrices(const shader_analyzer::TShaderList& shList, std::vector<std::p
     }
 }
 
+// The constant register an operand reads at an immediate index: (slot, register); a run-time index reads ~0u.
+bool ConstantOperand(const shader_analyzer::ShaderOperand* o, int& slot, unsigned& reg)
+{
+    if (!o || o->getOperandType() != D3D10_SB_OPERAND_TYPE_CONSTANT_BUFFER ||
+        o->getOperandIndexDimension() != D3D10_SB_OPERAND_INDEX_2D ||
+        o->getOperandIndexRepresentation((D3D10_SB_OPERAND_INDEX_DIMENSION)0) != D3D10_SB_OPERAND_INDEX_IMMEDIATE32)
+        return false;
+    slot = (int)o->getIndex(0);
+    reg = o->getOperandIndexRepresentation((D3D10_SB_OPERAND_INDEX_DIMENSION)1) == D3D10_SB_OPERAND_INDEX_IMMEDIATE32
+        ? o->getIndex(1) : ~0u;
+    return true;
+}
+
+// A shader without RDEF: matrices read as (x*W, y*W, W, 1), cbN[k] and cbN[k + 1] scaling one vector's x and y,
+// cbN[k + 2] a scalar and cbN[k + 3] added (UE4's ScreenToShadowMatrix and ScreenToTranslatedWorld).
+void ScreenForm(const shader_analyzer::TShaderList& shList, std::vector<std::pair<int, UINT>>& out)
+{
+    using shader_analyzer::ShaderOperand;
+    struct Column { size_t at; unsigned type, index, comp; int slot; unsigned reg; };
+    struct Added  { size_t at; int slot; unsigned reg; };
+    std::vector<Column> columns;
+    std::vector<Added>  adds;
+    size_t at = 0;
+    for (const auto& inst : shList)
+    {
+        ++at;
+        const shader_analyzer::ShaderOperation* op = inst.getOperation();
+        if (!op || op->isDeclaration() || op->isCustomData()) continue;
+        const unsigned n = (unsigned)inst.getOperandsCount();
+        const bool mul = op->getType() == D3D10_SB_OPCODE_MUL && n == 3, mad = op->getType() == D3D10_SB_OPCODE_MAD && n == 4;
+        int slot;
+        unsigned reg;
+        if (op->getType() == D3D10_SB_OPCODE_ADD && n == 3)
+        {
+            for (unsigned i = 1; i < 3; ++i)
+                if (ConstantOperand(inst.getOperand(i), slot, reg) && reg != ~0u) adds.push_back({ at, slot, reg });
+            continue;
+        }
+        if (!mul && !mad) continue;
+        if (mad && ConstantOperand(inst.getOperand(3), slot, reg) && reg != ~0u) adds.push_back({ at, slot, reg });
+        for (unsigned i = 1; i < 3; ++i)
+        {
+            const ShaderOperand* src = inst.getOperand(3 - i);
+            if (!ConstantOperand(inst.getOperand(i), slot, reg) || reg == ~0u || !src) continue;
+            const unsigned type = src->getOperandType();
+            if ((type != D3D10_SB_OPERAND_TYPE_TEMP && type != D3D10_SB_OPERAND_TYPE_INPUT) ||
+                src->getOperandIndexDimension() != D3D10_SB_OPERAND_INDEX_1D)
+                continue;
+            unsigned comp;
+            const unsigned mode = src->getOperand4ComponentSelectionMode();
+            if (mode == D3D10_SB_OPERAND_4_COMPONENT_SELECT_1_MODE) comp = src->getOperand4ComponentSelect1();
+            else if (mode == D3D10_SB_OPERAND_4_COMPONENT_SWIZZLE_MODE)
+            {
+                comp = src->getOperand4ComponentSwizzleSource(D3D10_SB_4_COMPONENT_X);
+                bool same = true;
+                for (unsigned c = 1; c < 4; ++c)
+                    same &= src->getOperand4ComponentSwizzleSource((D3D10_SB_4_COMPONENT_NAME)c) == comp;
+                if (!same) continue;
+            }
+            else continue;
+            columns.push_back({ at, type, src->getIndex(0), comp, slot, reg });
+            break;
+        }
+    }
+    auto near12 = [](size_t a, size_t b) { return (a > b ? a - b : b - a) <= 12; };
+    for (const auto& u : columns)
+    {
+        if (u.comp != 0) continue;
+        bool y = false, s = false, w = false;
+        for (const auto& r : columns)
+        {
+            if (!near12(r.at, u.at) || r.slot != u.slot) continue;
+            y |= r.reg == u.reg + 1 && r.type == u.type && r.index == u.index && r.comp == 1;
+            s |= r.reg == u.reg + 2;
+        }
+        for (const auto& a : adds) w |= near12(a.at, u.at) && a.slot == u.slot && a.reg == u.reg + 3;
+        if (y && s && w) AddOnce(out, u.slot, u.reg * 16u);
+    }
+}
+
+// Every constant register the code reads: (slot, register), ~0u for a slot it indexes at run time.
+void ConstantReads(const shader_analyzer::TShaderList& shList, std::vector<std::pair<int, UINT>>& out)
+{
+    for (const auto& inst : shList)
+    {
+        const shader_analyzer::ShaderOperation* op = inst.getOperation();
+        if (!op || op->isDeclaration() || op->isCustomData()) continue;
+        for (unsigned i = 1; i < (unsigned)inst.getOperandsCount(); ++i)
+        {
+            int slot;
+            unsigned reg;
+            if (ConstantOperand(inst.getOperand(i), slot, reg)) AddOnce(out, slot, reg);
+        }
+    }
+}
+
+bool ParseCode(const void* pBytecode, SIZE_T byteLength, shader_analyzer::TShaderList& shList)
+{
+    DWORD size = 0;
+    const BYTE* code = FindChunk(static_cast<const BYTE*>(pBytecode), byteLength, kSHEX, size);
+    if (!code) code = FindChunk(static_cast<const BYTE*>(pBytecode), byteLength, kSHDR, size);
+    if (!code) return false;
+    shader_analyzer::ParseShader(reinterpret_cast<const unsigned*>(code), shList);
+    return true;
+}
+
 } // anonymous namespace
 
 namespace wiz3d
@@ -588,6 +694,18 @@ void CodeMatrixReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::
     shader_analyzer::TShaderList shList;
     shader_analyzer::ParseShader(reinterpret_cast<const unsigned*>(code), shList);
     CodeMatrices(shList, mats, views);
+}
+
+void CodeScreenMatrices(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out)
+{
+    shader_analyzer::TShaderList shList;
+    if (pBytecode && ParseCode(pBytecode, byteLength, shList)) ScreenForm(shList, out);
+}
+
+void CodeConstantReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out)
+{
+    shader_analyzer::TShaderList shList;
+    if (pBytecode && ParseCode(pBytecode, byteLength, shList)) ConstantReads(shList, out);
 }
 
 bool AnalyzeShader11(const void* pBytecode, SIZE_T byteLength,

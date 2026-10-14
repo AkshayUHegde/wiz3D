@@ -107,5 +107,9 @@ const BYTE* FindDxbcChunk(const void* blob, SIZE_T blobLen, DWORD tag, DWORD& ou
 // that may be the camera's view (ShaderAnalysis11Result::viewMatrices).
 void CodeMatrixReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& mats,
                      std::vector<std::pair<int, UINT>>& views);
+// Matrices a shader without RDEF reads as (x*W, y*W, W, 1): (cb slot, byte offset).
+void CodeScreenMatrices(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out);
+// Every constant register the code reads: (cb slot, register), ~0u where it indexes the slot at run time.
+void CodeConstantReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out);
 
 } // namespace wiz3d

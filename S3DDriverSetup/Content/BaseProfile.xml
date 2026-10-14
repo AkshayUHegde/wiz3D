@@ -1897,6 +1897,24 @@
 		                 Consumer="$Globals.TranslatedWorldToShadowMatrix"
 		                 Positions="$Globals.PointPositionAndInverseRadius $Globals.SpotPositionAndInverseRadius" />
 	</Profile>
+	<Profile Name="What Remains of Edith Finch">
+		<File Name="FinchGame.exe" />
+		<!-- Unreal Engine 4, deferred: lighting rebuilds position from inverse matrices in pixel-shader buffers -->
+		<DetectInverseMatrix Value="1"/>
+		<!-- The view buffer is written once and read by every shader: patch it for the shader about to read it -->
+		<PatchConstantsAtDraw Value="1"/>
+		<!-- UE4 checks the back buffer's count is 1 before ResizeBuffers (D3D11Viewport.cpp:198): our holds stay out of it -->
+		<PrivateBackBufferRefs Value="1"/>
+		<!-- Reflection stripped: the View block is found by its bytes, a matrix row per register. Its right copy is the right
+		     camera for every pass, last frame's camera included (velocity, TAA and SSR reprojection) -->
+		<RightCamera Buffer="*" Layout="Rows" MoveOrigin="1" ViewProjection="r0" View="r8" Projection="r16"
+		             InvProjection="r20" InvViewProjection="r24" Screen="r28 r32" Position="r46"
+		             PrevViewProjection="r99" PrevProjection="r79" ClipToPrevClip="r121"/>
+		<!-- The shadow projection's ScreenToShadowMatrix in $Globals, read as (x*W, y*W, W, 1) -->
+		<ScreenRayMatrix Screen="cb0[27]"/>
+		<!-- The game remakes its render targets every frame: their right copies are reused rather than allocated again -->
+		<RecycleRightCopies Value="1"/>
+	</Profile>
 	<Profile Name="Far Cry 4">
 		<File Name="FarCry4.exe" />
 		<Engine Value="Dunia"/>

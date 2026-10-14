@@ -196,6 +196,11 @@
     <ClCompile Include="..\S3DWrapper10\DeviceWrapperRegistry.cpp" />
     <ClCompile Include="..\S3DWrapper10\Device11Proxy.cpp" />
     <ClCompile Include="..\S3DWrapper10\Context11Proxy.cpp" />
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_Main.cpp" />
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_Modified.cpp" />
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_ModifiedMain.cpp" />
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_RHW.cpp" />
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_Utils.cpp" />
     <ClCompile Include="..\S3DWrapper10\ProfileFeature.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureStereoTexture.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureMirroredTarget.cpp" />
@@ -217,7 +222,12 @@
     <ClCompile Include="..\S3DWrapper10\FeatureFactory2SwapChains.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureHudSceneDepth.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureStereoScissor.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureBatchRightEye.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeaturePrivateBackBufferRefs.cpp" />
+    <ClCompile Include="..\S3DWrapper10\FeatureRecycleRightCopies.cpp" />
     <ClCompile Include="..\S3DWrapper10\DeferredContext11.cpp" />
+    <ClCompile Include="..\S3DWrapper10\RightRecorder11.cpp" />
+    <ClCompile Include="..\S3DWrapper10\GpuTimer11.cpp" />
     <ClCompile Include="..\S3DWrapper10\SpriteDepth11.cpp" />
     <ClCompile Include="..\S3DWrapper10\ShaderPatch11.cpp" />
     <ClCompile Include="..\S3DWrapper10\FeatureWholeBufferRanges.cpp" />

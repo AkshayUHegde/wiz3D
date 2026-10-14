@@ -258,6 +258,9 @@ ProfileFeatures CreateProfileFeatures()
         { "Factory2SwapChains",   &MakeFactory2SwapChains, false },
         { "HudSceneDepth",        &MakeHudSceneDepth,      false },
         { "StereoScissor",        &MakeStereoScissor,      false },
+        { "BatchRightEye",        &MakeBatchRightEye,      false },
+        { "PrivateBackBufferRefs", &MakePrivateBackBufferRefs, false },
+        { "RecycleRightCopies",   &MakeRecycleRightCopies, false },
     };
     static std::once_flag s_checked;
     std::vector<std::string> problems;

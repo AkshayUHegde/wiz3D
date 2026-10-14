@@ -21,15 +21,15 @@ SRV11Proxy::SRV11Proxy(ID3D11ShaderResourceView* realLeft, ID3D11ShaderResourceV
 
 SRV11Proxy::~SRV11Proxy()
 {
-    if (m_texture)   { m_texture->Release();   m_texture   = nullptr; }
+    if (m_texture)   { m_texture->ReleaseInternal(); m_texture = nullptr; }
     if (m_realRight) { m_realRight->Release(); m_realRight = nullptr; }
     if (m_realLeft)  { m_realLeft->Release();  m_realLeft  = nullptr; }
 }
 
 void SRV11Proxy::SetTexture(Texture2D11Proxy* t)
 {
-    if (t) t->AddRef();
-    if (m_texture) m_texture->Release();
+    if (t) t->AddRefInternal();
+    if (m_texture) m_texture->ReleaseInternal();
     m_texture = t;
 }
 

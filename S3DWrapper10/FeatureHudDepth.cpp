@@ -71,7 +71,8 @@ public:
         const float b = p00 > 0.f ? eyeShift * p00 : stereo::FallbackB(eyeShift);
         const float dNdc = b * (1.f - stereo::Convergence() / use);
         UINT n = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-        ctx.Real()->RSGetViewports(&n, m_vp);
+        if (ctx.Recording()) n = ctx.GameViewports(m_vp);   // BatchRightEye: the recorder reads nothing back
+        else ctx.Real()->RSGetViewports(&n, m_vp);
         if (!n) return;
         D3D11_VIEWPORT vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
         for (UINT i = 0; i < n; ++i) { vp[i] = m_vp[i]; vp[i].TopLeftX += dNdc * vp[i].Width * 0.5f; }

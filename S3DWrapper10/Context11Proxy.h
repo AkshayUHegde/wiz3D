@@ -63,6 +63,8 @@ struct ComRefHolder
 class Device11Proxy;
 class Buffer11Proxy;
 class Texture2D11Proxy;
+class RightRecorder11;
+class GpuTimer11;
 struct EyeShiftMatrix;
 struct ShaderAnalysis11Result;
 
@@ -119,8 +121,8 @@ public:
     void    STDMETHODCALLTYPE IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY Topology) override;
     void    STDMETHODCALLTYPE VSSetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView* const* ppShaderResourceViews) override;
     void    STDMETHODCALLTYPE VSSetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState* const* ppSamplers) override;
-    void STDMETHODCALLTYPE Begin(ID3D11Asynchronous* pAsync) override                                                                                                                              { m_real->Begin(pAsync); }
-    void STDMETHODCALLTYPE End(ID3D11Asynchronous* pAsync) override                                                                                                                                { m_real->End(pAsync); }
+    void STDMETHODCALLTYPE Begin(ID3D11Asynchronous* pAsync) override                                                                                                                              { FlushRightBatch(kFlushQuery); m_real->Begin(pAsync); }
+    void STDMETHODCALLTYPE End(ID3D11Asynchronous* pAsync) override                                                                                                                                { FlushRightBatch(kFlushQuery); m_real->End(pAsync); }
     HRESULT STDMETHODCALLTYPE GetData(ID3D11Asynchronous* pAsync, void* pData, UINT DataSize, UINT GetDataFlags) override                                                                          { return m_real->GetData(pAsync, pData, DataSize, GetDataFlags); }
     void    STDMETHODCALLTYPE SetPredication(ID3D11Predicate* pPredicate, BOOL PredicateValue) override;
     void    STDMETHODCALLTYPE GSSetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView* const* ppShaderResourceViews) override;
@@ -206,7 +208,7 @@ public:
     void STDMETHODCALLTYPE CSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState** ppSamplers) override                                                                               { m_real->CSGetSamplers(StartSlot, NumSamplers, ppSamplers); }
     void STDMETHODCALLTYPE CSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override                                                                        { GetTrackedCBs(ST_CS, StartSlot, NumBuffers, ppConstantBuffers); }
     void STDMETHODCALLTYPE ClearState() override;
-    void STDMETHODCALLTYPE Flush() override                                                                                                                                                        { m_real->Flush(); }
+    void STDMETHODCALLTYPE Flush() override                                                                                                                                                        { FlushRightBatch(kFlushState); m_real->Flush(); }
     D3D11_DEVICE_CONTEXT_TYPE STDMETHODCALLTYPE GetType() override                                                                                                                                 { return m_real->GetType(); }
     UINT STDMETHODCALLTYPE GetContextFlags() override                                                                                                                                              { return m_real->GetContextFlags(); }
     HRESULT STDMETHODCALLTYPE FinishCommandList(BOOL RestoreDeferredContextState, ID3D11CommandList** ppCommandList) override                                                                      { return m_real->FinishCommandList(RestoreDeferredContextState, ppCommandList); }
@@ -294,6 +296,17 @@ public:
     // Once per Present: ages the matrix detector and the shared-UAV twins, ends the features' frame and, with
     // CollectDebugInformation, logs this frame's counts every 60th frame that drew anything.
     void EndFrame();
+    // CollectDebugInformation: the swap chain's part of the frame (output pass, real Present, frames the GPU is behind).
+    void NoteFrameTiming(LONGLONG outputTicks, LONGLONG presentTicks, unsigned gpuBehind);
+
+    // <BatchRightEye>: the right eye's recorded draws run now, before a pass change, a write to something they read, a
+    // dispatch, a query or the frame's composite (the reason is counted for the frame report).
+    enum BatchFlush { kFlushTargets, kFlushWrite, kFlushCompute, kFlushPresent, kFlushUnbatched, kFlushState, kFlushQuery,
+                      kFlushMap, kFlushUpdate, kFlushReasons };
+    void FlushRightBatch(BatchFlush reason);
+    // CollectDebugInformation: the swap chain's output pass as a GPU span (GpuTimer11).
+    UINT GpuOutputBegin();
+    void GpuOutputEnd(UINT begin);
 
 private:
     // Stage 4b.4: private "Do" versions of state-setting methods that the
@@ -559,6 +572,52 @@ private:
     unsigned             m_drawsVSNoSiblingCBThisFrame  = 0;
     // Draws per VS CRC for geometry that reached the right eye uncorrected.
     std::map<DWORD, unsigned> m_uncorrectedVSDraws;
+    // CollectDebugInformation: this frame's CPU time by part, in QueryPerformanceCounter ticks; summed over the report
+    // window with the frame interval, then logged per frame (Context11Proxy_Utils.cpp).
+    struct FrameTiming
+    {
+        LONGLONG leftDraws, coverageTally, gameCalls, rightConstants, rightBinds, rightFeatures, rightCalls, rightTeardown,
+                 drawDone, maps, mapDriver, mapRead, mapBytes, updates, tracking, dispatches, rightFlush, syncBuild, syncApply,
+                 recordBegin, output, present, frame;
+    };
+    LONGLONG    m_timeScratch = 0;   // a ScopedTicks target for work no row reports
+    FrameTiming m_time = {}, m_timeWindow = {};
+    // <BatchRightEye>: the recorder (RightRecorder11) takes the game's state sets while it records (m_mirror); a right-eye
+    // draw records into it with m_real swapped to it, and FlushRightBatch replays it on the immediate context.
+    RightRecorder11*      m_recorder = nullptr;
+    GpuTimer11*           m_gpuTimer = nullptr;   // CollectDebugInformation
+    std::string           PassLabel() const;      // the bound left target, for the GPU row
+    ID3D11DeviceContext*  m_mirror = nullptr;      // the recorder outside a right-eye draw
+    ID3D11DeviceContext1* m_mirror1 = nullptr;
+    ID3D11DeviceContext*  m_immediate = nullptr;   // the real context while a right-eye draw records
+    ID3D11DeviceContext1* m_immediate1 = nullptr;
+    bool     m_rightPending = false, m_rightRecording = false, m_soBound = false, m_syncSkipGeometry = false;
+    unsigned m_batchedDrawsThisFrame = 0, m_unbatchedDrawsThisFrame = 0, m_batchFlushes[kFlushReasons] = {};
+    unsigned m_updReplayTex = 0, m_updReplayBuf = 0, m_updReplayCB = 0, m_updReplayBufBinds = 0;   // update replays by target
+    D3D11_VIEWPORT m_gameVp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+    UINT           m_gameVpCount = 0;   // the game's last RSSetViewports (0 after ClearState)
+    D3D11_RECT     m_gameSc[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+    UINT           m_gameScCount = 0;   // the game's last RSSetScissorRects (0 after ClearState)
+    std::vector<unsigned char> m_cbScratch;   // a CB write's bytes (Unmap, UpdateSubresource), reused
+    // Game buffers a recorded draw reads in place (LightViewPasses' left constants), a ring by its bound range (n 0 =
+    // the whole buffer): writing one replays the recording.
+    struct PendingLeft { Buffer11Proxy* b; size_t off, n; };
+    std::vector<PendingLeft> m_pendingLeftCBs;
+    bool RightBatchOn() const;
+    void BeginRightRecording();
+    void EndRightRecording();
+    void StopRightBatch(const char* why);
+    bool PendingLeftCB(Buffer11Proxy* b) const;
+    bool PendingLeftRange(ID3D11Buffer* real, size_t off, size_t n) const;
+    bool IAOnlyUnread(ID3D11Buffer* real) const;   // a vertex/index-only buffer no recorded draw can read
+    ID3D11DeviceContext* RightWriter();
+    LONGLONG    m_frameStart = 0, m_frameMax = 0;
+    unsigned    m_timedFrames = 0, m_gpuBehindSum = 0, m_gpuBehindMax = 0;
+    // CollectDebugInformation: driver Maps over 0.1 ms in the report window, by resource kind (which ones wait on the GPU).
+    struct SlowMaps { LONGLONG ticks = 0; unsigned count = 0; };
+    std::map<std::string, SlowMaps> m_slowMaps;
+    void NoteSlowMap(ID3D11Resource* real, D3D11_MAP type, LONGLONG t0, bool right);
+    void AccumulateFrameTiming();
     void TallyDrawCoverage();
     void TeachBoundMatrices(bool screenSpace);
     void LogFrameStats(unsigned frame);
@@ -672,6 +731,17 @@ public:
     // ---- What profile features use (ProfileFeature.h) ----------------------
     ID3D11DeviceContext* Real() const   { return m_real; }
     Device11Proxy*       Parent() const { return m_parent; }
+    // BatchRightEye: a state set a feature makes around the left draw goes to Mirror() too (null when not recording);
+    // inside a recorded right-eye draw nothing can be read back, so the game's viewports come from GameViewports.
+    ID3D11DeviceContext* Mirror() const { return m_mirror; }
+    bool                 Recording() const { return m_rightRecording; }
+    UINT                 GameViewports(D3D11_VIEWPORT* out) const
+    { for (UINT i = 0; i < m_gameVpCount; ++i) out[i] = m_gameVp[i]; return m_gameVpCount; }
+    UINT                 GameScissorRects(D3D11_RECT* out) const
+    { for (UINT i = 0; i < m_gameScCount; ++i) out[i] = m_gameSc[i]; return m_gameScCount; }
+    // The geometry stage's binding at a slot as the drawing eye has it (BindEye rebinds a stage holding a stereo view).
+    ID3D11Buffer* GSConstantBufferNow(UINT slot) const;
+    ID3D11ShaderResourceView* GSResourceNow(UINT slot) const;
     // The analysis of the bound vertex (pixel = false) or pixel shader, null if unknown.
     const ShaderAnalysis11Result* BoundShader(bool pixel) const { return m_boundInfo[pixel ? 1 : 0]; }
     // The game's constant buffer / shader resources at a vertex or pixel shader slot (left = the game's, right = the

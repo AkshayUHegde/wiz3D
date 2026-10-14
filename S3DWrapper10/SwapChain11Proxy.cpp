@@ -78,6 +78,7 @@ SwapChain11Proxy::~SwapChain11Proxy()
     // teardown, but the COM-wrap path never did, so tuning died with the run.
     WriteInputData(&gInfo.Input);
     gKbdHook.clear();
+    for (ID3D11Query*& q : m_frameEvents) if (q) { q->Release(); q = nullptr; }
     ReleaseSRWeave(true);
     ReleaseStereoBackBuffer();
     ReleaseComposite();
@@ -277,6 +278,7 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
     m_rightBB->AddRef();
     m_wrappedBB = new Texture2D11Proxy(m_leftBB, m_rightBB, m_parent);
     m_wrappedBB->MarkBackBuffer();
+    m_wrappedBB->MakeRefInternal();   // PrivateBackBufferRefs: ours is DXGI's own reference, not one the game counts
     // Views on the pair resolve to this proxy like any other texture's (the overlay rule asks by the real left).
     if (m_parent) m_parent->RegisterRealToProxy(m_leftBB, m_wrappedBB);
 
@@ -310,7 +312,7 @@ void SwapChain11Proxy::ReleaseStereoBackBuffer()
     if (m_leftSRV)   { m_leftSRV->Release();   m_leftSRV   = nullptr; }
     if (m_rightSRV)  { m_rightSRV->Release();  m_rightSRV  = nullptr; }
     if (m_wrappedBB && m_parent && m_leftBB) m_parent->UnregisterRealToProxy(m_leftBB);
-    if (m_wrappedBB) { m_wrappedBB->Release(); m_wrappedBB = nullptr; }
+    if (m_wrappedBB) { m_wrappedBB->ReleaseInternal(); m_wrappedBB = nullptr; }
     if (m_leftBB)    { m_leftBB->Release();    m_leftBB    = nullptr; }
     if (m_rightBB)   { m_rightBB->Release();   m_rightBB   = nullptr; }
     m_bbWidth = m_bbHeight = 0;
@@ -692,6 +694,9 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
 {
     if (FrameTraceActive())
         FrameTrace("\n=== Present #%d PRE ===\n", s_FramePresentCounter);
+    // BatchRightEye: the right eye's last recorded pass runs before both eyes are composited.
+    if (Context11Proxy* c = m_parent ? m_parent->GetContextProxy() : nullptr)
+        c->FlushRightBatch(Context11Proxy::kFlushPresent);
     // Before Present, under UseCOMWrapReplay (on by default): a recorded frame replays for the right eye when recording
     // is armed (never under DuplicateDraws), then both eyes are composited into the back buffer.
     if (!gInfo.UseCOMWrapReplay) return;
@@ -705,7 +710,9 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
         FrameTrace("--- composite start ---\n");
 
     // Both eyes into the real back buffer; skipped if the wrapped back buffer was never allocated.
+    const UINT g = ctx->GpuOutputBegin();
     DoComposite();
+    ctx->GpuOutputEnd(g);
     if (FrameTraceActive())
         FrameTrace("--- composite end ---\n");
 }
@@ -816,22 +823,65 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::SetFullscreenState(BOOL Fullscreen, 
     return hr;
 }
 
+// The frames whose end the GPU has not reached, newest first; this frame's event is issued first, so 0 means it had
+// finished the previous frame. Polled without a flush.
+unsigned SwapChain11Proxy::GpuFramesBehind()
+{
+    if (!m_parent) return 0;
+    ID3D11Device* dev = m_parent->GetReal();
+    ID3D11DeviceContext* ctx = nullptr;
+    dev->GetImmediateContext(&ctx);
+    if (!ctx) return 0;
+    ID3D11Query*& now = m_frameEvents[m_frameEventNext % kFrameEvents];
+    if (!now)
+    {
+        D3D11_QUERY_DESC qd = { D3D11_QUERY_EVENT, 0 };
+        if (FAILED(dev->CreateQuery(&qd, &now))) now = nullptr;
+    }
+    if (now) ctx->End(now);
+    ++m_frameEventNext;
+    unsigned behind = 0;
+    for (unsigned back = 2; back <= kFrameEvents && back <= m_frameEventNext; ++back)
+    {
+        ID3D11Query* q = m_frameEvents[(m_frameEventNext - back) % kFrameEvents];
+        BOOL done = FALSE;
+        if (!q || ctx->GetData(q, &done, sizeof(done), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK) break;
+        ++behind;
+    }
+    ctx->Release();
+    return behind;
+}
+
+HRESULT SwapChain11Proxy::PresentFrame(bool present1, UINT SyncInterval, UINT Flags, const DXGI_PRESENT_PARAMETERS* pParams)
+{
+    const bool timed = gInfo.CollectDebugInformation;
+    LARGE_INTEGER t0 = {}, t1 = {}, t2 = {};
+    if (timed) QueryPerformanceCounter(&t0);
+    OnPresentBoundaryPre();
+    const unsigned behind = timed ? GpuFramesBehind() : 0;
+    if (timed) QueryPerformanceCounter(&t1);
+    HRESULT hr = present1 ? (m_real1 ? m_real1->Present1(SyncInterval, Flags, pParams) : E_NOINTERFACE)
+                          : m_real->Present(SyncInterval, Flags);
+    if (timed)
+    {
+        QueryPerformanceCounter(&t2);
+        if (Context11Proxy* ctx = m_parent ? m_parent->GetContextProxy() : nullptr)
+            ctx->NoteFrameTiming(t1.QuadPart - t0.QuadPart, t2.QuadPart - t1.QuadPart, behind);
+    }
+    OnPresentBoundaryPost();
+    if (m_parent && RecycleRightCopiesOn()) m_parent->TickRecycle();
+    return hr;
+}
+
 HRESULT STDMETHODCALLTYPE SwapChain11Proxy::Present(UINT SyncInterval, UINT Flags)
 {
-    OnPresentBoundaryPre();
-    HRESULT hr = m_real->Present(SyncInterval, Flags);
-    OnPresentBoundaryPost();
-    return hr;
+    return PresentFrame(false, SyncInterval, Flags, nullptr);
 }
 
 HRESULT STDMETHODCALLTYPE SwapChain11Proxy::Present1(
     UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS* pPresentParameters)
 {
-    OnPresentBoundaryPre();
-    HRESULT hr = m_real1 ? m_real1->Present1(SyncInterval, PresentFlags, pPresentParameters)
-                          : E_NOINTERFACE;
-    OnPresentBoundaryPost();
-    return hr;
+    return PresentFrame(true, SyncInterval, PresentFlags, pPresentParameters);
 }
 
 } // namespace wiz3d
