@@ -37,7 +37,7 @@ public:
 
     // IUnknown
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObj) override;
-    ULONG   STDMETHODCALLTYPE AddRef() override                  { return InterlockedIncrement(&m_refs); }
+    ULONG   STDMETHODCALLTYPE AddRef() override                  { return InterlockedIncrement(&m_refs) - m_internalRefs; }
     ULONG   STDMETHODCALLTYPE Release() override;
 
     // ID3D11DeviceChild
@@ -62,6 +62,11 @@ public:
     // The swap chain's presented pair: draws into it without a depth test are overlays (HUD, menus).
     void             MarkBackBuffer()      { m_backBuffer = true; }
     bool             IsBackBuffer()  const { return m_backBuffer; }
+    // Our own holds (the swap chain's, views'): internal on the back buffer under PrivateBackBufferRefs, kept out of what
+    // AddRef/Release return as D3D11's are; otherwise plain AddRef/Release. MakeRefInternal turns a held one internal.
+    void             AddRefInternal();
+    void             ReleaseInternal();
+    void             MakeRefInternal();
     // A sampled-only right copy that no mirror has written holds nothing of the game's (a texture streamed past the
     // wrapper); the right eye samples the left until a mirror, or under ComputeOutputsPerEye a right UAV bind, fills it.
     void             MarkRightWritten()    { m_rightWritten = true; }
@@ -84,6 +89,7 @@ private:
     ID3D11Texture2D* m_realRight;  // owned, nullable
     Device11Proxy*   m_parent;     // not owned
     LONG             m_refs;
+    LONG             m_internalRefs = 0;   // of m_refs, the ones AddRef/Release leave out
     bool             m_backBuffer = false;
     bool             m_rightWritten = false;
     mutable signed char m_sampledOnly = -1;

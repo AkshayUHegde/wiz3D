@@ -761,6 +761,21 @@
     <ClCompile Include="..\S3DWrapper10\Context11Proxy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_Main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_Modified.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_ModifiedMain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_RHW.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\Context11Proxy_Utils.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\ProfileFeature.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -818,13 +833,28 @@
     <ClCompile Include="..\S3DWrapper10\FeatureFactory2SwapChains.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeaturePrivateBackBufferRefs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureRecycleRightCopies.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\FeatureHudSceneDepth.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\S3DWrapper10\FeatureStereoScissor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureBatchRightEye.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\DeferredContext11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\RightRecorder11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\GpuTimer11.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\S3DWrapper10\SpriteDepth11.cpp">

@@ -21,15 +21,15 @@ UAV11Proxy::UAV11Proxy(ID3D11UnorderedAccessView* realLeft, ID3D11UnorderedAcces
 
 UAV11Proxy::~UAV11Proxy()
 {
-    if (m_texture)   { m_texture->Release();   m_texture   = nullptr; }
+    if (m_texture)   { m_texture->ReleaseInternal(); m_texture = nullptr; }
     if (m_realRight) { m_realRight->Release(); m_realRight = nullptr; }
     if (m_realLeft)  { m_realLeft->Release();  m_realLeft  = nullptr; }
 }
 
 void UAV11Proxy::SetTexture(Texture2D11Proxy* t)
 {
-    if (t) t->AddRef();
-    if (m_texture) m_texture->Release();
+    if (t) t->AddRefInternal();
+    if (m_texture) m_texture->ReleaseInternal();
     m_texture = t;
 }
 

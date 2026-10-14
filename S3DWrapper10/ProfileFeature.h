@@ -153,6 +153,9 @@ std::unique_ptr<ProfileFeature> MakeCodeMatrices(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeFactory2SwapChains(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeHudSceneDepth(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeStereoScissor(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeBatchRightEye(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakePrivateBackBufferRefs(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeRecycleRightCopies(const ProfileEntry* entry);
 
 // The game's profile has the element and it is not Value="0" (for switches the core asks outside a context).
 bool ProfileSwitchOn(const char* element);
@@ -168,6 +171,9 @@ bool IndirectArgsPerEyeOn();     // structure-count destinations given a right s
 bool CameraInversesOn();         // any camera's unprojection matched and patched with its own focal
 bool CodeMatricesOn();           // matrices of shaders without reflection found from their code
 bool Factory2SwapChainsOn();     // Factory2 swap chains wrapped on any factory, not only CreateDXGIFactory2's
+bool BatchRightEyeOn();          // the right eye's draws recorded and replayed once per pass; on unless Value="0"
+bool PrivateBackBufferRefsOn();  // our holds on the back buffer left out of the count the game reads
+bool RecycleRightCopiesOn();     // a freed texture's right copy serves the next texture created with its desc
 
 // Stereo state the core owns, for features to read or feed.
 namespace stereo

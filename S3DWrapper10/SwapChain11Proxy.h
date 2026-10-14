@@ -124,6 +124,13 @@ private:
     // Post clears the recording vector and re-arms the hook for frame N+1.
     void OnPresentBoundaryPre();
     void OnPresentBoundaryPost();
+    // Both Present entries; with CollectDebugInformation the output pass and the real call are timed for the frame report.
+    HRESULT PresentFrame(bool present1, UINT SyncInterval, UINT Flags, const DXGI_PRESENT_PARAMETERS* pParams);
+    // CollectDebugInformation: frames whose end the GPU has not reached yet, from a ring of event queries.
+    unsigned GpuFramesBehind();
+    static const unsigned kFrameEvents = 8;
+    ID3D11Query* m_frameEvents[kFrameEvents] = {};
+    unsigned     m_frameEventNext = 0;
     // Hotkey-changed stereo settings are written once they settle for 5 s, as the DX9 wrapper does at each Present.
     void PersistSettings();
     DataInput m_savedInput;

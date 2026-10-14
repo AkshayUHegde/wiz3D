@@ -75,8 +75,8 @@ public:
     // The game's view back in the slots we took, after both eyes drew.
     void OnDrawDone(Context11Proxy& ctx) override
     {
-        if (m_bound[0] >= 0) { ID3D11ShaderResourceView* s = ctx.LeftSRV(false, (UINT)m_bound[0]); ctx.Real()->VSSetShaderResources(m_bound[0], 1, &s); }
-        if (m_bound[1] >= 0) { ID3D11ShaderResourceView* s = ctx.LeftSRV(true,  (UINT)m_bound[1]); ctx.Real()->PSSetShaderResources(m_bound[1], 1, &s); }
+        if (m_bound[0] >= 0) { ID3D11ShaderResourceView* s = ctx.LeftSRV(false, (UINT)m_bound[0]); SetSRV(ctx, false, m_bound[0], s); }
+        if (m_bound[1] >= 0) { ID3D11ShaderResourceView* s = ctx.LeftSRV(true,  (UINT)m_bound[1]); SetSRV(ctx, true, m_bound[1], s); }
         m_bound[0] = m_bound[1] = -1;
     }
 
@@ -189,10 +189,22 @@ private:
         }
         ID3D11ShaderResourceView* vsSrv = m_srv[right ? 1 : 0];
         ID3D11ShaderResourceView* psSrv = m_srv[right ? 2 : 0];
-        if (vsSlot >= 0) ctx.Real()->VSSetShaderResources(vsSlot, 1, &vsSrv);
-        if (psSlot >= 0) ctx.Real()->PSSetShaderResources(psSlot, 1, &psSrv);
+        if (vsSlot >= 0) SetSRV(ctx, false, vsSlot, vsSrv);
+        if (psSlot >= 0) SetSRV(ctx, true, psSlot, psSrv);
         m_bound[0] = vsSlot;
         m_bound[1] = psSlot;
+    }
+
+    // Around the left draw the right eye's recording (BatchRightEye) takes the same bind as the immediate context.
+    static void SetSRV(Context11Proxy& ctx, bool pixel, int slot, ID3D11ShaderResourceView* v)
+    {
+        ID3D11DeviceContext* c[2] = { ctx.Real(), ctx.Mirror() };
+        for (ID3D11DeviceContext* x : c)
+        {
+            if (!x) continue;
+            if (pixel) x->PSSetShaderResources((UINT)slot, 1, &v);
+            else       x->VSSetShaderResources((UINT)slot, 1, &v);
+        }
     }
 };
 

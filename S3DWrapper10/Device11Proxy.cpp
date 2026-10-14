@@ -176,6 +176,7 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
     InitializeCriticalSection(&m_dxgiCacheLock);
     InitializeCriticalSection(&m_shaderProjLock);
     InitializeCriticalSection(&m_realToProxyLock);
+    InitializeCriticalSection(&m_recycleLock);
     // Cache Device1/2/3 upgrades. QI failures leave the pointer null; we
     // refuse to claim the corresponding IID in our own QI when null.
     if (m_real)
@@ -244,6 +245,75 @@ Device11Proxy::~Device11Proxy()
     DeleteCriticalSection(&m_dxgiCacheLock);
     DeleteCriticalSection(&m_shaderProjLock);
     DeleteCriticalSection(&m_realToProxyLock);
+    for (const RecycledRight& r : m_rightRecycle) r.tex->Release();
+    m_rightRecycle.clear();
+    DeleteCriticalSection(&m_recycleLock);
+}
+
+// A shared or GDI-compatible texture keeps its identity: it is never handed to another texture.
+static bool Recyclable(const D3D11_TEXTURE2D_DESC& d)
+{
+    return !(d.MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX |
+                            D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_GDI_COMPATIBLE));
+}
+
+ID3D11Texture2D* Device11Proxy::TakeRecycledRight(const D3D11_TEXTURE2D_DESC& d)
+{
+    if (!Recyclable(d)) return nullptr;
+    ID3D11Texture2D* t = nullptr;
+    EnterCriticalSection(&m_recycleLock);
+    for (size_t i = 0; i < m_rightRecycle.size(); ++i)
+    {
+        const RecycledRight& r = m_rightRecycle[i];
+        if (r.frame + 2 > m_recycleFrame || memcmp(&r.desc, &d, sizeof(d)) != 0) continue;
+        t = r.tex;
+        m_rightRecycle.erase(m_rightRecycle.begin() + i);
+        break;
+    }
+    LeaveCriticalSection(&m_recycleLock);
+    return t;
+}
+
+void Device11Proxy::RecycleRight(ID3D11Texture2D* t)
+{
+    if (!t) return;
+    RecycledRight r = { t, {}, 0 };
+    t->GetDesc(&r.desc);
+    if (!Recyclable(r.desc)) { t->Release(); return; }
+    ID3D11Texture2D* drop = nullptr;
+    EnterCriticalSection(&m_recycleLock);
+    r.frame = m_recycleFrame;
+    m_rightRecycle.push_back(r);
+    // Bounded: past 256 the oldest goes back to the driver.
+    if (m_rightRecycle.size() > 256) { drop = m_rightRecycle.front().tex; m_rightRecycle.erase(m_rightRecycle.begin()); }
+    LeaveCriticalSection(&m_recycleLock);
+    if (drop) drop->Release();
+}
+
+void Device11Proxy::TickRecycle()
+{
+    std::vector<ID3D11Texture2D*> drop;
+    EnterCriticalSection(&m_recycleLock);
+    ++m_recycleFrame;
+    // A copy no texture took within 120 Presents goes back to the driver.
+    for (size_t i = 0; i < m_rightRecycle.size();)
+    {
+        if (m_rightRecycle[i].frame + 120 < m_recycleFrame) { drop.push_back(m_rightRecycle[i].tex); m_rightRecycle.erase(m_rightRecycle.begin() + i); }
+        else ++i;
+    }
+    LeaveCriticalSection(&m_recycleLock);
+    for (ID3D11Texture2D* t : drop) t->Release();
+}
+
+void Device11Proxy::TakeChurn(unsigned& made, unsigned& freed, unsigned& reused, unsigned& fresh, unsigned& held)
+{
+    made = (unsigned)InterlockedExchange(&m_texMade, 0);
+    freed = (unsigned)InterlockedExchange(&m_texFreed, 0);
+    reused = (unsigned)InterlockedExchange(&m_rightReused, 0);
+    fresh = (unsigned)InterlockedExchange(&m_rightFresh, 0);
+    EnterCriticalSection(&m_recycleLock);
+    held = (unsigned)m_rightRecycle.size();
+    LeaveCriticalSection(&m_recycleLock);
 }
 
 void Device11Proxy::RegisterRealToProxy(void* realLeft, Texture2D11Proxy* proxy)
@@ -324,10 +394,10 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
         CodeMatrixReads(pBytecode, byteLength, info.readMatrices, info.viewMatrices);
     }
     static std::atomic<size_t> s_keptBytes(0);
-    const size_t kKeepBudget = sizeof(void*) == 8 ? (256u << 20) : (64u << 20);
-    // A sprite shader that reads its world position keeps its code whatever the stage or budget: its right eye draws a twin.
-    if ((strcmp(tag, "Compute") != 0 || s_keptBytes.load() + byteLength > kKeepBudget) && info.spriteWorldInput < 0)
-        info.bytecode.reset();
+    const size_t kKeepBudget = sizeof(void*) == 8 ? (1024u << 20) : (64u << 20);   // Andromeda's set outgrew 256 MB
+    // Capture build: every stage keeps its code, so a capture can disassemble the draw's VS and PS; a sprite shader
+    // that reads its world position keeps it whatever the budget (its right eye draws a twin of it).
+    if (s_keptBytes.load() + byteLength > kKeepBudget && info.spriteWorldInput < 0) info.bytecode.reset();
     else s_keptBytes += byteLength;
     if (analyzed && !info.projection.matrixData.cb.empty())
     {
@@ -780,16 +850,29 @@ HRESULT STDMETHODCALLTYPE Device11Proxy::CreateTexture2D(
                pDesc->Width, pDesc->Height, (int)pDesc->Format, pDesc->BindFlags,
                (int)doubleIt, doubleIt ? "" : " reason=", doubleIt ? "" : monoReason);
 
+    if (gInfo.CollectDebugInformation) InterlockedIncrement(&m_texMade);
     if (doubleIt)
     {
-        HRESULT hr2 = m_real->CreateTexture2D(pDesc, nullptr, &realRight);
-        if (FAILED(hr2))
+        // RecycleRightCopies: a right copy freed two Presents ago with this texture's desc (as created, mips resolved).
+        if (RecycleRightCopiesOn())
         {
-            // Right-eye allocation failed (OOM, format restrictions, etc.).
-            // Continue mono for this resource — game still works, just no
-            // stereo for this RT.
-            realRight = nullptr;
-            NVDM_TRACE_FIRST_N(4, "  Device11Proxy::CreateTexture2D: right-eye alloc failed hr=0x%08lX (mono fallback)\n", hr2);
+            D3D11_TEXTURE2D_DESC made = {};
+            realLeft->GetDesc(&made);
+            realRight = TakeRecycledRight(made);
+        }
+        if (realRight && gInfo.CollectDebugInformation) InterlockedIncrement(&m_rightReused);
+        if (!realRight)
+        {
+            HRESULT hr2 = m_real->CreateTexture2D(pDesc, nullptr, &realRight);
+            if (FAILED(hr2))
+            {
+                // Right-eye allocation failed (OOM, format restrictions, etc.).
+                // Continue mono for this resource — game still works, just no
+                // stereo for this RT.
+                realRight = nullptr;
+                NVDM_TRACE_FIRST_N(4, "  Device11Proxy::CreateTexture2D: right-eye alloc failed hr=0x%08lX (mono fallback)\n", hr2);
+            }
+            else if (gInfo.CollectDebugInformation) InterlockedIncrement(&m_rightFresh);
         }
     }
 

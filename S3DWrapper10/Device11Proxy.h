@@ -185,6 +185,15 @@ public:
     void UnregisterRealToProxy(void* realLeft);
     Texture2D11Proxy* LookupProxyByReal(void* realLeft) const;
 
+    // <RecycleRightCopies>: a freed texture's right copy waits two Presents, then serves a texture created with the same
+    // desc (a right copy is made without initial data, so its contents start undefined either way).
+    ID3D11Texture2D* TakeRecycledRight(const D3D11_TEXTURE2D_DESC& d);
+    void             RecycleRight(ID3D11Texture2D* t);   // takes the caller's reference
+    void             TickRecycle();                       // once per Present
+    // CollectDebugInformation: the texture-churn row, counted since the last call.
+    void             TakeChurn(unsigned& made, unsigned& freed, unsigned& reused, unsigned& fresh, unsigned& held);
+    void             NoteTextureFreed() { InterlockedIncrement(&m_texFreed); }
+
 private:
     // Helper for QueryInterface(IDXGIDevice*) — returns a new ref on the
     // cached proxy (creating + caching it on first call). Returns nullptr
@@ -239,6 +248,12 @@ private:
     // ~Texture2D11Proxy before the real Release fires.
     std::unordered_map<void*, Texture2D11Proxy*>      m_realToProxy;
     CRITICAL_SECTION                                  m_realToProxyLock;
+
+    struct RecycledRight { ID3D11Texture2D* tex; D3D11_TEXTURE2D_DESC desc; unsigned frame; };
+    std::vector<RecycledRight> m_rightRecycle;   // RecycleRightCopies, one reference each
+    CRITICAL_SECTION           m_recycleLock;
+    unsigned                   m_recycleFrame = 0;
+    LONG                       m_texMade = 0, m_texFreed = 0, m_rightReused = 0, m_rightFresh = 0;
 };
 
 } // namespace wiz3d

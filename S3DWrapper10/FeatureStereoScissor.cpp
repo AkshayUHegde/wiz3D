@@ -27,7 +27,8 @@ public:
         m_saved = 0;
         if (ctx.OverlayPass() || ctx.LightViewPass()) return;
         UINT n = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-        ctx.Real()->RSGetScissorRects(&n, m_rects);
+        if (ctx.Recording()) n = ctx.GameScissorRects(m_rects);   // BatchRightEye: the recorder reads nothing back
+        else ctx.Real()->RSGetScissorRects(&n, m_rects);
         const float p00 = stereo::SceneP00();
         const UINT w = n ? TargetWidth(ctx) : 0;
         if (!w || !(p00 > 0.f)) return;

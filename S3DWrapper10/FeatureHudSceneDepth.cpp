@@ -154,8 +154,17 @@ public:
         if (FAILED(ctx.Real()->Map(m_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map)) || !map.pData) { ++m_skipped; return; }
         memcpy(map.pData, k, sizeof k);
         ctx.Real()->Unmap(m_cb, 0);
-        ctx.Real()->GSGetConstantBuffers(0, 1, &m_savedCB);
-        ctx.Real()->GSGetShaderResources(0, 1, &m_savedSRV);
+        if (ctx.Recording())
+        {
+            // BatchRightEye: the recorder reads nothing back; the proxy knows what the right-eye draw bound there.
+            if ((m_savedCB = ctx.GSConstantBufferNow(0)) != nullptr) m_savedCB->AddRef();
+            if ((m_savedSRV = ctx.GSResourceNow(0)) != nullptr) m_savedSRV->AddRef();
+        }
+        else
+        {
+            ctx.Real()->GSGetConstantBuffers(0, 1, &m_savedCB);
+            ctx.Real()->GSGetShaderResources(0, 1, &m_savedSRV);
+        }
         ctx.Real()->GSSetShader(gs, nullptr, 0);
         ctx.Real()->GSSetConstantBuffers(0, 1, &m_cb);
         ctx.Real()->GSSetShaderResources(0, 1, &m_srv);

@@ -25,7 +25,7 @@ namespace
 std::mutex            s_logLock;
 std::set<std::string> s_logged;   // key+offset pairs already logged
 
-struct Named { std::string buffer, name, key; };
+struct Named { std::string buffer, name, key; int slot = -1; UINT offset = 0; };   // slot >= 0: a register "cbN[R]"
 
 // "cbuffer.name", or a bare name in the Buffer attribute's cbuffer.
 std::vector<Named> ParseNames(const ProfileEntry& e, const char* attr, const char* prefix)
@@ -35,6 +35,19 @@ std::vector<Named> ParseNames(const ProfileEntry& e, const char* attr, const cha
     std::string n;
     while (in >> n)
     {
+        unsigned slot = 0, reg = 0;
+        char tail = 0;
+        if (sscanf_s(n.c_str(), "cb%u[%u%c", &slot, &reg, &tail, 1) == 3 && tail == ']' && slot < 14)
+        {
+            Named t;
+            t.buffer = "cb" + std::to_string(slot);
+            t.name = n.substr(t.buffer.size());
+            t.key = prefix + n;
+            t.slot = (int)slot;
+            t.offset = reg * 16u;
+            out.push_back(t);
+            continue;
+        }
         const size_t dot = n.find('.');
         Named t;
         t.buffer = dot == std::string::npos ? EntryValue(e, "Buffer") : n.substr(0, dot);
@@ -69,6 +82,23 @@ public:
         Note(rdef, info, m_screens, "screen matrix");
         Note(rdef, info, m_consumers, "consumer");
         Note(rdef, info, m_positions, "position");
+        // A register in Screen, reflection stripped: only where the code reads it as (x*W, y*W, W, 1).
+        bool registers = false;
+        for (const Named& t : m_screens) registers |= t.slot >= 0;
+        if (!registers || rdef.Present() || !info.bytecode) return;
+        std::vector<std::pair<int, UINT>> found;
+        CodeScreenMatrices(info.bytecode->data(), info.bytecode->size(), found);
+        for (const Named& t : m_screens)
+            for (const auto& f : found)
+            {
+                if (t.slot < 0 || f.first != t.slot || f.second != t.offset) continue;
+                info.NoteRightCB(t.buffer, t.slot);
+                info.featureOffsets.emplace_back(t.key, std::vector<int>(1, (int)t.offset));
+                std::lock_guard<std::mutex> g(s_logLock);
+                if (s_logged.insert(t.key).second)
+                    FeatureLog("  ScreenRayMatrix: screen matrix %s read as (x*W, y*W, W, 1) in CRC=0x%08lX (first of its"
+                               " shaders)\n", t.key.c_str() + 4, info.crc32);
+            }
     }
 
     bool EditRightConstants(Context11Proxy& ctx, const std::string& cbuffer, unsigned char* data, size_t size) override
@@ -152,6 +182,7 @@ private:
     {
         for (const Named& t : names)
         {
+            if (t.slot >= 0) continue;   // a register: OnShaderCreated reads the code for it
             const int slot = rdef.CBufferSlot(t.buffer);
             if (slot < 0) continue;
             std::vector<int> offs;
