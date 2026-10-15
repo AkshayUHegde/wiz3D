@@ -157,6 +157,8 @@ std::unique_ptr<ProfileFeature> MakeStereoScissor(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeBatchRightEye(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakePrivateBackBufferRefs(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeRecycleRightCopies(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeDecalMatrices(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeFogVolumeLookups(const ProfileEntry* entry);
 
 // The game's profile has the element and it is not Value="0" (for switches the core asks outside a context).
 bool ProfileSwitchOn(const char* element);

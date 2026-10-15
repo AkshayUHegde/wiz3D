@@ -91,6 +91,8 @@ struct ShaderAnalysis11Result
     // The bytecode: during shader creation for every stage, kept afterwards for compute shaders only (null past the
     // keep budget).
     std::shared_ptr<const std::vector<BYTE>> bytecode;
+    // A feature's right eye draws a twin of this shader: its code is kept past the budget.
+    bool keepCode = false;
 };
 
 // Analyze a DXBC bytecode blob. Returns true if a SHDR/SHEX + OSGN pair was

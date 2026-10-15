@@ -262,6 +262,8 @@ ProfileFeatures CreateProfileFeatures()
         { "BatchRightEye",        &MakeBatchRightEye,      false },
         { "PrivateBackBufferRefs", &MakePrivateBackBufferRefs, false },
         { "RecycleRightCopies",   &MakeRecycleRightCopies, false },
+        { "DecalMatrices",        &MakeDecalMatrices,      false },
+        { "FogVolumeLookups",     &MakeFogVolumeLookups,   false },
     };
     static std::once_flag s_checked;
     std::vector<std::string> problems;

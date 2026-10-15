@@ -46,6 +46,7 @@ bool KeyboardHook::IsKeyWorkInMono(EventId id)
 {
 	switch(id)
 	{
+	case SCREENSHOT:
 	case TOGGLE_STEREO:
 	case TOGGLE_FPS:
 	case TOGGLE_HOTKEY:
@@ -194,6 +195,10 @@ void KeyboardHook::KeyboardProcedure()
 					gInfo.Input.LaserSightEnable = !gInfo.Input.LaserSightEnable;
 					break;
 
+				case SCREENSHOT:
+					InterlockedExchange(&m_ScreenshotRequest, 1);
+					break;
+
 				case INCREASE_PRESENTER_SLEEP_TIME:
 					if (gInfo.PresenterSleepTime < 0)
 						gInfo.PresenterSleepTime = 0;
@@ -301,9 +306,15 @@ DWORD WINAPI HotKeyThread(KeyboardHook* lpParameter)
 	return 0;
 }
 
+bool KeyboardHook::TakeScreenshotRequest()
+{
+	return InterlockedExchange(&m_ScreenshotRequest, 0) != 0;
+}
+
 KeyboardHook::KeyboardHook()
-{	
+{
 	m_rc = 0;
+	m_ScreenshotRequest = 0;
 	m_hHotKeyThread = 0;
 	m_hThreadStopEvent = 0;
 	m_HotKeyThreadId = 0;

@@ -9,6 +9,10 @@
 #include "AdapterFunctions.h"  // DDILog
 #include "..\S3DAPI\ReadData.h"      // WriteInputData — persist hotkey-tuned stereo
 #include "..\S3DAPI\KeyboardHook.h"  // gKbdHook — the DX9 paths' hotkey thread
+#include "..\S3DAPI\ConvertImages.h"  // GetBitWidthOfDXGIFormat
+#include "Utils.h"                    // SaveImageToFile, screenshot extensions
+#include "ProductNames.h"
+#include <Shlobj.h>
 #include <d3dcompiler.h>
 #include "SR.hpp"                    // Simulated Reality weave (delay-loaded runtime)
 
@@ -709,6 +713,8 @@ void SwapChain11Proxy::OnPresentBoundaryPre()
     if (FrameTraceActive())
         FrameTrace("--- composite start ---\n");
 
+    if (gKbdHook.TakeScreenshotRequest() || gInfo.MakeScreenshot) WriteScreenshot();
+
     // Both eyes into the real back buffer; skipped if the wrapped back buffer was never allocated.
     const UINT g = ctx->GpuOutputBegin();
     DoComposite();
@@ -733,6 +739,87 @@ void SwapChain11Proxy::PersistSettings()
     {
         WriteInputData(&m_savedInput);
         m_writeSettingsAt = 0;
+    }
+}
+
+// The autotests' MakeScreenshotPath, else My Pictures\<product> Screenshots\<profile>\<profile> #NNNN<ext>.
+static bool ScreenshotPath(bool stereo, TCHAR (&out)[MAX_PATH])
+{
+    if (gInfo.MakeScreenshot)
+    {
+        _tcscpy_s(out, gInfo.MakeScreenshotPath);
+        return true;
+    }
+    TCHAR dir[MAX_PATH] = {}, name[MAX_PATH] = {};
+    if (FAILED(SHGetFolderPath(nullptr, CSIDL_MYPICTURES | CSIDL_FLAG_CREATE, nullptr, 0, dir))) return false;
+    PathAppend(dir, _T(PRODUCT_NAME) _T(" Screenshots"));
+    CreateDirectory(dir, nullptr);
+    _tcscpy_s(name, gInfo.ProfileName);
+    for (TCHAR* c = name; *c; ++c) if (_tcschr(_T("\\/:*?\"<>|"), *c)) *c = _T('_');
+    PathAppend(dir, name);
+    CreateDirectory(dir, nullptr);
+    static unsigned s_count = 0;
+    do _stprintf_s(out, _T("%s\\%s #%04u%s"), dir, name, s_count++, stereo ? GetStereoImageFileExtension() : GetImageFileExtension());
+    while (PathFileExists(out));
+    return true;
+}
+
+// The right eye on the left half and the left eye on the right, as JPS and the DX9/DX10 wrappers lay them out; the
+// left eye alone with stereo off.
+void SwapChain11Proxy::WriteScreenshot()
+{
+    if (!m_parent || !m_leftBB) return;
+    ID3D11Device* dev = m_parent->GetReal();
+    ID3D11DeviceContext* ctx = nullptr;
+    dev->GetImmediateContext(&ctx);
+    if (!ctx) return;
+    const bool stereo = gInfo.Input.StereoActive && m_rightBB;
+    const UINT views = stereo ? 2 : 1;
+    D3D11_TEXTURE2D_DESC td = {};
+    m_leftBB->GetDesc(&td);
+    const UINT rowBytes = td.Width * (UINT)(GetBitWidthOfDXGIFormat(td.Format) / 8), pitch = rowBytes * views;
+    std::vector<char> pixels((size_t)pitch * td.Height);
+
+    D3D11_TEXTURE2D_DESC sd = td;
+    sd.MipLevels = 1; sd.ArraySize = 1; sd.SampleDesc.Count = 1; sd.SampleDesc.Quality = 0;
+    sd.MiscFlags = 0; sd.BindFlags = 0; sd.CPUAccessFlags = 0; sd.Usage = D3D11_USAGE_DEFAULT;
+    ID3D11Texture2D* resolved = nullptr;
+    ID3D11Texture2D* stg = nullptr;
+    if (td.SampleDesc.Count > 1 && FAILED(dev->CreateTexture2D(&sd, nullptr, &resolved))) resolved = nullptr;
+    sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(dev->CreateTexture2D(&sd, nullptr, &stg))) stg = nullptr;
+    bool ok = rowBytes && stg && (td.SampleDesc.Count == 1 || resolved);
+    ID3D11Texture2D* eyes[2] = { stereo ? m_rightBB : m_leftBB, m_leftBB };
+    for (UINT v = 0; ok && v < views; ++v)
+    {
+        if (resolved)
+        {
+            ctx->ResolveSubresource(resolved, 0, eyes[v], 0, td.Format);
+            ctx->CopyResource(stg, resolved);
+        }
+        else ctx->CopyResource(stg, eyes[v]);
+        D3D11_MAPPED_SUBRESOURCE m = {};
+        if (FAILED(ctx->Map(stg, 0, D3D11_MAP_READ, 0, &m)) || !m.pData) { ok = false; break; }
+        for (UINT y = 0; y < td.Height; ++y)
+            memcpy(&pixels[(size_t)y * pitch + v * rowBytes], (const char*)m.pData + (size_t)y * m.RowPitch, rowBytes);
+        ctx->Unmap(stg, 0);
+    }
+    if (stg) stg->Release();
+    if (resolved) resolved->Release();
+    ctx->Release();
+
+    TCHAR path[MAX_PATH] = {};
+    if (ok && ScreenshotPath(stereo, path))
+    {
+        SaveImageToFile(path, td.Format, td.Width * views, td.Height, pixels.data(), pitch, true);
+        DDILog("Screenshot: %ls (%ux%u, format %d) %s\n", path, td.Width * views, td.Height, (int)td.Format,
+               PathFileExists(path) ? "written" : "NOT written");
+    }
+    else DDILog("Screenshot: FAILED (format %d, %u samples)\n", (int)td.Format, td.SampleDesc.Count);
+    if (gInfo.MakeScreenshot)
+    {
+        gInfo.MakeScreenshot = FALSE;
+        if (gInfo.MakeScreenshotCallback) gInfo.MakeScreenshotCallback();
     }
 }
 

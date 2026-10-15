@@ -6,8 +6,12 @@
 #include <direct.h>
 #include <Shlwapi.h>
 #include <crtdbg.h>
+// The bundled DevIL is an ANSI build (its file open takes char*), so its header must not see _UNICODE.
+#pragma push_macro("_UNICODE")
+#undef _UNICODE
 #include <IL/il.h>
 #include <IL/ilu.h>
+#pragma pop_macro("_UNICODE")
 #include "Utils.h"
 
 #ifdef TEST
@@ -92,7 +96,23 @@ void WriteShaderToFile(const TCHAR* codeName, const TCHAR* declName, const TCHAR
 #endif
 
 #ifndef DEBUGANALYSING
-bool SaveImageToFile( TCHAR* filename, DXGI_FORMAT format, DWORD width, DWORD height, char* buffer, UINT rowPitch )
+// ScreenshotType's encoder: PNS and JPS are PNG and JPEG bytes under a stereo extension.
+static ILenum ScreenshotILType()
+{
+#ifndef TEST
+	switch ( gInfo.ScreenshotType )
+	{
+	case 2: case 3: return IL_JPG;
+	case 4: return IL_BMP;
+	case 5: return IL_DDS;
+	default: return IL_PNG;
+	}
+#else
+	return IL_JPG;
+#endif
+}
+
+bool SaveImageToFile( TCHAR* filename, DXGI_FORMAT format, DWORD width, DWORD height, char* buffer, UINT rowPitch, bool asScreenshotType )
 {
 #if 0 && !defined(FINAL_RELEASE)
 	// This code only for debugging texture saving
@@ -463,7 +483,13 @@ bool SaveImageToFile( TCHAR* filename, DXGI_FORMAT format, DWORD width, DWORD he
 		return false;
 	}
 	iluFlipImage();
-	ilSave(IL_JPG, filename);
+#ifdef UNICODE
+	char path[MAX_PATH] = {};
+	WideCharToMultiByte(CP_ACP, 0, filename, -1, path, MAX_PATH, nullptr, nullptr);
+#else
+	const char* path = filename;
+#endif
+	ilSave(asScreenshotType ? ScreenshotILType() : IL_JPG, path);
 	ilDeleteImages(1, &ImgId);  
 	return true;
 

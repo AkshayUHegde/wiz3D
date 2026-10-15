@@ -26,7 +26,7 @@ This project modernizes that source code, replaces kernel-level hooks with a pro
 * **DirectX 9:** ✅ **Mostly Working!** `d3d9.dll` proxy loader works! Left 4 Dead 2 and many others run in full stereo3D, outputs in all originally supported formats, and the profile system loads shader fixes and stereo settings for all originally supported games.
 * **DirectX 8:** ✅ **Partially Worikng.** Wrapper to convert DX8 to use DX9's stereoization. One tested game working, needs further testing.
 * **DirectX 7:** ⚠️ **In Progress.** Wrapper to convert DX7 to use DX9's stereoization. DX7 to DX9 converstion is working. Here for testing.
-* **DirectX 10/11:** ⚠️ **Partial.** The DX10/11 wrapper was never completely finished by iZ3D Inc. wiz3D's COM wrapper now runs Far Cry 3, Far Cry 4, Battlefield 3, Battlefield: Bad Company 2, BioShock Infinite and Max Payne 3 in stereo; other games still need testing.
+* **DirectX 10/11:** ⚠️ **Partial.** The DX10/11 wrapper was never completely finished by iZ3D Inc. wiz3D's COM wrapper now runs Battlefield 3, Battlefield: Bad Company 2, Battlefield Hardline, BioShock Infinite, Far Cry 3, Far Cry 4, Grand Theft Auto V (Legacy), Mass Effect Andromeda, Mass Effect Legendary Edition, Max Payne 3, Metro 2033 Redux, Metro: Last Light Redux, NieR:Automata, Ryse: Son of Rome, Star Wars Jedi: Fallen Order and What Remains of Edith Finch in stereo; other games still need testing.
 
 ---
 
@@ -390,6 +390,7 @@ Games that render Stereoscipic 3D themselves and display that via 3D Vision's 'D
 | Aliens vs. Predator (2010) | DX9/DX11 | x86 | ✓ | ✅ DX9 Working | Needs shadow shader fix on DX9. |
 | Assassins Creed | DX9/DX10 | x86 | ✓ | Untested |  |
 | Battlefield 3 | DX11 | x86 | ✕ | ✅ Working | Works with DirectX 11. |
+| Battlefield Hardline | DX11 | x64 | ✕ | ✅ Working |  |
 | BioShock | DX9/DX10 | x86 | ✓ | Untested |  |
 | BioShock 2 | DX9/DX10 | x86 | ✓ | Untested |  |
 | BioShock Infinite | DX11 | x86 | ✕ | ✅ Mostly Working | Bullet-hole decals fade out with distance in the right eye. |
@@ -409,14 +410,22 @@ Games that render Stereoscipic 3D themselves and display that via 3D Vision's 'D
 | Gears of War | DX9/DX10 | x86 | ✓ | Untested |  |
 | Homefront | DX9/DX11 | x86 | ✓ | Untested |  |
 | Lost Planet | DX9/DX10 | x86 | ✓ | Untested |  |
+| Mass Effect Andromeda | DX11 | x64 | ✕ | ✅ Mostly Working | Point-light reflections on walls are slightly off. |
+| Mass Effect Legendary Edition | DX11 | x64 | ✕ | ✅ Working | Mass Effect 1, 2 and 3. |
+| Metro 2033 Redux | DX11 | x64 | ✕ | ✅ Working |  |
+| Metro: Last Light Redux | DX11 | x64 | ✕ | ✅ Working | Shares the Metro Redux profile. |
 | Microsoft Flight Simulator X | DX9/DX10 | x86 | ✓ | Untested |  |
 | NecroVisioN | DX9/DX10 | x86 | ✓ | Untested |  |
+| NieR:Automata | DX11 | x64 | ✕ | ✅ Mostly Working | Very minor right-eye artefacts while the camera moves. |
 | Red Faction: Guerrilla | DX9/DX10/DX11 | x86 | ✓ | Untested |  |
+| Ryse: Son of Rome | DX11 | x64 | ✕ | ✅ Working |  |
 | S.T.A.L.K.E.R.: Clear Sky | DX9/DX10 | x86 | ✓ | Untested |  |
 | S.T.A.L.K.E.R.: Call of Pripyat | DX9/DX10/DX11 | x86/x64 | ✓ | Untested |  |
 | Serious Sam HD: The First Encounter | DX9/DX11/DX12 | x86 | ✓ | Untested |  |
+| Star Wars Jedi: Fallen Order | DX11 | x64 | ✕ | ✅ Mostly Working | A light on the main-menu starship flickers in the right eye. |
 | Tom Clancy's H.A.W.X | DX9/DX10 | x86 | ✓ | Untested |  |
 | Tom Clancy's Splinter Cell: Blacklist | DX9/DX11 | x86 | ✕ | ✅ Mostly Working | DX9 only. Needs shader fix. |
+| What Remains of Edith Finch | DX11 | x64 | ✕ | ✅ Working |  |
 | World in Conflict | DX9/DX10 | x86 | ✓ | Untested |  |
 
 - **Excluded (Online Ban Risk):** *Age of Conan: Unchained*, *Champions Online*, *DC Universe Online*, *Entropia Universe*, *Final Fantasy 14*, *TERA Online*, *The Lord of the Rings Online*, *Warcraft III: Reign of Chaos*, *World of Tanks*.
@@ -443,7 +452,7 @@ Games that used 3D Vision "Automatic Mode" driver stereo injection, but communic
 | Dragon's Dogma: Dark Arisen | DX9 | x86 | ✕ | Untested | `Stereo=ON` in `config.ini`. |
 | Duke Nukem Forever | DX9/DX10 | x86 | ✕ | Untested |  |
 | Grand Theft Auto IV | DX9 | x32 | ✓ | ✅ Mostly Working | `-stereo` command line argument.<br>Needs shadows shader fix. |
-| Grand Theft Auto V (Legacy) | DX11 | x64 | ✕ | Untested | `Stereo 3D` option in `Graphics` menu. |
+| Grand Theft Auto V (Legacy) | DX11 | x64 | ✕ | ✅ Working | Story mode only, with BattlEye off. |
 | GT Legends | DX9 | x86 | ✕ | Untested |  |
 | Inversion | DX9/DX11 | x86 | ✕ | ⚠️ Partial | Might need to implement more 3D Vison features or shader fix. |
 | Just Cause 2 | DX10 | x86 | ✓ | Untested |  |
