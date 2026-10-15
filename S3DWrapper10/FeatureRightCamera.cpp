@@ -4,7 +4,7 @@
 */
 
 // <RightCamera Buffer Position InvView View Projection InvProjection ViewProjection RelativeViewProjection MoveOriginFor
-// CameraFrom NearPlane FocalRays/>: the right eye's copy of a per-view block describes the right camera (see Transform).
+// CameraFrom NearPlane FocalRays SvPosition/>: the right eye's copy of a per-view block describes the right camera.
 
 #include "StdAfx.h"
 #include "ProfileFeature.h"
@@ -31,7 +31,7 @@ struct CameraLayout
     bool              fromRelVP = false;   // CameraFrom="RelativeViewProjection"
     bool              registers = false;   // Buffer="*": found by its bytes, fields checked against them
     bool              rows = false;        // Layout="Rows": a matrix row per register
-    std::vector<UINT> positions, relVP, nearPlanes, screens;
+    std::vector<UINT> positions, relVP, nearPlanes, screens, svPositions;
     int               invView = -1, view = -1, proj = -1, invProj = -1, viewProj = -1, invViewProj = -1;
     int               prevViewProj = -1, prevProj = -1, clipToPrevClip = -1;   // last frame's camera (TAA, velocity)
 };
@@ -122,7 +122,8 @@ public:
           m_relVP(SplitNames(EntryValue(e, "RelativeViewProjection"))), m_moveOriginFor(SplitNames(EntryValue(e, "MoveOriginFor"))),
           m_cameraFrom(EntryValue(e, "CameraFrom")), m_nearPlanes(SplitNames(EntryValue(e, "NearPlane"))),
           m_focalRays(EntryValue(e, "FocalRays") == "1"), m_invViewProj(EntryValue(e, "InvViewProjection")),
-          m_screens(SplitNames(EntryValue(e, "Screen"))), m_rows(EntryValue(e, "Layout") == "Rows"),
+          m_screens(SplitNames(EntryValue(e, "Screen"))), m_svPositions(SplitNames(EntryValue(e, "SvPosition"))),
+          m_rows(EntryValue(e, "Layout") == "Rows"),
           m_moveOrigin(EntryValue(e, "MoveOrigin") == "1"), m_anySlot(m_buffer == "*"),
           m_prevViewProj(EntryValue(e, "PrevViewProjection")), m_prevProj(EntryValue(e, "PrevProjection")),
           m_clipToPrevClip(EntryValue(e, "ClipToPrevClip"))
@@ -174,6 +175,7 @@ public:
         s_layout.viewProj = off(m_viewProj);
         s_layout.invViewProj = m_invViewProj.empty() ? -1 : off(m_invViewProj);
         for (const std::string& n : m_screens) if (off(n) >= 0) s_layout.screens.push_back((UINT)off(n));
+        for (const std::string& n : m_svPositions) if (off(n) >= 0) s_layout.svPositions.push_back((UINT)off(n));
         s_layout.rows = m_rows;
         s_layout.fromRelVP = m_cameraFrom == "RelativeViewProjection";
         s_layout.known = true;
@@ -218,8 +220,12 @@ public:
             DDILog("  [frame %u] right camera fields (this frame): screen matrices moved %u, not screen-shaped %u | inverse"
                    " fields written %u, left (not the inverse of their forward) %u | last-frame fields moved %u, left (not"
                    " shaped as declared) %u\n", frame, m_screened, m_screenOdd, m_inverses, m_inverseOdd, m_prevMoved, m_prevOdd);
+        if (report && !s_layout.svPositions.empty())
+            DDILog("  [frame %u] right camera SV_Position matrices (this frame): moved %u, not pixel-to-clip %u\n", frame,
+                   m_svMoved, m_svOdd);
         m_atDraw = m_atDispatch = m_moved = m_skipped = 0;
         m_screened = m_screenOdd = m_inverses = m_inverseOdd = 0;
+        m_svMoved = m_svOdd = 0;
         m_prevMoved = m_prevOdd = 0;
         m_byP00.clear();
     }
@@ -247,7 +253,7 @@ private:
     std::vector<std::string> m_nearPlanes;
     bool                     m_focalRays = false;
     std::string              m_invViewProj;
-    std::vector<std::string> m_screens;
+    std::vector<std::string> m_screens, m_svPositions;
     bool                     m_rows = false, m_moveOrigin = false, m_anySlot = false;
     std::string              m_prevViewProj, m_prevProj, m_clipToPrevClip;
     unsigned                 m_prevMoved = 0, m_prevOdd = 0;
@@ -256,6 +262,7 @@ private:
     bool                     m_sceneValid = false;
     unsigned                 m_atDraw = 0, m_atDispatch = 0, m_moved = 0, m_skipped = 0;
     unsigned                 m_screened = 0, m_screenOdd = 0, m_inverses = 0, m_inverseOdd = 0;
+    unsigned                 m_svMoved = 0, m_svOdd = 0;
 
     // Buffer="*" (reflection stripped, UE4): the block is found by its bytes and fields are registers ("r16"); Layout="Rows",
     // Screen, InvViewProjection, PrevViewProjection, PrevProjection, ClipToPrevClip and MoveOrigin="1" serve UE4's View block.
@@ -267,6 +274,7 @@ private:
         for (const std::string& n : m_relVP) if (RegisterOffset(n) >= 0) s_layout.relVP.push_back((UINT)RegisterOffset(n));
         for (const std::string& n : m_nearPlanes) if (RegisterOffset(n) >= 0) s_layout.nearPlanes.push_back((UINT)RegisterOffset(n));
         for (const std::string& n : m_screens) if (RegisterOffset(n) >= 0) s_layout.screens.push_back((UINT)RegisterOffset(n));
+        for (const std::string& n : m_svPositions) if (RegisterOffset(n) >= 0) s_layout.svPositions.push_back((UINT)RegisterOffset(n));
         s_layout.invView = RegisterOffset(m_invView);
         s_layout.view = RegisterOffset(m_view);
         s_layout.proj = RegisterOffset(m_proj);
@@ -296,6 +304,7 @@ private:
             in(s_layout.prevProj, 64) || in(s_layout.clipToPrevClip, 64))
             return true;
         for (UINT s : s_layout.screens) if (in((int)s, 64)) return true;
+        for (UINT s : s_layout.svPositions) if (in((int)s, 64)) return true;
         for (UINT p : s_layout.positions) if (in((int)p, 16)) return true;
         return false;
     }
@@ -386,6 +395,8 @@ private:
         const bool haveP = row(s_layout.proj, 0) && row(s_layout.proj, 3);
         if (haveP)
             for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) P[r][c] = row(s_layout.proj, r)[c];
+        // SV_Position matrices, before the view-projection moves: the right pixel stands for the left one.
+        for (UINT s : s_layout.svPositions) ++(SvPositionToRight(data, size, (int)s, P, haveP, b) ? m_svMoved : m_svOdd);
         // Register fields are checked against the bytes: an inverse is edited only where the game's is one.
         const bool invProjOk = !s_layout.registers || (haveP && IsInverseOf(data, size, s_layout.invProj, P));
         if (s_layout.registers && s_layout.invProj >= 0) ++(invProjOk ? m_inverses : m_inverseOdd);
@@ -489,6 +500,29 @@ private:
         return true;
     }
 
+    // An SV_Position matrix (pixel x, y, device z, 1; a column per register), pixel-to-clip with the left view-projection:
+    // input x becomes px + (W/2)*b*(C/w - 1), 1/w from device z by the projection's z row.
+    static bool SvPositionToRight(unsigned char* data, size_t size, int off, const double P[4][4], bool haveP, float b)
+    {
+        double VP[4][4], S[4][4], M[4][4] = {};
+        if (!haveP || !LoadMatrix(data, size, s_layout.viewProj, VP) || !LoadMatrix(data, size, off, S)) return false;
+        for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) for (int k = 0; k < 4; ++k) M[r][c] += VP[r][k] * S[k][c];
+        const double w = M[3][3], sx = w != 0.0 ? M[0][0] / w : 0.0;
+        if (!(sx > 0.0)) return false;
+        auto negligible = [w](double v, double scale) { return fabs(v / w) <= 1e-3 * scale; };
+        if (!negligible(M[0][1], sx) || !negligible(M[0][2], 1.0) || !negligible(M[3][0], sx) || !negligible(M[3][1], sx) ||
+            !negligible(M[3][2], 1.0) || !negligible(M[2][0], sx) || !negligible(M[2][1], sx) || !negligible(M[2][3], 1.0) ||
+            fabs(M[2][2] / w - 1.0) > 1e-2)
+            return false;
+        const double m22 = P[2][2], m23 = P[2][3];
+        if (fabs(P[3][2] - 1.0) > 1e-3 || fabs(P[3][3]) > 1e-4 || m23 == 0.0) return false;
+        const double half = 1.0 / sx, conv = stereo::Convergence();
+        const double kz = half * b * conv / m23, k1 = -half * b * (1.0 + conv * m22 / m23);
+        float* f = (float*)(data + off);
+        for (int r = 0; r < 4; ++r) { f[r * 4 + 2] += (float)(kz * S[r][0]); f[r * 4 + 3] += (float)(k1 * S[r][0]); }
+        return true;
+    }
+
     // Every matrix field between a row per register and a column per register (its own inverse).
     static void TransposeFields(unsigned char* data, size_t size)
     {
@@ -497,6 +531,7 @@ private:
         for (int m : mats) TransposeAt(data, size, m);
         for (UINT m : s_layout.relVP) TransposeAt(data, size, (int)m);
         for (UINT s : s_layout.screens) TransposeAt(data, size, (int)s);
+        for (UINT s : s_layout.svPositions) TransposeAt(data, size, (int)s);
     }
 
     // The view-projection's x axis (as stored) is p00 long, within 2%; true when the block declares none.

@@ -842,6 +842,15 @@
     <ClCompile Include="..\S3DWrapper10\FeatureRecycleRightCopies.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureDecalMatrices.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FeatureFogVolumeLookups.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\S3DWrapper10\FogLookup11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\S3DWrapper10\FeatureHudSceneDepth.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

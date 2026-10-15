@@ -16,7 +16,8 @@ void  WriteShaderToFile (const TCHAR* codeName, const TCHAR* declName, const TCH
 CONST TCHAR* GetStereoImageFileExtension( );
 CONST TCHAR* GetImageFileExtension( );
 
-bool SaveImageToFile( TCHAR* filename, DXGI_FORMAT format, DWORD width, DWORD height, char* buffer, UINT rowPitch );
+// asScreenshotType: encoded as ScreenshotType says (PNG, JPEG, BMP, DDS); otherwise JPEG.
+bool SaveImageToFile( TCHAR* filename, DXGI_FORMAT format, DWORD width, DWORD height, char* buffer, UINT rowPitch, bool asScreenshotType = false );
  
 enum TD3DVersion
 {

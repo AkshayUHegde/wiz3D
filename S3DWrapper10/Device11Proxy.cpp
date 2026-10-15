@@ -397,7 +397,7 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
     const size_t kKeepBudget = sizeof(void*) == 8 ? (1024u << 20) : (64u << 20);   // Andromeda's set outgrew 256 MB
     // Capture build: every stage keeps its code, so a capture can disassemble the draw's VS and PS; a sprite shader
     // that reads its world position keeps it whatever the budget (its right eye draws a twin of it).
-    if (s_keptBytes.load() + byteLength > kKeepBudget && info.spriteWorldInput < 0) info.bytecode.reset();
+    if (s_keptBytes.load() + byteLength > kKeepBudget && info.spriteWorldInput < 0 && !info.keepCode) info.bytecode.reset();
     else s_keptBytes += byteLength;
     if (analyzed && !info.projection.matrixData.cb.empty())
     {

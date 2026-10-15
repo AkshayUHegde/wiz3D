@@ -800,11 +800,14 @@ public:
     { shifted = m_clipSpaceDrawsThisFrame; noCamera = m_clipSpaceNoCameraThisFrame; m_clipSpaceDrawsThisFrame = m_clipSpaceNoCameraThisFrame = 0; }
     unsigned                  SpriteTwinCount() { const unsigned n = m_spriteTwinDrawsThisFrame; m_spriteTwinDrawsThisFrame = 0; return n; }
     // Shader twins' plan tags (ShaderPatch11 clients).
-    enum TwinTag { kTwinSpriteDepth = 1 };
+    enum TwinTag { kTwinSpriteDepth = 1, kTwinFogVolume = 2 };
     // A twin of the bound `st` shader under `plan` (built once per tag and CRC), bound for the coming right draw or
     // dispatch with `count` floats (16 at most) in its cbuffer; false = none (unpatchable, no code kept).
     bool                      BindTwin(StageIdx st, const ShaderAnalysis11Result* info, int tag, const ShaderPatchPlan& plan,
                                        const float* consts, UINT count);
+    // The same for the bound pixel shader, from a feature's OnRightDraw.
+    bool                      BindPixelTwin(int tag, const ShaderPatchPlan& plan, const float* consts, UINT count)
+    { return BindTwin(ST_PS, m_boundInfo[1], tag, plan, consts, count); }
     unsigned                  FlippedWritesThisFrame() const { return m_flippedWritesThisFrame; }
 private:
 

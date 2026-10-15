@@ -135,6 +135,8 @@ private:
     void PersistSettings();
     DataInput m_savedInput;
     ULONGLONG m_writeSettingsAt = 0;
+    // The screenshot hotkey (or the autotests' MakeScreenshot): both eyes before the output pass, as DX9 writes them.
+    void WriteScreenshot();
 
     // Stage 4d: stereo BB sibling + SBS composite. EnsureStereoBackBuffer
     // allocates wiz3D-side LEFT + RIGHT BB textures (matching real BB desc

@@ -21,6 +21,8 @@ public:
 	void S3DAPI_API setBackBufferWidth(DWORD width);
 	//void setSwapChain(CBaseSwapChain* pSwapChain)	{ m_pSwapChain = pSwapChain; }
 	void S3DAPI_API clear();
+	// A screenshot key press since the last call; this thread is the key's only poller, so a tap is not lost to it.
+	bool S3DAPI_API TakeScreenshotRequest();
 #pragma warning(disable:4251)
 	CriticalSection m_Access;
 #pragma warning(default:4251)
@@ -41,6 +43,7 @@ private:
 	//BOOL		m_RepaintNextFrame;
 	//LARGE_INTEGER m_LastUpdateTime;
 	long volatile	m_rc;
+	long volatile	m_ScreenshotRequest;
 	static DWORD m_KeyRepeatRate;
 	static DWORD m_KeyRepeatDelay;
 

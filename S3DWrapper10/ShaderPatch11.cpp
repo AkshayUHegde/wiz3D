@@ -198,6 +198,22 @@ void Ins(std::vector<uint32_t>& out, uint32_t opcode, std::initializer_list<std:
 
 } // namespace DxbcEmit
 
+bool DxbcOperandOffsets(const uint32_t* ins, uint32_t len, std::vector<uint32_t>& offsets)
+{
+    offsets.clear();
+    if (!ins || !len) return false;
+    uint32_t j = 1;
+    for (uint32_t ext = ins[0] >> 31; ext && j < len; ++j) ext = ins[j] >> 31;
+    while (j < len)
+    {
+        const size_t n = OperandLen(ins, j, len);
+        if (!n) return false;
+        offsets.push_back(j);
+        j += (uint32_t)n;
+    }
+    return true;
+}
+
 void DxbcHash11(const unsigned char* container, size_t len, uint32_t outHash[4])
 {
     outHash[0] = outHash[1] = outHash[2] = outHash[3] = 0;
@@ -237,7 +253,7 @@ bool PatchShader(const void* bc, size_t len, const ShaderPatchPlan& plan, unsign
 {
     out.clear();
     const unsigned char* p = (const unsigned char*)bc;
-    if (!p || len < 36 || memcmp(p, "DXBC", 4) != 0 || !plan.beforeRet) return false;
+    if (!p || len < 36 || memcmp(p, "DXBC", 4) != 0 || (!plan.beforeRet && !plan.eachInstruction)) return false;
     const uint32_t np = *(const uint32_t*)(p + 28);
     if (np > 64 || 32 + (size_t)np * 4 > len) return false;
     const uint32_t* offs = (const uint32_t*)(p + 32);
@@ -331,6 +347,7 @@ bool PatchShader(const void* bc, size_t len, const ShaderPatchPlan& plan, unsign
     };
     auto emitTemps = [&]() { o.push_back(Op(D3D10_SB_OPCODE_DCL_TEMPS, 2)); o.push_back(newTemps); };
     bool cbDone = !plan.cbRegisters, tempsDone = newTemps == (uint32_t)temps && dclTempsAt == (size_t)-1;
+    std::vector<unsigned> nth(0x800, 0);   // per opcode, for eachInstruction
     for (size_t i = 2; i < count; )
     {
         const uint32_t L = OpLen(t, i, count);
@@ -343,10 +360,18 @@ bool PatchShader(const void* bc, size_t len, const ShaderPatchPlan& plan, unsign
         if (i == dclTempsAt) { emitTemps(); tempsDone = true; i += L; continue; }
         if (op == D3D10_SB_OPCODE_RET || op == D3D10_SB_OPCODE_RETC)
         {
-            if (!plan.beforeRet(o, regs)) return false;
+            if (plan.beforeRet && !plan.beforeRet(o, regs)) return false;
             if (outReg >= 0)
                 DxbcEmit::Ins(o, D3D10_SB_OPCODE_MOV, { DxbcEmit::Dst(DxbcEmit::kOutput, (uint32_t)outReg, regs.outMask),
                                                         DxbcEmit::Src(DxbcEmit::kTemp, regs.outTemp, 0, 1, 2, 3) });
+        }
+        if (plan.eachInstruction && i >= firstNonDcl && !IsDecl(op))
+        {
+            std::vector<uint32_t> ins(src.begin() + i, src.begin() + i + L);
+            if (!plan.eachInstruction(ins, nth[op]++, o, regs) || ins.size() != L) return false;
+            o.insert(o.end(), ins.begin(), ins.end());
+            i += L;
+            continue;
         }
         for (uint32_t k = 0; k < L; ++k) o.push_back(src[i + k]);
         i += L;

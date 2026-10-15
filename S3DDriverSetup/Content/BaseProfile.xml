@@ -1915,6 +1915,30 @@
 		<!-- The game remakes its render targets every frame: their right copies are reused rather than allocated again -->
 		<RecycleRightCopies Value="1"/>
 	</Profile>
+	<Profile Name="Star Wars Jedi: Fallen Order">
+		<File Name="starwarsjedifallenorder.exe" />
+		<File Name="SwGame-Win64-Shipping.exe" />
+		<!-- Unreal Engine 4.21: Edith Finch's settings, with 4.21's View block registers -->
+		<DetectInverseMatrix Value="1"/>
+		<PatchConstantsAtDraw Value="1"/>
+		<PrivateBackBufferRefs Value="1"/>
+		<!-- SvPosition r40: materials rebuild world position from SV_Position (volumetric lightmap lookups) -->
+		<RightCamera Buffer="*" Layout="Rows" MoveOrigin="1" ViewProjection="r0" View="r8" Projection="r24"
+		             InvProjection="r32" InvViewProjection="r36" Screen="r44 r48" SvPosition="r40" Position="r59"
+		             PrevViewProjection="r83" PrevProjection="r63" ClipToPrevClip="r114"/>
+		<!-- The shadow projection's screen-to-shadow matrix in $Globals, read as (x*W, y*W, W, 1) -->
+		<ScreenRayMatrix Screen="cb0[30]"/>
+		<!-- Shadow maps (spot-light cones too) are depth-only passes from the light: both eyes use the left constants -->
+		<LightViewPasses Value="1" />
+		<RecycleRightCopies Value="1"/>
+		<!-- UAV textures get a right copy: the pause screen composites a full-screen texture that was otherwise mono -->
+		<ComputeOutputsPerEye Value="1"/>
+		<!-- Instanced decals read box-to-clip and SV_Position-to-decal arrays by instance index -->
+		<DecalMatrices Value="1"/>
+		<!-- The volumetric fog grid is built from the left camera: the right eye's fog apply looks it up there; translucency
+		     projects its SvPosition-moved position with the left WorldToClip and needs no twin (Ndc="0") -->
+		<FogVolumeLookups Value="1" Ndc="0"/>
+	</Profile>
 	<Profile Name="GTA V">
 		<File Name="GTA5.exe" />
 		<!-- Constant buffers are filled long before their draw, and cables project in the domain shader: patch each for the

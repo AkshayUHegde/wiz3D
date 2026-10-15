@@ -35,7 +35,13 @@ struct ShaderPatchPlan
     uint32_t cbRegisters = 0;    // the wrapper's cbuffer, in registers (0 = none)
     // Emits the plan's tokens before every ret (DxbcEmit helps); false = this shader cannot take the plan.
     std::function<bool(std::vector<uint32_t>& out, const PatchRegs& regs)> beforeRet;
+    // Every instruction past the declarations (nth = earlier ones of its opcode), as a copy the plan may edit in place
+    // (same length), its own tokens emitted before it; false = refused. A plan sets this, beforeRet or both.
+    std::function<bool(std::vector<uint32_t>& ins, unsigned nth, std::vector<uint32_t>& out, const PatchRegs& regs)> eachInstruction;
 };
+
+// The token offsets of an instruction's operands, past its extended opcode tokens; false = an operand it cannot size.
+bool DxbcOperandOffsets(const uint32_t* ins, uint32_t len, std::vector<uint32_t>& offsets);
 
 // The twin of a DXBC blob under a plan, its cbuffer at `cbSlot` (refused if the shader declares that slot). false = a
 // shape the patcher cannot follow (relative output indexing, labels, interfaces, a geometry shader's emits).
