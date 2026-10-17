@@ -232,10 +232,17 @@ private:
     // SBS/TB are linear-sampled, Anaglyph adds a Dubois CB (follow-up),
     // Line/Col/Checker use point sampling (follow-up).
     ID3D11VertexShader*       m_compositeVS;
-    ID3D11PixelShader*        m_compositePS_SBS      = nullptr;  // modes 1 (Half SBS) + 2 (Full SBS)
-    ID3D11PixelShader*        m_compositePS_TB       = nullptr;  // modes 3 (Half TB)  + 4 (Full TB)
-    ID3D11PixelShader*        m_compositePS_Anaglyph = nullptr;  // mode 5 (Dubois Red/Cyan)
+    ID3D11PixelShader*        m_compositePS_SBS              = nullptr;  // modes 1 (Half SBS) + 2 (Full SBS)
+    ID3D11PixelShader*        m_compositePS_TB               = nullptr;  // modes 3 (Half TB)  + 4 (Full TB)
+    ID3D11PixelShader*        m_compositePS_Anaglyph         = nullptr;  // mode 5 (Dubois Red/Cyan)
+    ID3D11PixelShader*        m_compositePS_LineInterleaved  = nullptr;  // mode 6 (row-polarised displays)
+    ID3D11PixelShader*        m_compositePS_ColInterleaved   = nullptr;  // mode 7 (column-polarised displays)
+    ID3D11PixelShader*        m_compositePS_Checkerboard     = nullptr;  // mode 8 (DLP-Link projectors)
     ID3D11SamplerState*       m_compositeSampler;
+    // Point sampler for the interleaved + checkerboard modes where
+    // screen-space pixel parity selects the eye and any linear filtering
+    // would smear eye boundaries.
+    ID3D11SamplerState*       m_compositeSamplerPoint        = nullptr;
     ID3D11RasterizerState*    m_compositeRaster;
     ID3D11BlendState*         m_compositeBlend;
     ID3D11DepthStencilState*  m_compositeDepthStencil;

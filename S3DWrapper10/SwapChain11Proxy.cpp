@@ -249,6 +249,36 @@ float4 PSMain_Anaglyph(VSOut input) : SV_Target {
     float3 c = pow(max(float3(r, g, b), 0.0), 0.4545);
     return float4(c, 1.0);
 }
+
+// Mode 6: Line Interleaved (passive 3D TVs, row-polarised monitors).
+// Even rows carry the left eye, odd rows the right. Screen-space row
+// parity via SV_Position.y so the pattern is independent of texture
+// sampling; the caller binds a point sampler at s0 so eye boundaries
+// aren't smeared by linear filtering.
+float4 PSMain_LineInterleaved(VSOut input) : SV_Target {
+    float4 cL = leftTex.Sample (samp, input.uv);
+    float4 cR = rightTex.Sample(samp, input.uv);
+    bool isOddRow = (uint(input.pos.y) & 1u) != 0u;
+    return isOddRow ? cR : cL;
+}
+
+// Mode 7: Column Interleaved. Like line-interleaved but on vertical
+// stripes; used by rare column-polarised displays.
+float4 PSMain_ColumnInterleaved(VSOut input) : SV_Target {
+    float4 cL = leftTex.Sample (samp, input.uv);
+    float4 cR = rightTex.Sample(samp, input.uv);
+    bool isOddCol = (uint(input.pos.x) & 1u) != 0u;
+    return isOddCol ? cR : cL;
+}
+
+// Mode 8: Checkerboard. XOR of x+y pixel parity; DLP-Link 3D projectors
+// decode this directly.
+float4 PSMain_Checkerboard(VSOut input) : SV_Target {
+    float4 cL = leftTex.Sample (samp, input.uv);
+    float4 cR = rightTex.Sample(samp, input.uv);
+    bool white = ((uint(input.pos.x) + uint(input.pos.y)) & 1u) != 0u;
+    return white ? cR : cL;
+}
 )";
 
 HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
@@ -400,7 +430,9 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     // one-time cost; the shaders are independent of BB format/size so we
     // don't have to re-compile across ResizeBuffers.
     if (m_compositeVS && m_compositePS_SBS && m_compositePS_TB &&
-        m_compositePS_Anaglyph && m_compositeSampler) return S_OK;
+        m_compositePS_Anaglyph && m_compositePS_LineInterleaved &&
+        m_compositePS_ColInterleaved && m_compositePS_Checkerboard &&
+        m_compositeSampler && m_compositeSamplerPoint) return S_OK;
     if (!m_parent) return E_FAIL;
     ID3D11Device* dev = m_parent->GetReal();
     if (!dev) return E_FAIL;
@@ -426,11 +458,17 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     vsBlob->Release();
     if (FAILED(hr)) return hr;
 
-    hr = CompileCompositePS(dev, "PSMain_SBS",      &m_compositePS_SBS);
+    hr = CompileCompositePS(dev, "PSMain_SBS",               &m_compositePS_SBS);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
-    hr = CompileCompositePS(dev, "PSMain_TB",       &m_compositePS_TB);
+    hr = CompileCompositePS(dev, "PSMain_TB",                &m_compositePS_TB);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
-    hr = CompileCompositePS(dev, "PSMain_Anaglyph", &m_compositePS_Anaglyph);
+    hr = CompileCompositePS(dev, "PSMain_Anaglyph",          &m_compositePS_Anaglyph);
+    if (FAILED(hr)) { ReleaseComposite(); return hr; }
+    hr = CompileCompositePS(dev, "PSMain_LineInterleaved",   &m_compositePS_LineInterleaved);
+    if (FAILED(hr)) { ReleaseComposite(); return hr; }
+    hr = CompileCompositePS(dev, "PSMain_ColumnInterleaved", &m_compositePS_ColInterleaved);
+    if (FAILED(hr)) { ReleaseComposite(); return hr; }
+    hr = CompileCompositePS(dev, "PSMain_Checkerboard",      &m_compositePS_Checkerboard);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
 
     D3D11_SAMPLER_DESC sd = {};
@@ -442,6 +480,14 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     sd.MinLOD         = 0.f;
     sd.MaxLOD         = D3D11_FLOAT32_MAX;
     hr = dev->CreateSamplerState(&sd, &m_compositeSampler);
+    if (FAILED(hr)) { ReleaseComposite(); return hr; }
+
+    // Point sampler for the interleaved + checkerboard modes: screen-space
+    // pixel parity selects the eye, and linear filtering would smear eye
+    // boundaries at the half-pixel between stripes.
+    D3D11_SAMPLER_DESC sdPoint = sd;
+    sdPoint.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    hr = dev->CreateSamplerState(&sdPoint, &m_compositeSamplerPoint);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
 
     D3D11_RASTERIZER_DESC rd = {};
@@ -463,8 +509,10 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     hr = dev->CreateDepthStencilState(&dsd, &m_compositeDepthStencil);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
 
-    DDILog("SwapChain11Proxy::EnsureComposite: VS=%p PS(SBS)=%p PS(TB)=%p PS(Anaglyph)=%p sampler=%p\n",
-           m_compositeVS, m_compositePS_SBS, m_compositePS_TB, m_compositePS_Anaglyph, m_compositeSampler);
+    DDILog("SwapChain11Proxy::EnsureComposite: VS=%p PS(SBS=%p TB=%p Anaglyph=%p Line=%p Col=%p Checker=%p) sampler(linear=%p point=%p)\n",
+           m_compositeVS, m_compositePS_SBS, m_compositePS_TB, m_compositePS_Anaglyph,
+           m_compositePS_LineInterleaved, m_compositePS_ColInterleaved, m_compositePS_Checkerboard,
+           m_compositeSampler, m_compositeSamplerPoint);
     return S_OK;
 }
 
@@ -473,10 +521,14 @@ void SwapChain11Proxy::ReleaseComposite()
     if (m_compositeDepthStencil) { m_compositeDepthStencil->Release(); m_compositeDepthStencil = nullptr; }
     if (m_compositeBlend)        { m_compositeBlend->Release();        m_compositeBlend        = nullptr; }
     if (m_compositeRaster)       { m_compositeRaster->Release();       m_compositeRaster       = nullptr; }
-    if (m_compositeSampler)      { m_compositeSampler->Release();      m_compositeSampler      = nullptr; }
-    if (m_compositePS_Anaglyph)  { m_compositePS_Anaglyph->Release();  m_compositePS_Anaglyph  = nullptr; }
-    if (m_compositePS_TB)        { m_compositePS_TB->Release();        m_compositePS_TB        = nullptr; }
-    if (m_compositePS_SBS)       { m_compositePS_SBS->Release();       m_compositePS_SBS       = nullptr; }
+    if (m_compositeSamplerPoint)      { m_compositeSamplerPoint->Release();      m_compositeSamplerPoint      = nullptr; }
+    if (m_compositeSampler)           { m_compositeSampler->Release();           m_compositeSampler           = nullptr; }
+    if (m_compositePS_Checkerboard)   { m_compositePS_Checkerboard->Release();   m_compositePS_Checkerboard   = nullptr; }
+    if (m_compositePS_ColInterleaved) { m_compositePS_ColInterleaved->Release(); m_compositePS_ColInterleaved = nullptr; }
+    if (m_compositePS_LineInterleaved){ m_compositePS_LineInterleaved->Release();m_compositePS_LineInterleaved= nullptr; }
+    if (m_compositePS_Anaglyph)       { m_compositePS_Anaglyph->Release();       m_compositePS_Anaglyph       = nullptr; }
+    if (m_compositePS_TB)             { m_compositePS_TB->Release();             m_compositePS_TB             = nullptr; }
+    if (m_compositePS_SBS)            { m_compositePS_SBS->Release();            m_compositePS_SBS            = nullptr; }
     if (m_compositeVS)           { m_compositeVS->Release();           m_compositeVS           = nullptr; }
     if (m_compositeState)        { m_compositeState->Release();        m_compositeState        = nullptr; }
 }
@@ -574,16 +626,13 @@ void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
         eyeL = eyeR;
         eyeR = t;
     }
-    ID3D11ShaderResourceView* srvs[2] = { eyeL, eyeR };
-    ctx->PSSetShaderResources(0, 2, srvs);
-    ctx->PSSetSamplers(0, 1, &m_compositeSampler);
-
-    // Pick the pixel shader for the active OutputMode. The null-check
-    // guards against a shader not yet compiled for a follow-up mode
-    // (modes 5-8) so a mis-configured OutputMode doesn't crash; the
-    // SBS path is used as a safe fallback until that mode's shader
-    // lands.
-    ID3D11PixelShader* ps = m_compositePS_SBS;
+    // Pick the pixel shader + sampler for the active OutputMode. The
+    // null-checks guard against a shader not yet compiled for a follow-up
+    // mode so a mis-configured OutputMode falls back to the SBS path
+    // instead of crashing. Modes 6-8 swap in a point sampler so the
+    // screen-space pixel parity isn't smeared by linear filtering.
+    ID3D11PixelShader*  ps      = m_compositePS_SBS;
+    ID3D11SamplerState* sampler = m_compositeSampler;
     switch (mode)
     {
     case OM_HALF_TB:
@@ -593,11 +642,27 @@ void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
     case OM_ANAGLYPH:
         if (m_compositePS_Anaglyph) ps = m_compositePS_Anaglyph;
         break;
+    case OM_LINE_INTERLEAVED:
+        if (m_compositePS_LineInterleaved)  ps = m_compositePS_LineInterleaved;
+        if (m_compositeSamplerPoint)        sampler = m_compositeSamplerPoint;
+        break;
+    case OM_COLUMN_INTERLEAVED:
+        if (m_compositePS_ColInterleaved)   ps = m_compositePS_ColInterleaved;
+        if (m_compositeSamplerPoint)        sampler = m_compositeSamplerPoint;
+        break;
+    case OM_CHECKERBOARD:
+        if (m_compositePS_Checkerboard)     ps = m_compositePS_Checkerboard;
+        if (m_compositeSamplerPoint)        sampler = m_compositeSamplerPoint;
+        break;
     case OM_HALF_SBS:
     case OM_FULL_SBS:
     default:
         break;
     }
+
+    ID3D11ShaderResourceView* srvs[2] = { eyeL, eyeR };
+    ctx->PSSetShaderResources(0, 2, srvs);
+    ctx->PSSetSamplers(0, 1, &sampler);
 
     ctx->VSSetShader(m_compositeVS, nullptr, 0);
     ctx->PSSetShader(ps, nullptr, 0);
