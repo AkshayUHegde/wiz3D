@@ -1,0 +1,514 @@
+/*
+* wiz3D DX9 OSD renderer -- see OSDRenderer9.h for the design notes.
+*/
+#include "stdafx.h"
+#include "OSDRenderer9.h"
+#include "..\S3DAPI\GlobalData.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+#include <algorithm>
+
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "user32.lib")
+
+#ifdef DrawText
+#undef DrawText
+#endif
+
+namespace wiz3d
+{
+
+// -----------------------------------------------------------------------
+// Shared helpers (duplicated from the DX11 OSDRenderer to keep the two
+// wrappers decoupled -- the DX11 one owns its own TexSlot plumbing).
+// -----------------------------------------------------------------------
+static HFONT MakeFont(const wchar_t* face, int ptSize, int weight, int& outHeightPx)
+{
+    outHeightPx = -MulDiv(ptSize, 96, 72);
+    return CreateFontW(
+        outHeightPx, 0, 0, 0,
+        weight,
+        FALSE /*italic*/, FALSE /*underline*/, FALSE /*strikeout*/,
+        DEFAULT_CHARSET,
+        OUT_TT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        VARIABLE_PITCH | FF_SWISS,
+        face);
+}
+
+static bool ResolveDllFontsDir(wchar_t out[MAX_PATH])
+{
+    HMODULE hMod = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&ResolveDllFontsDir),
+            &hMod) || !hMod) return false;
+    if (!GetModuleFileNameW(hMod, out, MAX_PATH)) return false;
+    wchar_t* lastSlash = wcsrchr(out, L'\\');
+    if (!lastSlash) return false;
+    *(lastSlash + 1) = L'\0';
+    return true;
+}
+
+void OSDRenderer9::GDIFont::Destroy()
+{
+    if (font) { DeleteObject(font); font = nullptr; }
+    heightPx = 0;
+}
+
+// -----------------------------------------------------------------------
+// TexSlot -- DX9 variant uses IDirect3DTexture9 (DYNAMIC, D3DPOOL_DEFAULT)
+// instead of the DX11 ID3D11Texture2D.
+// -----------------------------------------------------------------------
+bool OSDRenderer9::TexSlot::Create(IDirect3DDevice9* dev, int width, int height)
+{
+    w = width; h = height;
+
+    HDC screen = GetDC(NULL);
+    dc = CreateCompatibleDC(screen);
+    ReleaseDC(NULL, screen);
+    if (!dc) return false;
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = w;
+    bmi.bmiHeader.biHeight      = -h;      // top-down
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    void* pBits = nullptr;
+    dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+    if (!dib || !pBits) { Destroy(); return false; }
+    bits = (BYTE*)pBits;
+
+    prev = (HBITMAP)SelectObject(dc, dib);
+    SetBkMode(dc, TRANSPARENT);
+
+    // DX9 texture: DYNAMIC + D3DPOOL_DEFAULT so we can Lock/Unlock cheaply
+    // every frame if content changes. A8R8G8B8 matches our DIB's BGRA
+    // layout (D3D names it A8R8G8B8 but the memory is Blue in byte 0).
+    HRESULT hr = dev->CreateTexture(w, h, 1, D3DUSAGE_DYNAMIC,
+                                     D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
+                                     &tex, nullptr);
+    if (FAILED(hr) || !tex) { Destroy(); return false; }
+
+    Clear();
+    dirty = true;
+    return true;
+}
+
+void OSDRenderer9::TexSlot::Destroy()
+{
+    if (tex)  { tex->Release();  tex  = nullptr; }
+    if (dc && prev) { SelectObject(dc, prev); prev = nullptr; }
+    if (dib)  { DeleteObject(dib); dib = nullptr; }
+    if (dc)   { DeleteDC(dc);     dc  = nullptr; }
+    bits = nullptr; w = h = 0; dirty = false;
+}
+
+void OSDRenderer9::TexSlot::Clear()
+{
+    if (!bits) return;
+    memset(bits, 0, (size_t)w * h * 4);
+    dirty = true;
+}
+
+void OSDRenderer9::TexSlot::DrawRect(const RECT& r, COLORREF rgb, BYTE alpha)
+{
+    if (!bits) return;
+    const BYTE R = GetRValue(rgb), G = GetGValue(rgb), B = GetBValue(rgb);
+    const int x0 = (std::max)(0L, (long)r.left),   x1 = (std::min)((long)w, (long)r.right);
+    const int y0 = (std::max)(0L, (long)r.top),    y1 = (std::min)((long)h, (long)r.bottom);
+    for (int y = y0; y < y1; ++y) {
+        BYTE* row = bits + (size_t)y * w * 4;
+        for (int x = x0; x < x1; ++x) {
+            BYTE* p = row + x * 4;
+            p[0] = B; p[1] = G; p[2] = R; p[3] = alpha;
+        }
+    }
+    dirty = true;
+}
+
+void OSDRenderer9::TexSlot::DrawTextLine(const wchar_t* text, const RECT& r, HFONT font,
+                                         COLORREF rgb, UINT flags)
+{
+    if (!dc || !bits || !font || !text) return;
+
+    HFONT prevFont = (HFONT)SelectObject(dc, font);
+    SetTextColor(dc, rgb);
+
+    RECT rr = r;
+    ::DrawTextW(dc, text, -1, &rr, flags);
+
+    const int x0 = (std::max)(0L, (long)r.left),   x1 = (std::min)((long)w, (long)r.right);
+    const int y0 = (std::max)(0L, (long)r.top),    y1 = (std::min)((long)h, (long)r.bottom);
+    const BYTE Rt = GetRValue(rgb), Gt = GetGValue(rgb), Bt = GetBValue(rgb);
+    for (int y = y0; y < y1; ++y) {
+        BYTE* row = bits + (size_t)y * w * 4;
+        for (int x = x0; x < x1; ++x) {
+            BYTE* p = row + x * 4;
+            BYTE lum = (std::max)((std::max)(p[0], p[1]), p[2]);
+            if (lum > 0 && p[3] == 0) {
+                p[0] = Bt; p[1] = Gt; p[2] = Rt; p[3] = lum;
+            }
+        }
+    }
+
+    SelectObject(dc, prevFont);
+    dirty = true;
+}
+
+void OSDRenderer9::TexSlot::Upload()
+{
+    if (!dirty || !tex || !bits) return;
+    D3DLOCKED_RECT lr = {};
+    if (FAILED(tex->LockRect(0, &lr, nullptr, D3DLOCK_DISCARD))) return;
+    const size_t rowBytes = (size_t)w * 4;
+    for (int y = 0; y < h; ++y) {
+        memcpy((BYTE*)lr.pBits + (size_t)y * lr.Pitch, bits + (size_t)y * rowBytes, rowBytes);
+    }
+    tex->UnlockRect(0);
+    dirty = false;
+}
+
+// -----------------------------------------------------------------------
+// OSDRenderer9
+// -----------------------------------------------------------------------
+OSDRenderer9::OSDRenderer9() {}
+OSDRenderer9::~OSDRenderer9() { ReleaseAll(); }
+
+bool OSDRenderer9::LoadInterFontPrivate()
+{
+    wchar_t dllPath[MAX_PATH] = {};
+    if (!ResolveDllFontsDir(dllPath)) return false;
+
+    static const wchar_t* kFiles[3] = {
+        L"Fonts\\Inter-Regular.ttf",
+        L"Fonts\\Inter-SemiBold.ttf",
+        L"Fonts\\Inter-Bold.ttf",
+    };
+    m_interLoadedCount = 0;
+    for (int i = 0; i < 3; ++i) {
+        _snwprintf_s(m_interPaths[i], _TRUNCATE, L"%s%s", dllPath, kFiles[i]);
+        if (AddFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0) > 0)
+            m_interLoadedCount++;
+        else
+            m_interPaths[i][0] = L'\0';
+    }
+    return m_interLoadedCount > 0;
+}
+
+void OSDRenderer9::UnloadInterFontPrivate()
+{
+    for (int i = 0; i < 3; ++i) {
+        if (m_interPaths[i][0]) {
+            RemoveFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0);
+            m_interPaths[i][0] = L'\0';
+        }
+    }
+    m_interLoadedCount = 0;
+}
+
+bool OSDRenderer9::Init(IDirect3DDevice9* device)
+{
+    if (m_initDone)   return true;
+    if (m_initFailed) return false;
+    if (!device)      return false;
+
+    m_dev = device;
+
+    if (LoadInterFontPrivate())
+        m_fontFace = L"Inter";
+
+    int px = 0;
+    m_fontStatus.font   = MakeFont(m_fontFace, 20, FW_SEMIBOLD, px); m_fontStatus.heightPx   = px;
+    m_fontFps.font      = MakeFont(m_fontFace, 16, FW_SEMIBOLD, px); m_fontFps.heightPx      = px;
+    m_fontHelp.font     = MakeFont(m_fontFace, 22, FW_BOLD,     px); m_fontHelp.heightPx     = px;
+    m_fontHelpBody.font = MakeFont(m_fontFace, 15, FW_NORMAL,   px); m_fontHelpBody.heightPx = px;
+    if (!m_fontStatus.font || !m_fontFps.font || !m_fontHelp.font || !m_fontHelpBody.font) {
+        ReleaseAll(); m_initFailed = true; return false;
+    }
+
+    if (!m_slots[(int)Slot::Status].Create(device, 640, 48))      { ReleaseAll(); m_initFailed = true; return false; }
+    if (!m_slots[(int)Slot::Fps].Create(device, 180, 36))         { ReleaseAll(); m_initFailed = true; return false; }
+    if (!m_slots[(int)Slot::HotkeyHelp].Create(device, 720, 520)) { ReleaseAll(); m_initFailed = true; return false; }
+
+    m_initDone = true;
+    return true;
+}
+
+void OSDRenderer9::OnDeviceLost()
+{
+    // D3D9 Reset() invalidates D3DPOOL_DEFAULT resources. Drop just the
+    // textures; the GDI/DIB side survives, and Init re-creates the
+    // textures on the next Render call.
+    for (int i = 0; i < (int)Slot::_Count; ++i) {
+        if (m_slots[i].tex) { m_slots[i].tex->Release(); m_slots[i].tex = nullptr; }
+        m_slots[i].dirty = true;    // force upload after re-create
+    }
+    m_initDone = false;
+}
+
+void OSDRenderer9::ReleaseAll()
+{
+    for (int i = 0; i < (int)Slot::_Count; ++i) m_slots[i].Destroy();
+    m_fontHelpBody.Destroy();
+    m_fontHelp.Destroy();
+    m_fontFps.Destroy();
+    m_fontStatus.Destroy();
+    UnloadInterFontPrivate();
+    m_fontFace = L"Arial";
+    m_initDone = false;
+    m_initFailed = false;
+    m_lastStatus[0] = m_lastFps[0] = L'\0';
+    m_helpTextRendered = false;
+    m_dev = nullptr;
+}
+
+void OSDRenderer9::NoteSettingChanged()
+{
+    m_statusFadeDeadline = GetTickCount64() + 2000;
+}
+
+void OSDRenderer9::TickFrame()
+{
+    ULONGLONG now = GetTickCount64();
+    ++m_frameCountSinceSample;
+    if (m_lastFpsSample == 0) m_lastFpsSample = now;
+    if (now - m_lastFpsSample >= 250) {
+        const double seconds = (double)(now - m_lastFpsSample) / 1000.0;
+        const double instantFps = seconds > 0 ? (double)m_frameCountSinceSample / seconds : 0.0;
+        m_fpsEMA = (m_fpsEMA == 0.f) ? (float)instantFps
+                                     : (0.6f * (float)instantFps + 0.4f * m_fpsEMA);
+        m_frameCountSinceSample = 0;
+        m_lastFpsSample = now;
+    }
+
+    const CameraPreset* p = gInfo.Input.GetActivePreset();
+    const float stereoBase  = p ? p->StereoBase   : 0.f;
+    const float oneDivZPS   = p ? p->One_div_ZPS  : 0.f;
+    const bool  swapEyes    = gInfo.Input.SwapEyes != 0;
+    const unsigned preset   = gInfo.Input.ActivePreset;
+    if (m_lastActivePreset == (unsigned)-1) {
+        m_lastActivePreset = preset;
+        m_lastStereoBase   = stereoBase;
+        m_lastOneDivZPS    = oneDivZPS;
+        m_lastSwapEyes     = swapEyes;
+    } else if (preset != m_lastActivePreset ||
+               stereoBase != m_lastStereoBase ||
+               oneDivZPS  != m_lastOneDivZPS  ||
+               swapEyes   != m_lastSwapEyes) {
+        NoteSettingChanged();
+        m_lastActivePreset = preset;
+        m_lastStereoBase   = stereoBase;
+        m_lastOneDivZPS    = oneDivZPS;
+        m_lastSwapEyes     = swapEyes;
+    }
+}
+
+bool OSDRenderer9::WantStatus() const
+{
+    if (gInfo.ShowOSD) return true;
+    return GetTickCount64() < m_statusFadeDeadline;
+}
+
+bool OSDRenderer9::WantFps() const
+{
+    return gInfo.Input.ShowFPS != 0;
+}
+
+bool OSDRenderer9::WantHotkeyHelp() const
+{
+    return gInfo.Input.ShowHotKeyOSD != 0;
+}
+
+void OSDRenderer9::BuildStatusText(wchar_t* out, size_t cap) const
+{
+    const CameraPreset* p = gInfo.Input.GetActivePreset();
+    const int presetIdx = (int)gInfo.Input.ActivePreset + 1;
+    const float sepPercent = p ? (p->StereoBase / 0.008f) : 0.f;
+    const float convUnits  = (p && p->One_div_ZPS != 0.f) ? (1.f / p->One_div_ZPS) : 0.f;
+    if (gInfo.Input.SwapEyes) {
+        _snwprintf_s(out, cap, _TRUNCATE,
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.1f   |   Eyes Swapped",
+                     presetIdx, sepPercent, convUnits);
+    } else {
+        _snwprintf_s(out, cap, _TRUNCATE,
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.1f",
+                     presetIdx, sepPercent, convUnits);
+    }
+}
+
+void OSDRenderer9::BuildFpsText(wchar_t* out, size_t cap) const
+{
+    _snwprintf_s(out, cap, _TRUNCATE, L"%.0f fps", m_fpsEMA);
+}
+
+// Draw a textured screen-space quad with D3DFVF_XYZRHW + D3DFVF_TEX1.
+// (x, y, w, h) are in pixels in the real BB coordinate system; vertices
+// go straight to the rasteriser (no world/view/projection transform).
+void OSDRenderer9::DrawQuad(IDirect3DDevice9* device, IDirect3DTexture9* tex,
+                            float x, float y, float w, float h)
+{
+    if (!tex || !device) return;
+
+    struct TLVert { float x, y, z, rhw; float u, v; };
+    const TLVert verts[6] = {
+        { x,     y,     0.f, 1.f, 0.f, 0.f }, // TL
+        { x + w, y,     0.f, 1.f, 1.f, 0.f }, // TR
+        { x,     y + h, 0.f, 1.f, 0.f, 1.f }, // BL
+        { x,     y + h, 0.f, 1.f, 0.f, 1.f }, // BL
+        { x + w, y,     0.f, 1.f, 1.f, 0.f }, // TR
+        { x + w, y + h, 0.f, 1.f, 1.f, 1.f }, // BR
+    };
+
+    device->SetTexture(0, tex);
+    device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+    device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 2, verts, sizeof(TLVert));
+    device->SetTexture(0, nullptr);
+}
+
+void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
+{
+    if (!device || bbW == 0 || bbH == 0) return;
+    if (m_initFailed) return;
+    if (!m_initDone && !Init(device)) return;
+
+    // Re-create textures if a Reset() dropped them (OnDeviceLost).
+    for (int i = 0; i < (int)Slot::_Count; ++i) {
+        if (!m_slots[i].tex) {
+            HRESULT hr = device->CreateTexture(m_slots[i].w, m_slots[i].h, 1,
+                                                D3DUSAGE_DYNAMIC,
+                                                D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
+                                                &m_slots[i].tex, nullptr);
+            if (FAILED(hr) || !m_slots[i].tex) return;
+            m_slots[i].dirty = true;
+        }
+    }
+
+    const bool wantStatus = WantStatus();
+    const bool wantFps    = WantFps();
+    const bool wantHelp   = WantHotkeyHelp();
+    if (!wantStatus && !wantFps && !wantHelp) return;
+
+    if (wantStatus) {
+        wchar_t text[128];
+        BuildStatusText(text, _countof(text));
+        if (wcscmp(text, m_lastStatus) != 0) {
+            TexSlot& s = m_slots[(int)Slot::Status];
+            s.Clear();
+            RECT bg = { 0, 0, s.w, s.h };
+            s.DrawRect(bg, RGB(0, 0, 0), 160);
+            RECT textRect = { 12, 4, s.w - 12, s.h - 4 };
+            s.DrawTextLine(text, textRect, m_fontStatus.font, RGB(240, 240, 240),
+                           DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            wcscpy_s(m_lastStatus, text);
+        }
+    }
+
+    if (wantFps) {
+        wchar_t text[32];
+        BuildFpsText(text, _countof(text));
+        if (wcscmp(text, m_lastFps) != 0) {
+            TexSlot& s = m_slots[(int)Slot::Fps];
+            s.Clear();
+            RECT bg = { 0, 0, s.w, s.h };
+            s.DrawRect(bg, RGB(0, 0, 0), 160);
+            RECT textRect = { 8, 2, s.w - 8, s.h - 2 };
+            s.DrawTextLine(text, textRect, m_fontFps.font, RGB(240, 240, 240),
+                           DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            wcscpy_s(m_lastFps, text);
+        }
+    }
+
+    if (wantHelp && !m_helpTextRendered) {
+        TexSlot& s = m_slots[(int)Slot::HotkeyHelp];
+        s.Clear();
+        RECT bg = { 0, 0, s.w, s.h };
+        s.DrawRect(bg, RGB(10, 10, 20), 180);
+        RECT title = { 20, 20, s.w - 20, 60 };
+        s.DrawTextLine(L"wiz3D  --  Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
+                       DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+        static const wchar_t* lines[] = {
+            L"Numpad *",             L"Toggle stereo on / off",
+            L"Numpad +  /  -",       L"Separation (depth strength)",
+            L"Shift + Numpad +/-",   L"Convergence (where screen plane sits)",
+            L"Numpad 7 / 8 / 9",     L"Preset Low / Default / Strong",
+            L"Ctrl + F8",            L"Swap left / right eyes",
+            L"Numpad /",             L"Toggle auto-focus",
+            L"Ctrl + Numpad /",      L"Toggle laser-sight crosshair",
+            L"PrtScn",               L"Stereo screenshot",
+            L"Shift + F1",           L"Toggle this hotkey list",
+            L"Shift + Numpad *",     L"Open the wizard overlay",
+        };
+        int row = 72;
+        const int rowH = 32;
+        const int keyX = 32, valueX = 240;
+        for (int i = 0; i < _countof(lines); i += 2) {
+            RECT k = { keyX,   row, valueX - 8,  row + rowH };
+            RECT v = { valueX, row, s.w - 20,    row + rowH };
+            s.DrawTextLine(lines[i],     k, m_fontHelpBody.font, RGB(180, 220, 255),
+                           DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+            s.DrawTextLine(lines[i + 1], v, m_fontHelpBody.font, RGB(230, 230, 230),
+                           DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+            row += rowH;
+        }
+        m_helpTextRendered = true;
+    }
+    if (!wantHelp && m_helpTextRendered) m_helpTextRendered = false;
+
+    if (wantStatus) m_slots[(int)Slot::Status].Upload();
+    if (wantFps)    m_slots[(int)Slot::Fps].Upload();
+    if (wantHelp)   m_slots[(int)Slot::HotkeyHelp].Upload();
+
+    // Save state via a state block so we can restore the game's render state.
+    IDirect3DStateBlock9* sb = nullptr;
+    if (FAILED(device->CreateStateBlock(D3DSBT_ALL, &sb)) || !sb) return;
+
+    // Minimal fixed-function state for alpha-blended textured quads.
+    device->SetVertexShader(nullptr);
+    device->SetPixelShader(nullptr);
+    device->SetRenderState(D3DRS_LIGHTING, FALSE);
+    device->SetRenderState(D3DRS_ZENABLE, FALSE);
+    device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+    device->SetTextureStageState(0, D3DTSS_COLOROP,   D3DTOP_SELECTARG1);
+    device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    device->SetTextureStageState(0, D3DTSS_ALPHAOP,   D3DTOP_SELECTARG1);
+    device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+    device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    device->SetSamplerState(0, D3DSAMP_ADDRESSU,  D3DTADDRESS_CLAMP);
+    device->SetSamplerState(0, D3DSAMP_ADDRESSV,  D3DTADDRESS_CLAMP);
+
+    if (wantHelp) {
+        TexSlot& s = m_slots[(int)Slot::HotkeyHelp];
+        float dw = (float)(std::min<UINT>)(bbW > 40 ? bbW - 40 : (UINT)s.w, (UINT)s.w);
+        float dh = (float)(std::min<UINT>)(bbH > 40 ? bbH - 40 : (UINT)s.h, (UINT)s.h);
+        float dx = ((float)bbW - dw) * 0.5f;
+        float dy = ((float)bbH - dh) * 0.5f;
+        DrawQuad(device, s.tex, dx, dy, dw, dh);
+    }
+    if (wantStatus) {
+        TexSlot& s = m_slots[(int)Slot::Status];
+        DrawQuad(device, s.tex, 20.f, 20.f, (float)s.w, (float)s.h);
+    }
+    if (wantFps) {
+        TexSlot& s = m_slots[(int)Slot::Fps];
+        DrawQuad(device, s.tex, (float)bbW - 20.f - (float)s.w, 20.f, (float)s.w, (float)s.h);
+    }
+
+    sb->Apply();
+    sb->Release();
+}
+
+}  // namespace wiz3d

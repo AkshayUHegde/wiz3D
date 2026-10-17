@@ -19,6 +19,7 @@
 #include "WDirect3DCreate9.h"
 #include "..\Font\acgfx_dynrender_dx9.h"
 #include "..\Font\acgfx_font.h"
+#include "OSDRenderer9.h"
 #include "Trace.h"
 #include "..\S3DAPI\EnumToString.h"
 #include "..\S3DAPI\ReadData.h"
@@ -1262,9 +1263,10 @@ HRESULT CBaseStereoRenderer::StopEngine( )
 
 	m_pVSFont.Release();
 	m_pPSFont.Release();
-	m_pTextState.Release();	
+	m_pTextState.Release();
 	SAFE_DELETE(m_pFont);
 	SAFE_DELETE(m_pDynRender);
+	if (m_pOSD) { delete m_pOSD; m_pOSD = nullptr; }
 	m_pLine.Release();
 	for (DWORD i = 0; i < m_RenderTarget.size(); i++)
 		m_RenderTarget[i].Clear();
@@ -2125,6 +2127,26 @@ void CBaseStereoRenderer::DrawInfo(CBaseSwapChain* pSwapChain)
 #endif WIN64
 		}
 #endif
+	}
+
+	// Modern OSD: runs alongside the legacy m_pFont path (which no-ops on
+	// current builds because %ALLUSERSPROFILE%\Font\OSDFont.fnt is never
+	// deployed). Renders to the LEFT eye's render target -- the SBS
+	// composite copies this to both eyes at Present. One Render call
+	// per DrawInfo pass.
+	{
+		if (!m_pOSD)
+			m_pOSD = new wiz3d::OSDRenderer9();
+		if (m_pOSD)
+		{
+			m_pOSD->TickFrame();
+			if (m_pOSD->Init(m_Direct3DDevice))
+			{
+				const UINT bbW = pSwapChain->m_BackBufferSize.cx;
+				const UINT bbH = pSwapChain->m_BackBufferSize.cy;
+				m_pOSD->Render(m_Direct3DDevice, bbW, bbH);
+			}
+		}
 	}
 }
 

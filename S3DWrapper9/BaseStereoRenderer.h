@@ -26,6 +26,7 @@
 class UMDDeviceWrapper;
 
 class CBaseStereoRenderer;
+namespace wiz3d { class OSDRenderer9; }
 
 extern CBaseStereoRenderer* g_pCurrentStereoRenderer;
 
@@ -368,6 +369,10 @@ protected:
 	//--- draw FPS related variables ---
 	CDynRender*						m_pDynRender;
 	CFont*							m_pFont;
+	// Modern OSD (replaces the dead m_pFont path which depends on
+	// %ALLUSERSPROFILE%\Font\OSDFont.fnt not shipping on current builds).
+	// Lazy-created on first DrawInfo call that has a non-null device.
+	wiz3d::OSDRenderer9*			m_pOSD = nullptr;
 	CComPtr<ID3DXLine>				m_pLine;
 	bool							m_bStereoModeChanged;
 
