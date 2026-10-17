@@ -228,6 +228,27 @@ float4 PSMain_TB(VSOut input) : SV_Target {
     float4 colR = rightTex.Sample(samp, rightSample);
     return lerp(colL, colR, side);
 }
+
+// Mode 5: Anaglyph Red/Cyan (Dubois colour-optimized). Operates in
+// linear-light space (gamma-correct), re-encodes to sRGB. Matches the
+// OGL path's shipped anaglyph choice -- earlier grayscale and naive
+// full-colour variants were retired for worse retinal rivalry /
+// ghosting. The Dubois coefficients are embedded as literals so no
+// constant buffer is needed at Present time.
+float4 PSMain_Anaglyph(VSOut input) : SV_Target {
+    float4 cL = leftTex.Sample (samp, input.uv);
+    float4 cR = rightTex.Sample(samp, input.uv);
+    float3 L = pow(cL.rgb, 2.2);
+    float3 R = pow(cR.rgb, 2.2);
+    float r = dot(L, float3( 0.4561, 0.5008, 0.0526))
+            + dot(R, float3(-0.0434,-0.0083, 0.0003));
+    float g = dot(L, float3(-0.0565,-0.0034, 0.0017))
+            + dot(R, float3( 0.3784, 0.7334,-0.0162));
+    float b = dot(L, float3(-0.0103,-0.0087, 0.0009))
+            + dot(R, float3(-0.0258,-0.0450, 0.9741));
+    float3 c = pow(max(float3(r, g, b), 0.0), 0.4545);
+    return float4(c, 1.0);
+}
 )";
 
 HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
@@ -378,7 +399,8 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     // on first Present where the composite actually runs. D3DCompile is a
     // one-time cost; the shaders are independent of BB format/size so we
     // don't have to re-compile across ResizeBuffers.
-    if (m_compositeVS && m_compositePS_SBS && m_compositePS_TB && m_compositeSampler) return S_OK;
+    if (m_compositeVS && m_compositePS_SBS && m_compositePS_TB &&
+        m_compositePS_Anaglyph && m_compositeSampler) return S_OK;
     if (!m_parent) return E_FAIL;
     ID3D11Device* dev = m_parent->GetReal();
     if (!dev) return E_FAIL;
@@ -404,9 +426,11 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     vsBlob->Release();
     if (FAILED(hr)) return hr;
 
-    hr = CompileCompositePS(dev, "PSMain_SBS", &m_compositePS_SBS);
+    hr = CompileCompositePS(dev, "PSMain_SBS",      &m_compositePS_SBS);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
-    hr = CompileCompositePS(dev, "PSMain_TB",  &m_compositePS_TB);
+    hr = CompileCompositePS(dev, "PSMain_TB",       &m_compositePS_TB);
+    if (FAILED(hr)) { ReleaseComposite(); return hr; }
+    hr = CompileCompositePS(dev, "PSMain_Anaglyph", &m_compositePS_Anaglyph);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
 
     D3D11_SAMPLER_DESC sd = {};
@@ -439,8 +463,8 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     hr = dev->CreateDepthStencilState(&dsd, &m_compositeDepthStencil);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
 
-    DDILog("SwapChain11Proxy::EnsureComposite: VS=%p PS(SBS)=%p PS(TB)=%p sampler=%p\n",
-           m_compositeVS, m_compositePS_SBS, m_compositePS_TB, m_compositeSampler);
+    DDILog("SwapChain11Proxy::EnsureComposite: VS=%p PS(SBS)=%p PS(TB)=%p PS(Anaglyph)=%p sampler=%p\n",
+           m_compositeVS, m_compositePS_SBS, m_compositePS_TB, m_compositePS_Anaglyph, m_compositeSampler);
     return S_OK;
 }
 
@@ -450,6 +474,7 @@ void SwapChain11Proxy::ReleaseComposite()
     if (m_compositeBlend)        { m_compositeBlend->Release();        m_compositeBlend        = nullptr; }
     if (m_compositeRaster)       { m_compositeRaster->Release();       m_compositeRaster       = nullptr; }
     if (m_compositeSampler)      { m_compositeSampler->Release();      m_compositeSampler      = nullptr; }
+    if (m_compositePS_Anaglyph)  { m_compositePS_Anaglyph->Release();  m_compositePS_Anaglyph  = nullptr; }
     if (m_compositePS_TB)        { m_compositePS_TB->Release();        m_compositePS_TB        = nullptr; }
     if (m_compositePS_SBS)       { m_compositePS_SBS->Release();       m_compositePS_SBS       = nullptr; }
     if (m_compositeVS)           { m_compositeVS->Release();           m_compositeVS           = nullptr; }
@@ -564,6 +589,9 @@ void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
     case OM_HALF_TB:
     case OM_FULL_TB:
         if (m_compositePS_TB) ps = m_compositePS_TB;
+        break;
+    case OM_ANAGLYPH:
+        if (m_compositePS_Anaglyph) ps = m_compositePS_Anaglyph;
         break;
     case OM_HALF_SBS:
     case OM_FULL_SBS:
