@@ -58,6 +58,14 @@ bool OSDRenderer::GDIFont::Create(int ptSize, bool bold)
 {
     // Pt->px at 96 DPI: px = pt * 96 / 72. GDI expects negative height for
     // "character height in logical units" (not cell height).
+    //
+    // Arial matches DX9 and legacy-DX10 OSD typeface parity (both wrappers
+    // ship/generate OSDFont.fnt from Arial via S3DFontGenerator). We render
+    // live with ClearType instead of a pre-generated bitmap atlas so the
+    // text stays sharp at any back-buffer resolution -- the DX9 atlas is
+    // baked once and gets blurry when the game runs at a resolution the
+    // atlas wasn't generated for. Arial is a Windows system font, no
+    // separate font file to ship or license.
     heightPx = -MulDiv(ptSize, 96, 72);
     font = CreateFontW(
         heightPx, 0, 0, 0,
@@ -68,7 +76,7 @@ bool OSDRenderer::GDIFont::Create(int ptSize, bool bold)
         CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY,
         VARIABLE_PITCH | FF_SWISS,
-        L"Segoe UI");
+        L"Arial");
     return font != nullptr;
 }
 
