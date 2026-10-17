@@ -54,29 +54,32 @@ float4 PSMain(VSOut i) : SV_Target {
 // -----------------------------------------------------------------------
 // GDIFont
 // -----------------------------------------------------------------------
-bool OSDRenderer::GDIFont::Create(int ptSize, bool bold)
+// Create a GDI font with the given point size and weight. The face name
+// is taken from a caller-supplied cstring so OSDRenderer can switch between
+// "Inter" (preferred, matches SR Loom / Stereopticon) and "Arial"
+// (fallback when the Inter TTFs aren't deployed) without duplicating this
+// method per face.
+static HFONT MakeFont(const wchar_t* face, int ptSize, int weight, int& outHeightPx)
 {
-    // Pt->px at 96 DPI: px = pt * 96 / 72. GDI expects negative height for
-    // "character height in logical units" (not cell height).
-    //
-    // Arial matches DX9 and legacy-DX10 OSD typeface parity (both wrappers
-    // ship/generate OSDFont.fnt from Arial via S3DFontGenerator). We render
-    // live with ClearType instead of a pre-generated bitmap atlas so the
-    // text stays sharp at any back-buffer resolution -- the DX9 atlas is
-    // baked once and gets blurry when the game runs at a resolution the
-    // atlas wasn't generated for. Arial is a Windows system font, no
-    // separate font file to ship or license.
-    heightPx = -MulDiv(ptSize, 96, 72);
-    font = CreateFontW(
-        heightPx, 0, 0, 0,
-        bold ? FW_BOLD : FW_NORMAL,
+    outHeightPx = -MulDiv(ptSize, 96, 72);
+    return CreateFontW(
+        outHeightPx, 0, 0, 0,
+        weight,
         FALSE /*italic*/, FALSE /*underline*/, FALSE /*strikeout*/,
         DEFAULT_CHARSET,
         OUT_TT_PRECIS,
         CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY,
         VARIABLE_PITCH | FF_SWISS,
-        L"Arial");
+        face);
+}
+
+bool OSDRenderer::GDIFont::Create(int ptSize, bool bold)
+{
+    // Legacy single-weight API: produces Arial. New code should prefer the
+    // OSDRenderer-level LoadInterFontPrivate -> MakeFont path so the face
+    // tracks the renderer's choice (Inter vs Arial fallback).
+    font = MakeFont(L"Arial", ptSize, bold ? FW_BOLD : FW_NORMAL, heightPx);
     return font != nullptr;
 }
 
@@ -331,10 +334,20 @@ bool OSDRenderer::Init(ID3D11Device* device)
 
     if (!EnsureShaders(device)) { ReleaseAll(); m_initFailed = true; return false; }
 
-    if (!m_fontStatus.Create(20, true))    { ReleaseAll(); m_initFailed = true; return false; }
-    if (!m_fontFps.Create(16, true))       { ReleaseAll(); m_initFailed = true; return false; }
-    if (!m_fontHelp.Create(22, true))      { ReleaseAll(); m_initFailed = true; return false; }
-    if (!m_fontHelpBody.Create(15, false)) { ReleaseAll(); m_initFailed = true; return false; }
+    // Try to load Inter from the DLL's folder for an SR-Loom / Stereopticon
+    // visual match. Falls back to Arial if the TTFs aren't deployed next to
+    // the DLL (so dev builds without the deploy step still get a working OSD).
+    if (LoadInterFontPrivate())
+        m_fontFace = L"Inter";
+
+    int px = 0;
+    m_fontStatus.font   = MakeFont(m_fontFace, 20, FW_SEMIBOLD, px); m_fontStatus.heightPx   = px;
+    m_fontFps.font      = MakeFont(m_fontFace, 16, FW_SEMIBOLD, px); m_fontFps.heightPx      = px;
+    m_fontHelp.font     = MakeFont(m_fontFace, 22, FW_BOLD,     px); m_fontHelp.heightPx     = px;
+    m_fontHelpBody.font = MakeFont(m_fontFace, 15, FW_NORMAL,   px); m_fontHelpBody.heightPx = px;
+    if (!m_fontStatus.font || !m_fontFps.font || !m_fontHelp.font || !m_fontHelpBody.font) {
+        ReleaseAll(); m_initFailed = true; return false;
+    }
 
     // Fixed slot sizes picked to fit the maximum content.
     if (!m_slots[(int)Slot::Status].Create(device, 640, 48))      { ReleaseAll(); m_initFailed = true; return false; }
@@ -352,6 +365,8 @@ void OSDRenderer::ReleaseAll()
     m_fontHelp.Destroy();
     m_fontFps.Destroy();
     m_fontStatus.Destroy();
+    UnloadInterFontPrivate();
+    m_fontFace = L"Arial";
     if (m_depth)   { m_depth->Release();   m_depth   = nullptr; }
     if (m_raster)  { m_raster->Release();  m_raster  = nullptr; }
     if (m_blend)   { m_blend->Release();   m_blend   = nullptr; }
@@ -365,6 +380,65 @@ void OSDRenderer::ReleaseAll()
     m_lastStatus[0] = m_lastFps[0] = L'\0';
     m_helpTextRendered = false;
     m_dev = nullptr;
+}
+
+// Free-function helper so GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS can take
+// its address directly (can't take address of a non-static member function).
+static bool ResolveDllFontsDir(wchar_t out[MAX_PATH])
+{
+    HMODULE hMod = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&ResolveDllFontsDir),
+            &hMod) || !hMod) return false;
+    if (!GetModuleFileNameW(hMod, out, MAX_PATH)) return false;
+    wchar_t* lastSlash = wcsrchr(out, L'\\');
+    if (!lastSlash) return false;
+    *(lastSlash + 1) = L'\0';
+    return true;
+}
+
+// Load Inter TTFs from Fonts/ next to the wiz3D DLL into the private
+// font space of this process. Falls through if the files aren't deployed
+// (dev builds without the deploy step), which lets the caller fall back
+// to Arial. Returns true if at least one TTF loaded.
+//
+// Proton note: Wine's GDI32 implements AddFontResourceExW correctly and
+// honours FR_PRIVATE / FR_NOT_ENUM, so this path works on Proton the
+// same as on native Windows -- D3D11 goes via DXVK, the OSD rendering
+// stays on GDI's side of the fence.
+bool OSDRenderer::LoadInterFontPrivate()
+{
+    wchar_t dllPath[MAX_PATH] = {};
+    if (!ResolveDllFontsDir(dllPath)) return false;
+
+    static const wchar_t* kFiles[3] = {
+        L"Fonts\\Inter-Regular.ttf",
+        L"Fonts\\Inter-SemiBold.ttf",
+        L"Fonts\\Inter-Bold.ttf",
+    };
+    m_interLoadedCount = 0;
+    for (int i = 0; i < 3; ++i) {
+        _snwprintf_s(m_interPaths[i], _TRUNCATE, L"%s%s", dllPath, kFiles[i]);
+        // AddFontResourceExW returns the number of fonts added (0 on failure).
+        if (AddFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0) > 0)
+            m_interLoadedCount++;
+        else
+            m_interPaths[i][0] = L'\0';   // mark slot empty for Unload
+    }
+    return m_interLoadedCount > 0;
+}
+
+void OSDRenderer::UnloadInterFontPrivate()
+{
+    for (int i = 0; i < 3; ++i) {
+        if (m_interPaths[i][0]) {
+            RemoveFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0);
+            m_interPaths[i][0] = L'\0';
+        }
+    }
+    m_interLoadedCount = 0;
 }
 
 void OSDRenderer::NoteSettingChanged()

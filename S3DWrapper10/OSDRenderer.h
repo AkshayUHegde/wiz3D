@@ -116,11 +116,21 @@ private:
     ID3D11RasterizerState*    m_raster  = nullptr;
     ID3D11DepthStencilState*  m_depth   = nullptr;
 
-    // GDI fonts.
-    GDIFont   m_fontStatus;    // 20pt bold Segoe UI
-    GDIFont   m_fontFps;       // 16pt bold
-    GDIFont   m_fontHelp;      // 18pt bold for titles
+    // GDI fonts. Face is "Inter" if the Inter TTFs are present next to the
+    // DLL (Fonts/Inter-*.ttf, loaded privately via AddFontResourceExW);
+    // falls back to "Arial" otherwise. See LoadInterFontPrivate.
+    GDIFont   m_fontStatus;    // 20pt semibold
+    GDIFont   m_fontFps;       // 16pt semibold
+    GDIFont   m_fontHelp;      // 22pt bold for titles
     GDIFont   m_fontHelpBody;  // 15pt regular for body lines
+    const wchar_t* m_fontFace = L"Arial";   // "Inter" after successful load
+    bool      LoadInterFontPrivate();        // call once at Init
+    void      UnloadInterFontPrivate();      // call at ReleaseAll
+    // Which of the 3 Inter TTF files loaded successfully (Regular / SemiBold /
+    // Bold). RemoveFontResourceExW takes the same filename back, so we store
+    // the fully resolved paths rather than any opaque handle.
+    wchar_t   m_interPaths[3][MAX_PATH] = {};
+    int       m_interLoadedCount = 0;
 
     // Per-slot DIBs + textures.
     TexSlot   m_slots[(int)Slot::_Count];

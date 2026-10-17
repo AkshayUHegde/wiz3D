@@ -33,6 +33,12 @@ $archs = if ($Arch -eq 'both') { @('Win32', 'x64') } else { @($Arch) }
 
 # Common dependency DLLs shared across most release subfolders
 $commonDeps    = @('S3DAPI.dll', 'S3DUtils.dll', 'ZLOg.dll')
+
+# Inter font files (SIL Open Font License 1.1) shipped alongside the
+# StereoInjector wrappers so OSDRenderer can load them privately via
+# AddFontResourceExW. OFL.txt is included for licence compliance.
+$interFontDir  = Join-Path $repoRoot 'Shared\Fonts'
+$interFontFiles = @('Inter-Regular.ttf', 'Inter-SemiBold.ttf', 'Inter-Bold.ttf', 'OFL.txt')
 # OpenGL wrapper only ships ZLOg.dll (statically imported via zlog::VldReportHook).
 # It has no LoadLibrary calls and never references S3DAPI/S3DUtils — those are
 # DX-wrapper helpers. nvapi is also excluded (no NvAPI usage on the OGL path).
@@ -143,6 +149,8 @@ foreach ($archName in $archs) {
         Copy-Files -SrcDir $proxyBinDir -DstDir $dst                          `
                    -Files @('d3d9.dll', 'ddraw.dll')                         `
                    -Tag   'dx7 proxies'
+        Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts') `
+                   -Files $interFontFiles -Tag 'dx7 Inter font'
     }
 
     # --- dx8 (32-bit only) ---
@@ -156,6 +164,8 @@ foreach ($archName in $archs) {
         Copy-Files -SrcDir $proxyBinDir -DstDir $dst                          `
                    -Files @('d3d8.dll', 'd3d9.dll')                          `
                    -Tag   'dx8 proxies'
+        Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts') `
+                   -Files $interFontFiles -Tag 'dx8 Inter font'
     }
 
     # --- dx9 (both archs) ---
@@ -168,6 +178,8 @@ foreach ($archName in $archs) {
     Copy-Files -SrcDir $proxyBinDir -DstDir $dst                          `
                -Files @('d3d9.dll')                                       `
                -Tag   "dx9/$archAlias proxies"
+    Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts')     `
+               -Files $interFontFiles -Tag "dx9/$archAlias Inter font"
 
     # --- dx10-11 (both archs) ---
     $dst = Join-Path $repoRoot "releases\wiz3D\StereoInjector\dx10-11\$archAlias"
@@ -179,6 +191,8 @@ foreach ($archName in $archs) {
     Copy-Files -SrcDir $proxyBinDir -DstDir $dst                                       `
                -Files @('d3d10.dll', 'd3d11.dll', 'dxgi.dll')                          `
                -Tag   "dx10-11/$archAlias proxies"
+    Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts')                  `
+               -Files $interFontFiles -Tag "dx10-11/$archAlias Inter font"
 
     # --- opengl quad-buffer stereo (both archs) ---
     # Folder name spells out the capability: this wrapper captures native
