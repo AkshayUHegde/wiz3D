@@ -58,7 +58,7 @@
 			 if you have the hardware: AMDHD3DOutput, DualProjectionOutput, LenovoOutput,
 			 TaerimOutput, VR920Output, Z800Output, AvitridOutput.
 		-->
-		<OutputMethodDll Value="SideBySideOutput"/>
+		<OutputMethodDll Value="SimulatedRealityWeaveOutput"/>
 
 		<!-- Output sub-mode (meaning depends on the output plugin, usually 0) -->
 		<OutputMode Value="0"/>
