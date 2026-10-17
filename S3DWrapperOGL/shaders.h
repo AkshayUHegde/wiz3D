@@ -132,11 +132,11 @@ void main() {											\n\
 	gl_FragData[0] = vec4(c, 1.0);						\n\
 }";
 
-// Line Interleaved (row-interleaved). Output even rows from left eye, odd
-// rows from right eye. Used by passive-3D monitors that polarise alternate
-// scanlines. Uses gl_FragCoord.y so the parity is screen-space, independent
-// of the source texture sampling.
-static char g_szLineInterleavedShaderText[] = "			\n\
+// Row Interleaved. Output even rows from left eye, odd rows from right eye.
+// Used by passive-3D monitors that polarise alternate scanlines. Uses
+// gl_FragCoord.y so the parity is screen-space, independent of the source
+// texture sampling.
+static char g_szRowInterleavedShaderText[] = "			\n\
 uniform sampler2D sL;									\n\
 uniform sampler2D sR;									\n\
 														\n\

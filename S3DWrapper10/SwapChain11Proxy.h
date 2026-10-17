@@ -169,7 +169,7 @@ private:
         OM_HALF_TB            = 3,  // Half Top-and-Bottom
         OM_FULL_TB            = 4,  // Full Top-and-Bottom -- game must render at half display height
         OM_ANAGLYPH           = 5,  // Anaglyph Red/Cyan (Dubois) -- follow-up commit
-        OM_LINE_INTERLEAVED   = 6,  // Row interleaved (passive 3D TVs) -- follow-up commit
+        OM_ROW_INTERLEAVED   = 6,  // Row interleaved (passive 3D TVs) -- follow-up commit
         OM_COLUMN_INTERLEAVED = 7,  // Column interleaved -- follow-up commit
         OM_CHECKERBOARD       = 8,  // Checkerboard (DLP-Link projectors) -- follow-up commit
         OM_SR_WEAVE           = 9,  // Simulated Reality Weave (Leia/Samsung Odyssey 3D)
@@ -241,7 +241,7 @@ private:
     ID3D11PixelShader*        m_compositePS_SBS              = nullptr;  // modes 1 (Half SBS) + 2 (Full SBS)
     ID3D11PixelShader*        m_compositePS_TB               = nullptr;  // modes 3 (Half TB)  + 4 (Full TB)
     ID3D11PixelShader*        m_compositePS_Anaglyph         = nullptr;  // mode 5 (Dubois Red/Cyan)
-    ID3D11PixelShader*        m_compositePS_LineInterleaved  = nullptr;  // mode 6 (row-polarised displays)
+    ID3D11PixelShader*        m_compositePS_RowInterleaved  = nullptr;  // mode 6 (row-polarised displays)
     ID3D11PixelShader*        m_compositePS_ColInterleaved   = nullptr;  // mode 7 (column-polarised displays)
     ID3D11PixelShader*        m_compositePS_Checkerboard     = nullptr;  // mode 8 (DLP-Link projectors)
     ID3D11SamplerState*       m_compositeSampler;

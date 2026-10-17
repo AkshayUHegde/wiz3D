@@ -22,7 +22,7 @@
 // 3 = Half Top-and-Bottom (each eye squashed to half height — works at native res)
 // 4 = Full Top-and-Bottom (each eye at full height — game must render at half display height)
 // 5 = Anaglyph Red/Cyan (Dubois colour-optimized — single shipped anaglyph; left=red, right=cyan)
-// 6 = Line Interleaved (passive 3D TVs / row-polarised monitors)
+// 6 = Row Interleaved (passive 3D TVs / row-polarised monitors)
 // 7 = Column Interleaved (rare column-polarised displays)
 // 8 = Checkerboard (DLP-Link 3D projectors)
 // 9 = Simulated Reality Weave (default — Samsung Odyssey 3D / Acer SpatialLabs lightfield
@@ -36,7 +36,7 @@
 #define OGL_OUTPUT_HALF_TB             3
 #define OGL_OUTPUT_FULL_TB             4
 #define OGL_OUTPUT_ANAGLYPH            5
-#define OGL_OUTPUT_LINE_INTERLEAVED    6
+#define OGL_OUTPUT_ROW_INTERLEAVED     6
 #define OGL_OUTPUT_COLUMN_INTERLEAVED  7
 #define OGL_OUTPUT_CHECKERBOARD        8
 #define OGL_OUTPUT_SR_WEAVE            9

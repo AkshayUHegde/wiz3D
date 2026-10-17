@@ -250,19 +250,19 @@ float4 PSMain_Anaglyph(VSOut input) : SV_Target {
     return float4(c, 1.0);
 }
 
-// Mode 6: Line Interleaved (passive 3D TVs, row-polarised monitors).
+// Mode 6: Row Interleaved (passive 3D TVs, row-polarised monitors).
 // Even rows carry the left eye, odd rows the right. Screen-space row
 // parity via SV_Position.y so the pattern is independent of texture
 // sampling; the caller binds a point sampler at s0 so eye boundaries
 // aren't smeared by linear filtering.
-float4 PSMain_LineInterleaved(VSOut input) : SV_Target {
+float4 PSMain_RowInterleaved(VSOut input) : SV_Target {
     float4 cL = leftTex.Sample (samp, input.uv);
     float4 cR = rightTex.Sample(samp, input.uv);
     bool isOddRow = (uint(input.pos.y) & 1u) != 0u;
     return isOddRow ? cR : cL;
 }
 
-// Mode 7: Column Interleaved. Like line-interleaved but on vertical
+// Mode 7: Column Interleaved. Like row-interleaved but on vertical
 // stripes; used by rare column-polarised displays.
 float4 PSMain_ColumnInterleaved(VSOut input) : SV_Target {
     float4 cL = leftTex.Sample (samp, input.uv);
@@ -467,7 +467,7 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     // one-time cost; the shaders are independent of BB format/size so we
     // don't have to re-compile across ResizeBuffers.
     if (m_compositeVS && m_compositePS_SBS && m_compositePS_TB &&
-        m_compositePS_Anaglyph && m_compositePS_LineInterleaved &&
+        m_compositePS_Anaglyph && m_compositePS_RowInterleaved &&
         m_compositePS_ColInterleaved && m_compositePS_Checkerboard &&
         m_compositeSampler && m_compositeSamplerPoint) return S_OK;
     if (!m_parent) return E_FAIL;
@@ -501,7 +501,7 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
     hr = CompileCompositePS(dev, "PSMain_Anaglyph",          &m_compositePS_Anaglyph);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
-    hr = CompileCompositePS(dev, "PSMain_LineInterleaved",   &m_compositePS_LineInterleaved);
+    hr = CompileCompositePS(dev, "PSMain_RowInterleaved",   &m_compositePS_RowInterleaved);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
     hr = CompileCompositePS(dev, "PSMain_ColumnInterleaved", &m_compositePS_ColInterleaved);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
@@ -548,7 +548,7 @@ HRESULT SwapChain11Proxy::EnsureComposite()
 
     DDILog("SwapChain11Proxy::EnsureComposite: VS=%p PS(SBS=%p TB=%p Anaglyph=%p Line=%p Col=%p Checker=%p) sampler(linear=%p point=%p)\n",
            m_compositeVS, m_compositePS_SBS, m_compositePS_TB, m_compositePS_Anaglyph,
-           m_compositePS_LineInterleaved, m_compositePS_ColInterleaved, m_compositePS_Checkerboard,
+           m_compositePS_RowInterleaved, m_compositePS_ColInterleaved, m_compositePS_Checkerboard,
            m_compositeSampler, m_compositeSamplerPoint);
     return S_OK;
 }
@@ -562,7 +562,7 @@ void SwapChain11Proxy::ReleaseComposite()
     if (m_compositeSampler)           { m_compositeSampler->Release();           m_compositeSampler           = nullptr; }
     if (m_compositePS_Checkerboard)   { m_compositePS_Checkerboard->Release();   m_compositePS_Checkerboard   = nullptr; }
     if (m_compositePS_ColInterleaved) { m_compositePS_ColInterleaved->Release(); m_compositePS_ColInterleaved = nullptr; }
-    if (m_compositePS_LineInterleaved){ m_compositePS_LineInterleaved->Release();m_compositePS_LineInterleaved= nullptr; }
+    if (m_compositePS_RowInterleaved){ m_compositePS_RowInterleaved->Release();m_compositePS_RowInterleaved= nullptr; }
     if (m_compositePS_Anaglyph)       { m_compositePS_Anaglyph->Release();       m_compositePS_Anaglyph       = nullptr; }
     if (m_compositePS_TB)             { m_compositePS_TB->Release();             m_compositePS_TB             = nullptr; }
     if (m_compositePS_SBS)            { m_compositePS_SBS->Release();            m_compositePS_SBS            = nullptr; }
@@ -679,8 +679,8 @@ void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
     case OM_ANAGLYPH:
         if (m_compositePS_Anaglyph) ps = m_compositePS_Anaglyph;
         break;
-    case OM_LINE_INTERLEAVED:
-        if (m_compositePS_LineInterleaved)  ps = m_compositePS_LineInterleaved;
+    case OM_ROW_INTERLEAVED:
+        if (m_compositePS_RowInterleaved)  ps = m_compositePS_RowInterleaved;
         if (m_compositeSamplerPoint)        sampler = m_compositeSamplerPoint;
         break;
     case OM_COLUMN_INTERLEAVED:

@@ -16,6 +16,7 @@
 #include "ShaderProfileData.h"
 #include "../../CommonUtils/StringUtils.h"
 #include "../../CommonUtils/CommonResourceFolders.h"
+#include "..\Shared\OutputModeNames.h"  // ResolveOutputModeName + OutputModeToLegacyDll
 
 char* LOCALIZATION_TEXT_LIST[] =
 {
@@ -336,6 +337,50 @@ bool ReadConfigRouterType()
 		}
 	}
 
+	// Resolve the configured OutputMethodDll + OutputMode through the
+	// shared unified-naming table (Shared/OutputModeNames.h). After this
+	// pass, gInfo.OutputMode carries the canonical numeric id and
+	// gInfo.OutputMethodDll carries the legacy DLL name regardless of
+	// whether the user wrote a canonical shortname ("Anaglyph"), a
+	// legacy DLL name ("AnaglyphOutput"), or left the string empty and
+	// set only a numeric OutputMode. Unknown or hardware-plugin names
+	// (CMOShutter, Zalman, VR920, ...) pass through untouched so the
+	// DX9 plugin loader still finds them. See the shared header's
+	// comment block for the full priority rule.
+	{
+		std::string nameAscii = common::utils::to_multibyte(gInfo.OutputMethodDll);
+		int resolved = wiz3d::ResolveOutputModeName(nameAscii.c_str());
+		if (resolved != wiz3d::OUTMODE_UNKNOWN)
+		{
+			gInfo.OutputMode = static_cast<DWORD>(resolved);
+			const char* legacy = wiz3d::OutputModeToLegacyDll(resolved);
+			if (legacy && *legacy)
+			{
+				WCHAR wlegacy[40] = {};
+				MultiByteToWideChar(CP_UTF8, 0, legacy, -1, wlegacy, _countof(wlegacy));
+				_tcscpy_s(gInfo.OutputMethodDll, _countof(gInfo.OutputMethodDll), wlegacy);
+			}
+		}
+		else if (nameAscii.empty())
+		{
+			// No OutputMethodDll string set and the numeric OutputMode is
+			// a known id -- backfill OutputMethodDll from the table so
+			// DX9's plugin loader has something to look up.
+			const char* legacy = wiz3d::OutputModeToLegacyDll(static_cast<int>(gInfo.OutputMode));
+			if (legacy && *legacy)
+			{
+				WCHAR wlegacy[40] = {};
+				MultiByteToWideChar(CP_UTF8, 0, legacy, -1, wlegacy, _countof(wlegacy));
+				_tcscpy_s(gInfo.OutputMethodDll, _countof(gInfo.OutputMethodDll), wlegacy);
+			}
+		}
+		// else: name was set but unrecognised (hardware plugin or user-
+		// added custom plugin). Leave OutputMethodDll alone; the DX9
+		// plugin loader will look up the file and either find it or log
+		// a miss. gInfo.OutputMode keeps whatever numeric the config
+		// specified (likely a plugin sub-mode selector).
+	}
+
 	// DefaultProfile
 	node = rootNode->FirstChild("DefaultProfile");
 	ReadProfilePart1Data(node, false);
@@ -344,7 +389,7 @@ bool ReadConfigRouterType()
 	if (g_outputConfig)
 	{
 		std::string outputDll = common::utils::to_multibyte(gInfo.OutputMethodDll);
-		g_outputConfig = g_outputConfig->FirstChild(outputDll.c_str());		
+		g_outputConfig = g_outputConfig->FirstChild(outputDll.c_str());
 	}
 
 	return true;

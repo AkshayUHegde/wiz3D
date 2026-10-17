@@ -806,8 +806,8 @@ BOOL	Renderer::InitializeShaders()
 			szBackFS  = g_szAnaglyphShaderText;
 			szFrontFS = g_szRAWRightShaderText;
 			break;
-		case OGL_OUTPUT_LINE_INTERLEAVED:
-			szBackFS  = g_szLineInterleavedShaderText;
+		case OGL_OUTPUT_ROW_INTERLEAVED:
+			szBackFS  = g_szRowInterleavedShaderText;
 			szFrontFS = g_szRAWRightShaderText;
 			break;
 		case OGL_OUTPUT_COLUMN_INTERLEAVED:
