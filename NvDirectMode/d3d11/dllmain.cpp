@@ -17,6 +17,7 @@
 #include "../proxy_version.h"
 #include "proxy_factory.h"
 #include "swapchain_helpers.h"
+#include "../../Shared/OutputModeNames.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,17 +39,20 @@ static int   g_verboseEnabled  = 1;  // overridden by VerboseLogging — default
 static int   g_swapEyes        = 0;  // overridden by SwapEyes
 static int   g_wrapDevices     = 1;  // overridden by WrapDevices
 // Fallback used only when 3DVision_Config.xml is absent (shipped configs set
-// OutputMode explicitly). d3d11/dxgi default to 8 (SR weave) by design — these
+// OutputMode explicitly). d3d11/dxgi default to 9 (SR weave) by design — these
 // are the SR-targeted backends (see commit 0f848c94). d3d9/d3d10/opengl32
-// deliberately default to 1 (SBS) instead because SR weave is unverified there.
-static int   g_outputMode      = 8;  // overridden by OutputMode — see 3DVision_Config.xml comments
-                                     //   0/3 = Top-and-Bottom
-                                     //   1/2 = Side-by-Side    (default)
-                                     //   4   = Line/Row Interleaved
-                                     //   5   = Column Interleaved
-                                     //   6   = Checkerboard
-                                     //   7   = Anaglyph
-                                     //   8   = SR weave (Leia / Samsung Odyssey ML displays)
+// deliberately default to 1 (Half SBS) instead because SR weave is unverified
+// there. Numeric ids follow the unified scheme in Shared/OutputModeNames.h:
+//   1   = Half Side-by-Side (default)
+//   2   = Full Side-by-Side
+//   3   = Half Top-and-Bottom
+//   4   = Full Top-and-Bottom
+//   5   = Anaglyph
+//   6   = Row Interleaved
+//   7   = Column Interleaved
+//   8   = Checkerboard
+//   9   = Simulated Reality Weave (Leia / Samsung Odyssey 3D)
+static int   g_outputMode      = 9;  // overridden by OutputMode / OutputMethodDll — see 3DVision_Config.xml
 static int   g_anaglyphColour   = 0; // 0=RC (default), 1=GM, 2=AB, 3=TriOviz
 static int   g_anaglyphMethod   = 0; // 0=Dubois (default), 1=Compromise, 2=Color, 3=HalfColor, 4=Optimised, 5=Grey, 6=True
 static int   g_blockEOSOverlay  = 0; // refuse to load EOSOVH-Win32-Shipping.dll (Epic Games Launcher overlay). Diagnostic/opt-in — for games that statically import EOSSDK (TR2013) the block runs too late and can't help anyway.
@@ -98,7 +102,7 @@ extern "C" int NvDM_OutputMode()     { return g_outputMode; }
 // g_outputMode. Everything except the literal T-B modes (0, 3) flattens
 // to "doubled width" here so the per-eye capture path lays out a SBS
 // shadow regardless of the eventual on-screen format.
-extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 0 || g_outputMode == 3) ? 1 : 0; }
+extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 3 || g_outputMode == 4) ? 1 : 0; }
 extern "C" int NvDM_AnaglyphColour() { return g_anaglyphColour; }
 extern "C" int NvDM_AnaglyphMethod() { return g_anaglyphMethod; }
 
@@ -116,6 +120,23 @@ static int ReadConfigInt(const char* xml, const char* tag, int defaultValue)
     if (!p) return defaultValue;
     p += strlen(needle);
     return atoi(p);
+}
+
+// Pulls the string value of <Tag Value="..."/> into `out` (zero-filled on
+// miss). Short names only — hard-capped at 63 chars matches every canonical
+// mode name and legacy DLL stem in the resolver table.
+static void ReadConfigString(const char* xml, const char* tag, char* out, size_t outLen)
+{
+    if (!out || outLen == 0) return;
+    out[0] = '\0';
+    char needle[64];
+    _snprintf_s(needle, sizeof(needle), _TRUNCATE, "<%s Value=\"", tag);
+    const char* p = strstr(xml, needle);
+    if (!p) return;
+    p += strlen(needle);
+    size_t i = 0;
+    while (*p && *p != '"' && i + 1 < outLen) out[i++] = *p++;
+    out[i] = '\0';
 }
 
 static void LoadConfig(HMODULE hProxy)
@@ -147,6 +168,15 @@ static void LoadConfig(HMODULE hProxy)
     g_anaglyphColour  = ReadConfigInt(buf, "AnaglyphColour",  g_anaglyphColour);
     g_anaglyphMethod  = ReadConfigInt(buf, "AnaglyphMethod",  g_anaglyphMethod);
     g_blockEOSOverlay = ReadConfigInt(buf, "BlockEOSOverlay", g_blockEOSOverlay);
+
+    // OutputMethodDll string overrides the numeric OutputMode when it
+    // matches a canonical shortname or legacy iZ3D-era DLL name. Unknown
+    // strings (user-added plugins, legacy hardware we don't inline) leave
+    // g_outputMode as set above, so the DX9 plugin pipeline keeps working.
+    char outputMethod[64] = {};
+    ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+    int resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    if (resolved != wiz3d::OUTMODE_UNKNOWN) g_outputMode = resolved;
 
     free(buf);
 }
@@ -793,8 +823,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
             WCHAR proxyPath[MAX_PATH];
             GetModuleFileNameW(hModule, proxyPath, MAX_PATH);
             Log("Proxy DLL: %ls\n", proxyPath);
+            const char* modeName = wiz3d::OutputModeToCanonical(g_outputMode);
             Log("Config:    OutputMode=%d (%s)  WrapDevices=%d  SwapEyes=%d  LoggingEnabled=%d  VerboseLogging=%d  BlockEOSOverlay=%d\n",
-                g_outputMode, NvDM_OutputIsTopBottom() ? "Top-and-Bottom" : "Side-by-Side",
+                g_outputMode, modeName ? modeName : "Unknown",
                 g_wrapDevices, g_swapEyes, g_loggingEnabled, g_verboseEnabled, g_blockEOSOverlay);
         }
         break;

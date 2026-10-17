@@ -20,6 +20,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include "../proxy_version.h"
+#include "../../Shared/OutputModeNames.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,7 +40,7 @@ static int   g_loggingEnabled = 1;
 static int   g_verboseEnabled = 1;
 static int   g_swapEyes       = 0;
 static int   g_wrapDevices    = 1;
-static int   g_outputMode      = 1;   // OpenGL fallback (config absent) = SBS; mode 8/SR unverified here, opt in via XML. d3d11/dxgi default to 8 instead.
+static int   g_outputMode      = 9;   // Unified default = SR Weave; SR runtime failure falls back to Half SBS automatically. See Shared/OutputModeNames.h.
 static int   g_anaglyphColour  = 0;
 static int   g_anaglyphMethod  = 0;
 
@@ -81,7 +82,7 @@ extern "C" int NvDM_VerboseEnabled() { return g_verboseEnabled; }
 extern "C" int NvDM_SwapEyes()       { return g_swapEyes; }
 extern "C" int NvDM_WrapDevices()    { return g_wrapDevices; }
 extern "C" int NvDM_OutputMode()     { return g_outputMode; }
-extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 0 || g_outputMode == 3) ? 1 : 0; }
+extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 3 || g_outputMode == 4) ? 1 : 0; }
 extern "C" int NvDM_AnaglyphColour() { return g_anaglyphColour; }
 extern "C" int NvDM_AnaglyphMethod() { return g_anaglyphMethod; }
 
@@ -93,6 +94,20 @@ static int ReadConfigInt(const char* xml, const char* tag, int defaultValue)
     if (!p) return defaultValue;
     p += strlen(needle);
     return atoi(p);
+}
+
+static void ReadConfigString(const char* xml, const char* tag, char* out, size_t outLen)
+{
+    if (!out || outLen == 0) return;
+    out[0] = '\0';
+    char needle[64];
+    _snprintf_s(needle, sizeof(needle), _TRUNCATE, "<%s Value=\"", tag);
+    const char* p = strstr(xml, needle);
+    if (!p) return;
+    p += strlen(needle);
+    size_t i = 0;
+    while (*p && *p != '"' && i + 1 < outLen) out[i++] = *p++;
+    out[i] = '\0';
 }
 
 static void LoadConfig(HMODULE hProxy)
@@ -120,6 +135,12 @@ static void LoadConfig(HMODULE hProxy)
     g_outputMode      = ReadConfigInt(buf, "OutputMode",      g_outputMode);
     g_anaglyphColour  = ReadConfigInt(buf, "AnaglyphColour",  g_anaglyphColour);
     g_anaglyphMethod  = ReadConfigInt(buf, "AnaglyphMethod",  g_anaglyphMethod);
+
+    char outputMethod[64] = {};
+    ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+    int resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    if (resolved != wiz3d::OUTMODE_UNKNOWN) g_outputMode = resolved;
+
     free(buf);
 }
 
@@ -1071,7 +1092,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
             GetModuleFileNameW(hModule, proxyPath, MAX_PATH);
             Log("Proxy DLL: %ls\n", proxyPath);
             Log("Config:    OutputMode=%d (%s)  WrapDevices=%d  SwapEyes=%d  LoggingEnabled=%d  VerboseLogging=%d\n",
-                g_outputMode, NvDM_OutputIsTopBottom() ? "Top-and-Bottom" : "Side-by-Side",
+                g_outputMode, wiz3d::OutputModeToCanonical(g_outputMode) ? wiz3d::OutputModeToCanonical(g_outputMode) : "Unknown",
                 g_wrapDevices, g_swapEyes, g_loggingEnabled, g_verboseEnabled);
         }
         LoadRealOpenGL32();

@@ -132,7 +132,7 @@ namespace
         // Reset / teardown.
         IDirect3DSwapChain9* primarySC     = nullptr;     // refed
         // SR (Simulated Reality — Leia / Samsung Odyssey lightfield weave)
-        // pipeline for OutputMode 8. Mirrors Device9Proxy::m_sr* fields.
+        // pipeline for OutputMode 9. Mirrors Device9Proxy::m_sr* fields.
         // Interface init is lazy on first Composite; SBS texture allocs
         // on demand when logical dims are known. srFailed sticks once
         // SR runtime init has irrecoverably failed so we don't retry
@@ -232,7 +232,7 @@ namespace
     }
 
     // ------------------------------------------------------------------
-    // SR pipeline for OutputMode 8 (Simulated Reality weave).
+    // SR pipeline for OutputMode 9 (Simulated Reality weave).
     // Direct port of Device9Proxy::{EnsureSRWeaver, EnsureSRSBSTexture,
     // RunSRWeave} onto ShadowState. Semantics unchanged from that path;
     // this just lets the layout-stable / MinHook code route get to SR
@@ -564,11 +564,11 @@ namespace
             g_frameRTCount    = 0;
             for (int i = 0; i < 8; ++i) g_frameRTs[i] = nullptr;
         }
-        // OutputMode 8 = SR weave. Placed AFTER the heartbeat block on
-        // purpose — the previous ordering short-circuited before the
-        // heartbeat printed, so once SR started firing we lost all
+        // OutputMode 9 = SR weave (unified numbering). Placed AFTER the
+        // heartbeat block on purpose — the previous ordering short-circuited
+        // before the heartbeat printed, so once SR started firing we lost all
         // diagnostic visibility into per-Present state.
-        if (NvDM_OutputMode() == 8 && s.leftEye && s.rightEye)
+        if (NvDM_OutputMode() == 9 && s.leftEye && s.rightEye)
         {
             if (currentEye == NvDirectMode::kEyeLeft || currentEye == NvDirectMode::kEyeRight)
                 CaptureEye(s, currentEye);

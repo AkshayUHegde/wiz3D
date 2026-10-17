@@ -95,11 +95,11 @@ const char kCompositePS_TB[] =
     "    return rightTex.Sample(sLinear, float2(i.uv.x, (i.uv.y - 0.5) * 2.0));\n"
     "}\n";
 
-// OutputMode 4 — Line/Row Interleaved (passive 3D TVs).
+// OutputMode 6 — Row Interleaved (passive 3D TVs, FPR LG/Vizio panels).
 // Each eye is its own logical-size texture so the sample is straight uv;
 // even rows display LEFT eye, odd rows display RIGHT. Use point sampling
 // from the caller side so half-row blending doesn't smear adjacent eyes.
-const char kCompositePS_LineInterleaved[] =
+const char kCompositePS_RowInterleaved[] =
     "Texture2D leftTex  : register(t0);\n"
     "Texture2D rightTex : register(t1);\n"
     "SamplerState sPoint : register(s0);\n"
@@ -111,7 +111,7 @@ const char kCompositePS_LineInterleaved[] =
     "  return ev ? L : R;\n"
     "}\n";
 
-// OutputMode 5 — Column Interleaved (rare; some old polarised monitors).
+// OutputMode 7 — Column Interleaved (rare; some old polarised monitors).
 const char kCompositePS_ColInterleaved[] =
     "Texture2D leftTex  : register(t0);\n"
     "Texture2D rightTex : register(t1);\n"
@@ -124,7 +124,7 @@ const char kCompositePS_ColInterleaved[] =
     "  return ev ? L : R;\n"
     "}\n";
 
-// OutputMode 6 — Checkerboard (DLP 3D projectors). XOR of pixel x and y parity.
+// OutputMode 8 — Checkerboard (DLP 3D projectors). XOR of pixel x and y parity.
 const char kCompositePS_Checkerboard[] =
     "Texture2D leftTex  : register(t0);\n"
     "Texture2D rightTex : register(t1);\n"
@@ -137,7 +137,7 @@ const char kCompositePS_Checkerboard[] =
     "  return ev ? L : R;\n"
     "}\n";
 
-// OutputMode 7 — Anaglyph (colour-filtered glasses). Each output channel is a
+// OutputMode 5 — Anaglyph (colour-filtered glasses). Each output channel is a
 // linear combination of left- and right-eye RGB selected by AnaglyphColour x
 // AnaglyphMethod (Dubois / Compromise / Color / HalfColor / Optimised / Grey /
 // True). Six float4 rows of coefficients are uploaded to b2 by UpdateAnaglyphCB
@@ -263,7 +263,7 @@ SwapChainProxy::SwapChainProxy(IDXGISwapChain* real, Device11Proxy* parent)
     , m_compositeVS(nullptr)
     , m_compositePS_SBS(nullptr)
     , m_compositePS_TB(nullptr)
-    , m_compositePS_Line(nullptr)
+    , m_compositePS_Row(nullptr)
     , m_compositePS_Col(nullptr)
     , m_compositePS_Checker(nullptr)
     , m_compositePS_Anaglyph(nullptr)
@@ -342,7 +342,7 @@ void SwapChainProxy::ReleaseCompositePipeline()
     if (m_compositePS_Anaglyph_Trioviz) { m_compositePS_Anaglyph_Trioviz->Release(); m_compositePS_Anaglyph_Trioviz = nullptr; }
     if (m_compositePS_Checker)   { m_compositePS_Checker->Release();   m_compositePS_Checker = nullptr; }
     if (m_compositePS_Col)       { m_compositePS_Col->Release();       m_compositePS_Col = nullptr; }
-    if (m_compositePS_Line)      { m_compositePS_Line->Release();      m_compositePS_Line = nullptr; }
+    if (m_compositePS_Row)       { m_compositePS_Row->Release();       m_compositePS_Row = nullptr; }
     if (m_compositePS_TB)        { m_compositePS_TB->Release();        m_compositePS_TB = nullptr; }
     if (m_compositePS_SBS)       { m_compositePS_SBS->Release();       m_compositePS_SBS = nullptr; }
     if (m_compositeVS)           { m_compositeVS->Release();           m_compositeVS = nullptr; }
@@ -628,7 +628,7 @@ bool SwapChainProxy::EnsureCompositeShaders()
 {
     if (!m_parent) return false;
     if (m_compositeVS && m_compositePS_SBS && m_compositePS_TB &&
-        m_compositePS_Line && m_compositePS_Col && m_compositePS_Checker &&
+        m_compositePS_Row && m_compositePS_Col && m_compositePS_Checker &&
         m_compositePS_Anaglyph && m_anaglyphCB &&
         m_compositeSampler && m_compositeSamplerPoint &&
         m_compositeRS && m_compositeBlend && m_compositeDSS)
@@ -642,7 +642,7 @@ bool SwapChainProxy::EnsureCompositeShaders()
     ID3DBlob* vsBlob = nullptr;
     ID3DBlob* psSbsBlob = nullptr;
     ID3DBlob* psTbBlob = nullptr;
-    ID3DBlob* psLineBlob = nullptr;
+    ID3DBlob* psRowBlob = nullptr;
     ID3DBlob* psColBlob = nullptr;
     ID3DBlob* psCheckerBlob = nullptr;
     ID3DBlob* psAnaglyphBlob = nullptr;
@@ -651,7 +651,7 @@ bool SwapChainProxy::EnsureCompositeShaders()
     ok = ok && CompileShader(kCompositeVS,                sizeof(kCompositeVS) - 1,                "vs", "vs_4_0", &vsBlob);
     ok = ok && CompileShader(kCompositePS_SBS,            sizeof(kCompositePS_SBS) - 1,            "ps", "ps_4_0", &psSbsBlob);
     ok = ok && CompileShader(kCompositePS_TB,             sizeof(kCompositePS_TB) - 1,             "ps", "ps_4_0", &psTbBlob);
-    ok = ok && CompileShader(kCompositePS_LineInterleaved,sizeof(kCompositePS_LineInterleaved) - 1,"ps", "ps_4_0", &psLineBlob);
+    ok = ok && CompileShader(kCompositePS_RowInterleaved, sizeof(kCompositePS_RowInterleaved) - 1, "ps", "ps_4_0", &psRowBlob);
     ok = ok && CompileShader(kCompositePS_ColInterleaved, sizeof(kCompositePS_ColInterleaved) - 1, "ps", "ps_4_0", &psColBlob);
     ok = ok && CompileShader(kCompositePS_Checkerboard,   sizeof(kCompositePS_Checkerboard) - 1,   "ps", "ps_4_0", &psCheckerBlob);
     ok = ok && CompileShader(kCompositePS_Anaglyph,       sizeof(kCompositePS_Anaglyph) - 1,       "ps", "ps_4_0", &psAnaglyphBlob);
@@ -663,7 +663,7 @@ bool SwapChainProxy::EnsureCompositeShaders()
         if (vsBlob)         vsBlob->Release();
         if (psSbsBlob)      psSbsBlob->Release();
         if (psTbBlob)       psTbBlob->Release();
-        if (psLineBlob)     psLineBlob->Release();
+        if (psRowBlob)      psRowBlob->Release();
         if (psColBlob)      psColBlob->Release();
         if (psCheckerBlob)  psCheckerBlob->Release();
         if (psAnaglyphBlob) psAnaglyphBlob->Release();
@@ -677,8 +677,8 @@ bool SwapChainProxy::EnsureCompositeShaders()
         hr = dev->CreatePixelShader(psSbsBlob->GetBufferPointer(), psSbsBlob->GetBufferSize(), nullptr, &m_compositePS_SBS);
     if (SUCCEEDED(hr) && !m_compositePS_TB)
         hr = dev->CreatePixelShader(psTbBlob->GetBufferPointer(), psTbBlob->GetBufferSize(), nullptr, &m_compositePS_TB);
-    if (SUCCEEDED(hr) && !m_compositePS_Line)
-        hr = dev->CreatePixelShader(psLineBlob->GetBufferPointer(), psLineBlob->GetBufferSize(), nullptr, &m_compositePS_Line);
+    if (SUCCEEDED(hr) && !m_compositePS_Row)
+        hr = dev->CreatePixelShader(psRowBlob->GetBufferPointer(), psRowBlob->GetBufferSize(), nullptr, &m_compositePS_Row);
     if (SUCCEEDED(hr) && !m_compositePS_Col)
         hr = dev->CreatePixelShader(psColBlob->GetBufferPointer(), psColBlob->GetBufferSize(), nullptr, &m_compositePS_Col);
     if (SUCCEEDED(hr) && !m_compositePS_Checker)
@@ -688,7 +688,7 @@ bool SwapChainProxy::EnsureCompositeShaders()
     if (psAnaglyphTriovizBlob && !m_compositePS_Anaglyph_Trioviz)
         dev->CreatePixelShader(psAnaglyphTriovizBlob->GetBufferPointer(), psAnaglyphTriovizBlob->GetBufferSize(), nullptr, &m_compositePS_Anaglyph_Trioviz);
     vsBlob->Release(); psSbsBlob->Release(); psTbBlob->Release();
-    psLineBlob->Release(); psColBlob->Release(); psCheckerBlob->Release(); psAnaglyphBlob->Release();
+    psRowBlob->Release(); psColBlob->Release(); psCheckerBlob->Release(); psAnaglyphBlob->Release();
     if (psAnaglyphTriovizBlob) psAnaglyphTriovizBlob->Release();
     if (FAILED(hr)) { ReleaseCompositePipeline(); return false; }
 
@@ -747,7 +747,7 @@ bool SwapChainProxy::EnsureCompositeShaders()
     }
 
     bool full = m_compositeVS && m_compositePS_SBS && m_compositePS_TB &&
-                m_compositePS_Line && m_compositePS_Col && m_compositePS_Checker &&
+                m_compositePS_Row && m_compositePS_Col && m_compositePS_Checker &&
                 m_compositePS_Anaglyph && m_anaglyphCB &&
                 m_compositeSampler && m_compositeSamplerPoint &&
                 m_compositeRS && m_compositeBlend && m_compositeDSS;
@@ -1037,11 +1037,13 @@ bool SwapChainProxy::RunCompositePass()
     ID3D11ShaderResourceView* srvs[2] = { leftSRV, rightSRV };
 
     // Pick the right pixel shader + sampler for the requested OutputMode.
-    // Modes 0/3 -> T-B; 1/2 -> SBS; 4 -> Line; 5 -> Col; 6 -> Checker;
-    // 7 -> Anaglyph; 8 -> Simulated Reality weave (separate weave-into-real-BB
-    // pipeline; falls back to SBS if SR runtime missing or weaver create fails).
+    // Unified numbering (see Shared/OutputModeNames.h):
+    //   1/2 -> SBS; 3/4 -> T-B; 5 -> Anaglyph; 6 -> Row Interleaved;
+    //   7 -> Column Interleaved; 8 -> Checkerboard; 9 -> SR Weave
+    // (separate weave-into-real-BB pipeline; falls back to SBS if SR runtime
+    // missing or weaver create fails).
     int mode = NvDM_OutputMode();
-    if (mode == 8)
+    if (mode == 9)
     {
         if (RunSRWeave()) return true;
         // SR unavailable on this system (runtime missing, server down, or
@@ -1055,15 +1057,15 @@ bool SwapChainProxy::RunCompositePass()
     const char* modeTag = "SBS";
     switch (mode)
     {
-        case 0: case 3: ps = m_compositePS_TB;        modeTag = "T-B";          break;
         case 1: case 2: ps = m_compositePS_SBS;       modeTag = "SBS";          break;
-        case 4:         ps = m_compositePS_Line;      modeTag = "LineInterl";   sampler = m_compositeSamplerPoint; break;
-        case 5:         ps = m_compositePS_Col;       modeTag = "ColInterl";    sampler = m_compositeSamplerPoint; break;
-        case 6:         ps = m_compositePS_Checker;   modeTag = "Checkerboard"; sampler = m_compositeSamplerPoint; break;
-        case 7:         ps = (NvDM_AnaglyphColour() == 3 && m_compositePS_Anaglyph_Trioviz)
+        case 3: case 4: ps = m_compositePS_TB;        modeTag = "T-B";          break;
+        case 5:         ps = (NvDM_AnaglyphColour() == 3 && m_compositePS_Anaglyph_Trioviz)
                              ? m_compositePS_Anaglyph_Trioviz : m_compositePS_Anaglyph;
                         modeTag = "Anaglyph"; needsAnaglyphCB = true; break;
-        case 8:         ps = m_compositePS_SBS;       modeTag = "SBS (SR-fallback)"; break;
+        case 6:         ps = m_compositePS_Row;       modeTag = "RowInterl";    sampler = m_compositeSamplerPoint; break;
+        case 7:         ps = m_compositePS_Col;       modeTag = "ColInterl";    sampler = m_compositeSamplerPoint; break;
+        case 8:         ps = m_compositePS_Checker;   modeTag = "Checkerboard"; sampler = m_compositeSamplerPoint; break;
+        case 9:         ps = m_compositePS_SBS;       modeTag = "SBS (SR-fallback)"; break;
         default:        ps = m_compositePS_SBS;       modeTag = "SBS (fallback)";    break;
     }
     if (needsAnaglyphCB) UpdateAnaglyphCB();

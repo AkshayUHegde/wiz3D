@@ -15,6 +15,7 @@
 #include <windows.h>
 #include "../proxy_version.h"
 #include "proxy_factory.h"
+#include "../../Shared/OutputModeNames.h"
 
 // Forward-declared instead of #included: device_vtable_hooks.h drags in
 // d3d9.h, which redeclares D3DPERF_* with different linkage than our
@@ -36,7 +37,7 @@ static int   g_loggingEnabled = 1;
 static int   g_verboseEnabled = 1;
 static int   g_swapEyes       = 0;
 static int   g_wrapDevices    = 1;
-static int   g_outputMode     = 1;   // DX9 fallback (config absent) = SBS; mode 8/SR unverified here, opt in via XML. d3d11/dxgi default to 8 instead.
+static int   g_outputMode     = 9;   // Unified default = SR Weave; the SR runtime's sticky m_srFailed path downgrades to Half SBS automatically when the LeiaSR runtime isn't installed or weaver create fails. See Shared/OutputModeNames.h for the unified numbering.
 static int   g_useLayoutStable = 0;   // 0=off  1=IDirect3D9 vtable patch (task #61)  2=+IDirect3DDevice9 vtable patch (task #68)
 static int   g_anaglyphColour  = 0;   // 0=RC (default), 1=GM, 2=AB, 3=TriOviz
 static int   g_anaglyphMethod  = 0;   // 0=Dubois (default), 1=Compromise, 2=Color, 3=HalfColor, 4=Optimised, 5=Grey, 6=True
@@ -82,7 +83,7 @@ extern "C" void NvDM_Log(const char* fmt, ...)
 extern "C" int NvDM_VerboseEnabled() { return g_verboseEnabled; }
 extern "C" int NvDM_SwapEyes()       { return g_swapEyes; }
 extern "C" int NvDM_OutputMode()     { return g_outputMode; }
-extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 0 || g_outputMode == 3) ? 1 : 0; }
+extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 3 || g_outputMode == 4) ? 1 : 0; }
 extern "C" int NvDM_UseLayoutStableLevel() { return g_useLayoutStable; }
 extern "C" int NvDM_TraceD9Methods() { return g_traceD9Methods; }
 extern "C" int NvDM_AnaglyphColour() { return g_anaglyphColour; }
@@ -98,6 +99,20 @@ static int ReadConfigInt(const char* xml, const char* tag, int defaultValue)
     if (!p) return defaultValue;
     p += strlen(needle);
     return atoi(p);
+}
+
+static void ReadConfigString(const char* xml, const char* tag, char* out, size_t outLen)
+{
+    if (!out || outLen == 0) return;
+    out[0] = '\0';
+    char needle[64];
+    _snprintf_s(needle, sizeof(needle), _TRUNCATE, "<%s Value=\"", tag);
+    const char* p = strstr(xml, needle);
+    if (!p) return;
+    p += strlen(needle);
+    size_t i = 0;
+    while (*p && *p != '"' && i + 1 < outLen) out[i++] = *p++;
+    out[i] = '\0';
 }
 
 static void LoadConfig(HMODULE hProxy)
@@ -130,6 +145,12 @@ static void LoadConfig(HMODULE hProxy)
     g_srSRGB           = ReadConfigInt(buf, "SRSRGB",           g_srSRGB);
     g_traceD9Methods   = ReadConfigInt(buf, "TraceD9Methods",   g_traceD9Methods);
     g_traceLoadedModules = ReadConfigInt(buf, "TraceLoadedModules", g_traceLoadedModules);
+
+    char outputMethod[64] = {};
+    ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+    int resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    if (resolved != wiz3d::OUTMODE_UNKNOWN) g_outputMode = resolved;
+
     free(buf);
 }
 
@@ -511,15 +532,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
             GetModuleFileNameW(hModule, proxyPath, MAX_PATH);
             Log("Proxy DLL: %ls\n", proxyPath);
             const char* modeName =
-                (g_outputMode == 0) ? "Half Top-and-Bottom" :
                 (g_outputMode == 1) ? "Half Side-by-Side"   :
                 (g_outputMode == 2) ? "Full Side-by-Side"   :
-                (g_outputMode == 3) ? "Full Top-and-Bottom" :
-                (g_outputMode == 4) ? "Row Interleaved"     :
-                (g_outputMode == 5) ? "Column Interleaved"  :
-                (g_outputMode == 6) ? "Checkerboard"        :
-                (g_outputMode == 7) ? "Anaglyph"            :
-                (g_outputMode == 8) ? "Simulated Reality weave" :
+                (g_outputMode == 3) ? "Half Top-and-Bottom" :
+                (g_outputMode == 4) ? "Full Top-and-Bottom" :
+                (g_outputMode == 5) ? "Anaglyph"            :
+                (g_outputMode == 6) ? "Row Interleaved"     :
+                (g_outputMode == 7) ? "Column Interleaved"  :
+                (g_outputMode == 8) ? "Checkerboard"        :
+                (g_outputMode == 9) ? "Simulated Reality weave" :
                                        "Unknown";
             Log("Config:    OutputMode=%d (%s)  WrapDevices=%d  SwapEyes=%d  UseLayoutStableProxy=%d  LoggingEnabled=%d  VerboseLogging=%d  DisableComposite=%d  SRSRGB=%d  TraceD9Methods=%d  TraceLoadedModules=%d\n",
                 g_outputMode, modeName,

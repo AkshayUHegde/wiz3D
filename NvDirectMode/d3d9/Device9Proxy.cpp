@@ -79,7 +79,7 @@ Device9Proxy::Device9Proxy(IDirect3DDevice9* real, bool isEx)
     , m_leftEyeTex(nullptr)
     , m_rightEyeTex(nullptr)
     , m_compositeVS(nullptr)
-    , m_compositePS_Line(nullptr)
+    , m_compositePS_Row(nullptr)
     , m_compositePS_Col(nullptr)
     , m_compositePS_Checker(nullptr)
     , m_compositePS_Anaglyph(nullptr)
@@ -137,7 +137,7 @@ void Device9Proxy::ReleaseShaderPipeline()
     if (m_compositePS_Anaglyph_Trioviz) { m_compositePS_Anaglyph_Trioviz->Release(); m_compositePS_Anaglyph_Trioviz = nullptr; }
     if (m_compositePS_Checker)  { m_compositePS_Checker->Release();  m_compositePS_Checker = nullptr; }
     if (m_compositePS_Col)      { m_compositePS_Col->Release();      m_compositePS_Col = nullptr; }
-    if (m_compositePS_Line)     { m_compositePS_Line->Release();     m_compositePS_Line = nullptr; }
+    if (m_compositePS_Row)      { m_compositePS_Row->Release();      m_compositePS_Row = nullptr; }
     if (m_compositeVS)          { m_compositeVS->Release();          m_compositeVS = nullptr; }
 }
 
@@ -210,13 +210,13 @@ void Device9Proxy::CaptureEye(int eyeBeingLeft)
 }
 
 // ---------------------------------------------------------------------------
-// OutputMode 4-7 shader pipeline (Line/Col Interleaved, Checkerboard, Anaglyph)
+// OutputMode 5-8 shader pipeline (Anaglyph, Row/Col Interleaved, Checkerboard)
 //
 // DX9 doesn't naturally have a shader composite path on this proxy — the
-// existing modes 0-3 use StretchRect surface→surface, no shaders involved.
-// For modes 4-7 we lazily compile vs_3_0 + ps_3_0 HLSL via D3DCompile from
-// d3dcompiler_47.dll, and run a fullscreen-triangle draw to the real BB
-// sampling each eye texture per-pixel.
+// existing modes 1-4 (SBS/TB) use StretchRect surface→surface, no shaders
+// involved. For modes 5-8 we lazily compile vs_3_0 + ps_3_0 HLSL via
+// D3DCompile from d3dcompiler_47.dll, and run a fullscreen-triangle draw
+// to the real BB sampling each eye texture per-pixel.
 //
 // Eye storage is the same surfaces as before (m_leftEyeSurf etc.) — we
 // allocate matching textures (m_leftEyeTex / m_rightEyeTex) on demand and
@@ -224,7 +224,7 @@ void Device9Proxy::CaptureEye(int eyeBeingLeft)
 // one extra GPU copy per eye per frame in shader modes; trivial at the
 // resolutions DX9 games run at.
 //
-// Modes 0-3 fall through to the original StretchRect path below — no
+// Modes 1-4 (SBS/TB) fall through to the original StretchRect path — no
 // shader compile required, no risk of breaking working titles.
 // ---------------------------------------------------------------------------
 namespace
@@ -262,7 +262,7 @@ namespace
 
     // PS_3_0 has VPOS register giving screen pixel coords — perfect for
     // the interleaved/checker patterns. uv comes from VS for texture sampling.
-    const char kCompositePS_Line_DX9[] =
+    const char kCompositePS_Row_DX9[] =
         "sampler leftS  : register(s0);\n"
         "sampler rightS : register(s1);\n"
         "float4 main(float4 vPos : VPOS, float2 uv : TEXCOORD0) : COLOR {\n"
@@ -356,7 +356,7 @@ namespace
 bool Device9Proxy::EnsureShaderPipeline()
 {
     if (m_shadersFailed) return false;
-    if (m_compositeVS && m_compositePS_Line && m_compositePS_Col &&
+    if (m_compositeVS && m_compositePS_Row && m_compositePS_Col &&
         m_compositePS_Checker && m_compositePS_Anaglyph &&
         m_compositeVB && m_compositeDecl) return true;
     if (!m_real || !EnsureD3DCompile()) { m_shadersFailed = true; return false; }
@@ -409,8 +409,8 @@ bool Device9Proxy::EnsureShaderPipeline()
     }
 
     bool ok = true;
-    if (!m_compositePS_Line)
-        ok = ok && CompilePS(kCompositePS_Line_DX9,    sizeof(kCompositePS_Line_DX9)    - 1, "ps_line",     m_real, &m_compositePS_Line);
+    if (!m_compositePS_Row)
+        ok = ok && CompilePS(kCompositePS_Row_DX9,     sizeof(kCompositePS_Row_DX9)     - 1, "ps_row",      m_real, &m_compositePS_Row);
     if (!m_compositePS_Col)
         ok = ok && CompilePS(kCompositePS_Col_DX9,     sizeof(kCompositePS_Col_DX9)     - 1, "ps_col",      m_real, &m_compositePS_Col);
     if (!m_compositePS_Checker)
@@ -492,16 +492,18 @@ bool Device9Proxy::RunShaderComposite(int mode)
     IDirect3DStateBlock9* sb = nullptr;
     if (FAILED(m_real->CreateStateBlock(D3DSBT_ALL, &sb)) || !sb) return false;
 
-    IDirect3DPixelShader9* ps = m_compositePS_Line;
+    // Unified numbering (see Shared/OutputModeNames.h):
+    //   5 = Anaglyph; 6 = Row Interleaved; 7 = Column Interleaved; 8 = Checkerboard.
+    IDirect3DPixelShader9* ps = m_compositePS_Row;
     bool needsAnaglyph = false;
     switch (mode)
     {
-        case 4: ps = m_compositePS_Line;     break;
-        case 5: ps = m_compositePS_Col;      break;
-        case 6: ps = m_compositePS_Checker;  break;
-        case 7: ps = (NvDM_AnaglyphColour() == 3 && m_compositePS_Anaglyph_Trioviz)
+        case 5: ps = (NvDM_AnaglyphColour() == 3 && m_compositePS_Anaglyph_Trioviz)
                      ? m_compositePS_Anaglyph_Trioviz : m_compositePS_Anaglyph;
                 needsAnaglyph = true; break;
+        case 6: ps = m_compositePS_Row;      break;
+        case 7: ps = m_compositePS_Col;      break;
+        case 8: ps = m_compositePS_Checker;  break;
         default: sb->Release(); return false;
     }
 
@@ -519,8 +521,8 @@ bool Device9Proxy::RunShaderComposite(int mode)
     m_real->SetTexture(0, m_leftEyeTex);
     m_real->SetTexture(1, m_rightEyeTex);
     // Point sampling for interleaved/checker (avoids row blending);
-    // linear is fine for anaglyph.
-    DWORD samplerFilter = (mode == 7) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+    // linear is fine for anaglyph (mode 5 in the unified scheme).
+    DWORD samplerFilter = (mode == 5) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
     m_real->SetSamplerState(0, D3DSAMP_MINFILTER, samplerFilter);
     m_real->SetSamplerState(0, D3DSAMP_MAGFILTER, samplerFilter);
     m_real->SetSamplerState(1, D3DSAMP_MINFILTER, samplerFilter);
@@ -710,15 +712,15 @@ void Device9Proxy::CompositeAndPresent()
     if (currentEye == NvDirectMode::kEyeLeft || currentEye == NvDirectMode::kEyeRight)
         CaptureEye(currentEye);
 
-    // OutputMode 4-7: shader composite (Line/Col Interleaved, Checker, Anaglyph).
-    // OutputMode 8:   SR weave (Leia / Samsung Odyssey ML).
-    // Both fall through to the legacy StretchRect path below if their
-    // resources aren't available (no d3dcompiler, runtime compile failure,
-    // SR runtime not installed, SR Service down, blacklisted exe, etc.).
+    // Unified numbering: 5=Anaglyph, 6=Row, 7=Column, 8=Checker, 9=SR weave.
+    // Shader composite handles 5-8; SR weave handles 9. Both fall through
+    // to the legacy StretchRect path below if their resources aren't
+    // available (no d3dcompiler, runtime compile failure, SR runtime not
+    // installed, SR Service down, blacklisted exe, etc.).
     int mode = NvDM_OutputMode();
-    if (mode == 8 && m_leftEyeSurf && m_rightEyeSurf && RunSRWeave())
+    if (mode == 9 && m_leftEyeSurf && m_rightEyeSurf && RunSRWeave())
         return;
-    if (mode >= 4 && mode <= 7 && m_leftEyeSurf && m_rightEyeSurf &&
+    if (mode >= 5 && mode <= 8 && m_leftEyeSurf && m_rightEyeSurf &&
         RunShaderComposite(mode))
         return;
 

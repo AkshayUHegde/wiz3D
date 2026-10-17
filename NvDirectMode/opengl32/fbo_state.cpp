@@ -811,8 +811,9 @@ namespace
         return true;
     }
 
-    // Run shader-mode composite for OutputMode 4-7. The default framebuffer
-    // (target=0) is bound by the caller. Returns true on success.
+    // Run shader-mode composite for OutputMode 5-8 (Anaglyph, Row Interleaved,
+    // Column Interleaved, Checkerboard — unified numbering). The default
+    // framebuffer (target=0) is bound by the caller. Returns true on success.
     bool RunShaderComposite(int mode)
     {
         if (!EnsureCompositePrograms()) return false;
@@ -820,11 +821,11 @@ namespace
         ShaderProgIdx idx = PROG_LINE;
         switch (mode)
         {
-            case 4: idx = PROG_LINE;     break;
-            case 5: idx = PROG_COL;      break;
-            case 6: idx = PROG_CHECKER;  break;
-            case 7: idx = (NvDM_AnaglyphColour() == 3 && g_progs.prog[PROG_ANAGLYPH_TRIOVIZ])
+            case 5: idx = (NvDM_AnaglyphColour() == 3 && g_progs.prog[PROG_ANAGLYPH_TRIOVIZ])
                           ? PROG_ANAGLYPH_TRIOVIZ : PROG_ANAGLYPH; break;
+            case 6: idx = PROG_LINE;     break;  // PROG_LINE is the Row Interleaved program (legacy name)
+            case 7: idx = PROG_COL;      break;
+            case 8: idx = PROG_CHECKER;  break;
             default: return false;
         }
         GLuint prog = g_progs.prog[idx];
@@ -906,8 +907,10 @@ void EyeFbosBlitToDefault()
 
     p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
+    // Unified numbering (see Shared/OutputModeNames.h):
+    //   1/2=SBS, 3/4=TB, 5=Anaglyph, 6=Row, 7=Column, 8=Checker, 9=SR Weave.
     const int mode = NvDM_OutputMode();
-    if (mode == 8 && RunSRWeave())
+    if (mode == 9 && RunSRWeave())
     {
         // Weaver wrote to the now-bound default framebuffer. Re-bind our
         // LEFT FBO so the next frame's game-side draws land in our eye
@@ -915,14 +918,14 @@ void EyeFbosBlitToDefault()
         p_glBindFramebuffer(GL_FRAMEBUFFER, g_fbos.fboLeft);
         return;
     }
-    if (mode >= 4 && mode <= 7 && RunShaderComposite(mode))
+    if (mode >= 5 && mode <= 8 && RunShaderComposite(mode))
     {
         // Re-bind our LEFT FBO for next frame (game rebinds 0 first thing
         // anyway, which our hook redirects to the active eye).
         p_glBindFramebuffer(GL_FRAMEBUFFER, g_fbos.fboLeft);
         return;
     }
-    // Modes 0-3 (and any fallback from the shader path or SR weave)
+    // Modes 1-4 (SBS/TB — and any fallback from the shader path or SR weave)
     // use the existing glBlitFramebuffer route — cheaper and well-tested.
 
     const int W = g_fbos.width;

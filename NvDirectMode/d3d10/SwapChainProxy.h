@@ -122,8 +122,8 @@ private:
     ID3D10VertexShader*       m_compositeVS;
     ID3D10PixelShader*        m_compositePS_SBS;
     ID3D10PixelShader*        m_compositePS_TB;
-    // OutputMode 4-7: line/column interleaved, checkerboard, anaglyph
-    ID3D10PixelShader*        m_compositePS_Line;
+    // OutputMode 5-8: anaglyph, row/column interleaved, checkerboard
+    ID3D10PixelShader*        m_compositePS_Row;
     ID3D10PixelShader*        m_compositePS_Col;
     ID3D10PixelShader*        m_compositePS_Checker;
     ID3D10PixelShader*        m_compositePS_Anaglyph;
@@ -140,10 +140,10 @@ private:
 
     void UpdateAnaglyphCB();
 
-    // OutputMode 8 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
+    // OutputMode 9 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
     // SR runtime DLLs are delay-loaded (vcxproj's DelayLoadDLLs); first call to
     // EnsureSRWeaver attempts to create the context via SafeSRContextCreate's
-    // OutputMode 8 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
+    // OutputMode 9 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
     // SR runtime DLLs are delay-loaded (vcxproj's DelayLoadDLLs); first call to
     // EnsureSRWeaver attempts CreateSRInterfaceDX10 from SR-Lib. If the runtime
     // isn't installed or no SR display is connected, the HRESULT fails and the

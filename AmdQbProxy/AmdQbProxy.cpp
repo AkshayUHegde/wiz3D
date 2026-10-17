@@ -112,7 +112,10 @@ enum OutputMode {
     OM_SR_WEAVE            = 9,  // Simulated Reality Weave (Leia/Samsung Odyssey Moving Lightfield displays)
     OM_STEREO_MIRROR       = 10, // Stereo mirror           (reserved; HD3D doesn't implement yet)
 };
-static OutputMode g_OutputMode = OM_SBS_HALF;
+// Unified default = SR Weave. SR runtime failure (no LeiaSR installed, no SR
+// display connected, blacklisted exe) downgrades to OM_SBS_HALF via the sticky
+// path at EnsureSRWeaver. See Shared/OutputModeNames.h for the numbering.
+static OutputMode g_OutputMode = OM_SR_WEAVE;
 static bool g_bSwapEyes = false;
 
 enum AnaglyphColour {

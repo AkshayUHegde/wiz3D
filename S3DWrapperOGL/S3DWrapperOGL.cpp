@@ -90,6 +90,8 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 #pragma managed(pop)
 #endif
 
+#include "..\Shared\OutputModeNames.h"
+
 HMODULE g_hDllInstance = 0;
 GlobalInfo gInfo;
 
@@ -182,6 +184,20 @@ bool ReadConfig()
 		if (itemElement)
 		{
 			itemElement->QueryIntAttribute("Value", (int*)&gInfo.OutputMode);
+		}
+		// OutputMethodDll string override — unified naming across all wiz3D
+		// wrappers (see Shared/OutputModeNames.h). When the string matches a
+		// canonical shortname or iZ3D-era legacy DLL name, it overrides the
+		// numeric OutputMode. Unknown strings pass through unchanged.
+		itemElement = node->FirstChildElement("OutputMethodDll");
+		if (itemElement)
+		{
+			const char* v = itemElement->Attribute("Value");
+			if (v && *v)
+			{
+				int resolved = wiz3d::ResolveOutputModeName(v);
+				if (resolved != wiz3d::OUTMODE_UNKNOWN) gInfo.OutputMode = (UINT)resolved;
+			}
 		}
 		// MonoHudOverlay defaults to OFF when the config doesn't list it.
 		// The activation path (OnHudCandidate -> ActivateOverlayPhase) is

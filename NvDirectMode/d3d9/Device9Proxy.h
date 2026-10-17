@@ -213,18 +213,18 @@ private:
     // the real BB — display doesn't consume it anyway.
     D3DFORMAT            m_shadowFormatOverride;
 
-    // OutputMode 4-7 shader pipeline (Line/Col Interleaved, Checkerboard,
-    // Anaglyph). DX9 doesn't have shader infrastructure on the eye-capture
-    // path natively — we add a parallel set of textures that get populated
-    // from the eye SURFACES via StretchRect right before the shader pass,
-    // then sampled in a fullscreen-quad draw to the real BB.
+    // OutputMode 5-8 shader pipeline (Anaglyph, Row/Col Interleaved,
+    // Checkerboard). DX9 doesn't have shader infrastructure on the
+    // eye-capture path natively — we add a parallel set of textures that
+    // get populated from the eye SURFACES via StretchRect right before the
+    // shader pass, then sampled in a fullscreen-quad draw to the real BB.
     //
-    // Modes 0-3 (SBS/TB) keep using the original StretchRect-only composite —
+    // Modes 1-4 (SBS/TB) keep using the original StretchRect-only composite —
     // cheaper, no shader compile dependency, well-tested.
     IDirect3DTexture9*       m_leftEyeTex;
     IDirect3DTexture9*       m_rightEyeTex;
     IDirect3DVertexShader9*  m_compositeVS;
-    IDirect3DPixelShader9*   m_compositePS_Line;
+    IDirect3DPixelShader9*   m_compositePS_Row;
     IDirect3DPixelShader9*   m_compositePS_Col;
     IDirect3DPixelShader9*   m_compositePS_Checker;
     IDirect3DPixelShader9*   m_compositePS_Anaglyph;
@@ -241,7 +241,7 @@ private:
     void UpdateAnaglyphConsts();
     void CompositeAndPresent();   // called at Present before forwarding
 
-    // OutputMode 8 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
+    // OutputMode 9 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
     // SR runtime DLLs are delay-loaded (vcxproj's DelayLoadDLLs); first call to
     // EnsureSRWeaver attempts to create the context via SafeSRContextCreate's
     // SEH-protected wrapper. If the runtime isn't installed (MOD_NOT_FOUND on

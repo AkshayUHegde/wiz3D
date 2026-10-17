@@ -22,6 +22,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "../proxy_version.h"
+#include "../../Shared/OutputModeNames.h"
 
 // Bridge into DXGIFactoryProxy.cpp via plain void*/IID* — DXGIFactoryProxy.h
 // can't be included here because it pulls dxgi.h which redeclares
@@ -45,10 +46,11 @@ static int   g_verboseEnabled = 1;
 static int   g_swapEyes       = 0;
 static int   g_wrapDevices    = 1;
 // Fallback used only when 3DVision_Config.xml is absent (shipped configs set
-// OutputMode explicitly). d3d11/dxgi default to 8 (SR weave) by design — these
+// OutputMode explicitly). d3d11/dxgi default to 9 (SR weave) by design — these
 // are the SR-targeted backends. d3d9/d3d10/opengl32 deliberately default to 1
-// (SBS) instead because SR weave is unverified there.
-static int   g_outputMode     = 8;
+// (Half SBS) instead because SR weave is unverified there.
+// See Shared/OutputModeNames.h for the unified numbering table.
+static int   g_outputMode     = 9;
 
 static void LogOpen(void)
 {
@@ -88,7 +90,7 @@ extern "C" void NvDM_Log(const char* fmt, ...)
 extern "C" int NvDM_VerboseEnabled() { return g_verboseEnabled; }
 extern "C" int NvDM_SwapEyes()       { return g_swapEyes; }
 extern "C" int NvDM_OutputMode()     { return g_outputMode; }
-extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 0 || g_outputMode == 3) ? 1 : 0; }
+extern "C" int NvDM_OutputIsTopBottom() { return (g_outputMode == 3 || g_outputMode == 4) ? 1 : 0; }
 
 // DXGIFactoryProxy.cpp lives in this DLL but in a different TU; expose a
 // log entry point with C linkage so it can append to the same log file.
@@ -114,6 +116,20 @@ static int ReadConfigInt(const char* xml, const char* tag, int defaultValue)
     return atoi(p);
 }
 
+static void ReadConfigString(const char* xml, const char* tag, char* out, size_t outLen)
+{
+    if (!out || outLen == 0) return;
+    out[0] = '\0';
+    char needle[64];
+    _snprintf_s(needle, sizeof(needle), _TRUNCATE, "<%s Value=\"", tag);
+    const char* p = strstr(xml, needle);
+    if (!p) return;
+    p += strlen(needle);
+    size_t i = 0;
+    while (*p && *p != '"' && i + 1 < outLen) out[i++] = *p++;
+    out[i] = '\0';
+}
+
 static void LoadConfig(HMODULE hProxy)
 {
     WCHAR cfgPath[MAX_PATH];
@@ -137,6 +153,12 @@ static void LoadConfig(HMODULE hProxy)
     g_swapEyes       = ReadConfigInt(buf, "SwapEyes",       g_swapEyes);
     g_wrapDevices    = ReadConfigInt(buf, "WrapDevices",    g_wrapDevices);
     g_outputMode     = ReadConfigInt(buf, "OutputMode",     g_outputMode);
+
+    char outputMethod[64] = {};
+    ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+    int resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    if (resolved != wiz3d::OUTMODE_UNKNOWN) g_outputMode = resolved;
+
     free(buf);
 }
 
@@ -333,7 +355,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
             GetModuleFileNameW(hModule, proxyPath, MAX_PATH);
             Log("Proxy DLL: %ls\n", proxyPath);
             Log("Config:    OutputMode=%d (%s)  WrapDevices=%d  SwapEyes=%d  LoggingEnabled=%d  VerboseLogging=%d\n",
-                g_outputMode, NvDM_OutputIsTopBottom() ? "Top-and-Bottom" : "Side-by-Side",
+                g_outputMode, wiz3d::OutputModeToCanonical(g_outputMode) ? wiz3d::OutputModeToCanonical(g_outputMode) : "Unknown",
                 g_wrapDevices, g_swapEyes, g_loggingEnabled, g_verboseEnabled);
         }
         break;

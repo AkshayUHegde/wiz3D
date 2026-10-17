@@ -165,10 +165,10 @@ private:
     ID3D11VertexShader*       m_compositeVS;
     ID3D11PixelShader*        m_compositePS_SBS;
     ID3D11PixelShader*        m_compositePS_TB;
-    // OutputMode 4-7 — line/column interleaved, checkerboard, anaglyph.
+    // OutputMode 5-8 — anaglyph, row/column interleaved, checkerboard.
     // Same VS as SBS/TB; shaders sample left/right SRVs (t0/t1) and
     // pick per-pixel based on screen-space pixel coordinates.
-    ID3D11PixelShader*        m_compositePS_Line;
+    ID3D11PixelShader*        m_compositePS_Row;
     ID3D11PixelShader*        m_compositePS_Col;
     ID3D11PixelShader*        m_compositePS_Checker;
     ID3D11PixelShader*        m_compositePS_Anaglyph;
@@ -188,7 +188,7 @@ private:
     bool RunCompositePass();           // returns true if composite ran (and replaces single-eye blit)
     void UpdateAnaglyphCB();           // upload current AnaglyphColour x AnaglyphMethod matrix pair to b2
 
-    // OutputMode 8 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
+    // OutputMode 9 — Simulated Reality weave (Leia / Samsung Odyssey ML displays).
     // SR runtime DLLs are delay-loaded (vcxproj's DelayLoadDLLs); first call to
     // EnsureSRWeaver attempts CreateSRInterfaceDX11 from SR-Lib. If the runtime
     // isn't installed or no SR display is connected, the HRESULT fails and the
