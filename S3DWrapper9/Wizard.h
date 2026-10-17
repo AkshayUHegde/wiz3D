@@ -1,5 +1,33 @@
 #pragma once
 
+// ---------------------------------------------------------------------------
+// Calibration wizard — vestigial as of wiz3D 0.4.0.
+//
+// Inherited from iZ3D's shutter-glass-era rig calibration flow (circa 2006-
+// 2010). Walked the user through shutter sync direction, convergence
+// comfort, separation comfort, and display geometry. Launched via the old
+// iZ3D Control Center tray app or the Shift+Numpad* hotkey, with the UI
+// rendered through UILib's custom CXWindow / CXLabel / CXButton components.
+//
+// Non-functional on current builds: depends on %ALLUSERSPROFILE%\
+// resources.zip (button / checkbox / background PNGs) + OSDFont.fnt +
+// language XML files. None of those ship through wiz3D's zip-release
+// pipeline; they were deployed by the InnoSetup installer that was retired
+// when wiz3D forked from iZ3D. The Control Center entry point was also
+// retired at the fork.
+//
+// Modern targets (SR / SBS / HD3D / 3D Vision Direct) don't need this
+// kind of per-user shutter-rig calibration -- the stereo geometry is
+// fixed by the panel / API. The preset-switch hotkeys (Numpad 7/8/9)
+// cover the one remaining use case (picking a comfortable separation
+// percentage).
+//
+// The ToggleWizard hotkey (Shift+Numpad*, code 362) is still bound in
+// the shared KeyboardHook config for backward compatibility, but it
+// won't produce a visible wizard without resurrecting the asset
+// pipeline. Not planned for 0.4.x or 0.5.x.
+// ---------------------------------------------------------------------------
+
 #include <string>
 #include <map>
 #include "..\uilib\Framework.h"
