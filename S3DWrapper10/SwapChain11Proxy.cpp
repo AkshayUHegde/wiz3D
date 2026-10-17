@@ -12,6 +12,7 @@
 #include "..\S3DAPI\ConvertImages.h"  // GetBitWidthOfDXGIFormat
 #include "Utils.h"                    // SaveImageToFile, screenshot extensions
 #include "ProductNames.h"
+#include "OSDRenderer.h"              // on-screen display overlay
 #include <Shlobj.h>
 #include <d3dcompiler.h>
 #include "SR.hpp"                    // Simulated Reality weave (delay-loaded runtime)
@@ -83,6 +84,7 @@ SwapChain11Proxy::~SwapChain11Proxy()
     WriteInputData(&gInfo.Input);
     gKbdHook.clear();
     for (ID3D11Query*& q : m_frameEvents) if (q) { q->Release(); q = nullptr; }
+    if (m_osd) { delete m_osd; m_osd = nullptr; }
     ReleaseSRWeave(true);
     ReleaseStereoBackBuffer();
     ReleaseComposite();
@@ -619,6 +621,16 @@ void SwapChain11Proxy::DoComposite()
     const OutputMode mode = SelectedOutputMode();
     if (!(mode == OM_SR_WEAVE && RunSRWeave(ctx)))
         DrawCompositePass(ctx, m_realBBRTV, m_realBBW, m_realBBH, mode);
+    // OSD overlay (status / FPS / hotkey help) drawn after the stereo
+    // composite but before we restore the game's context state. Lazy-
+    // init the renderer on first visible-content frame; failures stick
+    // so we never retry on later frames.
+    if (!m_osd) m_osd = new OSDRenderer();
+    if (m_osd && m_osd->Init(m_parent->GetReal()))
+    {
+        m_osd->TickFrame();
+        m_osd->Render(ctx, m_realBBRTV, m_realBBW, m_realBBH);
+    }
     if (gameState)
     {
         ctx->ClearState();   // our state holds no back-buffer view across a ResizeBuffers

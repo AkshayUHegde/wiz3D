@@ -40,6 +40,7 @@ namespace wiz3d
 
 class Device11Proxy;
 class Texture2D11Proxy;
+class OSDRenderer;
 
 // IDXGISwapChain4, so QI for SwapChain2/3/4 returns `this`: a game handed the real chain would Present and GetBuffer
 // past the proxy, mixing real and wrapped back buffers.
@@ -263,6 +264,12 @@ private:
     UINT                      m_srSBSW    = 0;
     UINT                      m_srSBSH    = 0;
     DXGI_FORMAT               m_srSBSFmt  = DXGI_FORMAT_UNKNOWN;
+
+    // OSD overlay (ShowOSD / ShowFPS / ShowHotKeyOSD) — self-contained
+    // GDI-based text renderer. Lazily initialised at first composite;
+    // released in dtor. Independent of the stereo composite path, drawn
+    // after it over the real BB.
+    OSDRenderer*              m_osd = nullptr;
 };
 
 } // namespace wiz3d
