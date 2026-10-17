@@ -41,7 +41,6 @@ SwapChain11Proxy::SwapChain11Proxy(IDXGISwapChain* real, IDXGISwapChain1* real1,
     , m_bbHeight(0)
     , m_bbFormat(DXGI_FORMAT_UNKNOWN)
     , m_compositeVS(nullptr)
-    , m_compositePS(nullptr)
     , m_compositeSampler(nullptr)
     , m_compositeRaster(nullptr)
     , m_compositeBlend(nullptr)
@@ -179,6 +178,16 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetDevice(REFIID riid, void** ppDevi
 // the BB and the right-eye texture into the right half (each eye horizontally
 // scaled by 2x to fit). Two separate sampler calls keep the branch out of the
 // flow — both sides issue one read regardless of texcoord.
+// All composite shaders share this VS and the t0/t1/s0 bindings. Each
+// pixel-shader entry point (PSMain_SBS, PSMain_TB, ...) is compiled
+// separately by EnsureComposite into its own ID3D11PixelShader, with
+// one PS per OutputMode group that uses the same sampling pattern.
+//
+// SBS and TB both branchlessly sample both eyes via lerp so the branch
+// doesn't appear in generated code. Half vs Full is just a user config
+// choice: at Half the game renders at display width/height and each
+// eye gets squeezed; at Full the game renders at half width/height so
+// each eye lands at native resolution in its half of the output.
 static const char* k_compositeShaderSrc = R"(
 struct VSOut {
     float4 pos : SV_Position;
@@ -196,11 +205,25 @@ Texture2D    leftTex  : register(t0);
 Texture2D    rightTex : register(t1);
 SamplerState samp     : register(s0);
 
-float4 PSMain(VSOut input) : SV_Target {
+// Modes 1 (Half SBS, default) and 2 (Full SBS). Left eye in left half,
+// right eye in right half; each eye UV scaled 2x horizontally.
+float4 PSMain_SBS(VSOut input) : SV_Target {
     float2 uv = input.uv;
     float  side = step(0.5, uv.x);   // 0 = left half, 1 = right half
     float2 leftSample  = float2(uv.x * 2.0,            uv.y);
     float2 rightSample = float2((uv.x - 0.5) * 2.0,    uv.y);
+    float4 colL = leftTex.Sample (samp, leftSample);
+    float4 colR = rightTex.Sample(samp, rightSample);
+    return lerp(colL, colR, side);
+}
+
+// Modes 3 (Half TB) and 4 (Full TB). Left eye on top, right eye on
+// bottom; each eye UV scaled 2x vertically. SBS logic rotated 90 deg.
+float4 PSMain_TB(VSOut input) : SV_Target {
+    float2 uv = input.uv;
+    float  side = step(0.5, uv.y);   // 0 = top half, 1 = bottom half
+    float2 leftSample  = float2(uv.x, uv.y * 2.0);
+    float2 rightSample = float2(uv.x, (uv.y - 0.5) * 2.0);
     float4 colL = leftTex.Sample (samp, leftSample);
     float4 colR = rightTex.Sample(samp, rightSample);
     return lerp(colL, colR, side);
@@ -324,19 +347,44 @@ void SwapChain11Proxy::ReleaseStereoBackBuffer()
     m_bbFormat = DXGI_FORMAT_UNKNOWN;
 }
 
+// Local helper: compile one PSMain entry from k_compositeShaderSrc and
+// turn the blob into an ID3D11PixelShader. Keeps EnsureComposite flat as
+// the number of modes grows.
+static HRESULT CompileCompositePS(ID3D11Device* dev, const char* entry,
+                                  ID3D11PixelShader** out)
+{
+    ID3DBlob* blob = nullptr;
+    ID3DBlob* err  = nullptr;
+    const UINT flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
+    HRESULT hr = D3DCompile(k_compositeShaderSrc, strlen(k_compositeShaderSrc),
+                            "wiz3D_composite", nullptr, nullptr,
+                            entry, "ps_4_0", flags, 0, &blob, &err);
+    if (FAILED(hr))
+    {
+        DDILog("SwapChain11Proxy::EnsureComposite: PS compile failed for %s 0x%08lX: %s\n",
+               entry, hr, err ? (const char*)err->GetBufferPointer() : "(no log)");
+        if (err) err->Release();
+        return hr;
+    }
+    if (err) err->Release();
+    hr = dev->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, out);
+    blob->Release();
+    return hr;
+}
+
 HRESULT SwapChain11Proxy::EnsureComposite()
 {
-    // Stage 4d: lazily compile the SBS composite shaders + pipeline state
+    // Stage 4d: lazily compile the composite shaders + pipeline state
     // on first Present where the composite actually runs. D3DCompile is a
-    // one-time cost; the shader is independent of BB format/size so we
+    // one-time cost; the shaders are independent of BB format/size so we
     // don't have to re-compile across ResizeBuffers.
-    if (m_compositeVS && m_compositePS && m_compositeSampler) return S_OK;
+    if (m_compositeVS && m_compositePS_SBS && m_compositePS_TB && m_compositeSampler) return S_OK;
     if (!m_parent) return E_FAIL;
     ID3D11Device* dev = m_parent->GetReal();
     if (!dev) return E_FAIL;
 
-    ID3DBlob* vsBlob = nullptr; ID3DBlob* psBlob = nullptr; ID3DBlob* err = nullptr;
-    UINT flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
+    ID3DBlob* vsBlob = nullptr; ID3DBlob* err = nullptr;
+    const UINT flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
 
     HRESULT hrVS = D3DCompile(
         k_compositeShaderSrc, strlen(k_compositeShaderSrc),
@@ -351,28 +399,14 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     }
     if (err) { err->Release(); err = nullptr; }
 
-    HRESULT hrPS = D3DCompile(
-        k_compositeShaderSrc, strlen(k_compositeShaderSrc),
-        "wiz3D_composite", nullptr, nullptr,
-        "PSMain", "ps_4_0", flags, 0, &psBlob, &err);
-    if (FAILED(hrPS))
-    {
-        DDILog("SwapChain11Proxy::EnsureComposite: PS compile failed 0x%08lX: %s\n",
-               hrPS, err ? (const char*)err->GetBufferPointer() : "(no log)");
-        if (err) err->Release();
-        vsBlob->Release();
-        return hrPS;
-    }
-    if (err) { err->Release(); err = nullptr; }
-
     HRESULT hr = dev->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
                                           nullptr, &m_compositeVS);
     vsBlob->Release();
-    if (FAILED(hr)) { psBlob->Release(); return hr; }
+    if (FAILED(hr)) return hr;
 
-    hr = dev->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(),
-                                 nullptr, &m_compositePS);
-    psBlob->Release();
+    hr = CompileCompositePS(dev, "PSMain_SBS", &m_compositePS_SBS);
+    if (FAILED(hr)) { ReleaseComposite(); return hr; }
+    hr = CompileCompositePS(dev, "PSMain_TB",  &m_compositePS_TB);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
 
     D3D11_SAMPLER_DESC sd = {};
@@ -405,8 +439,8 @@ HRESULT SwapChain11Proxy::EnsureComposite()
     hr = dev->CreateDepthStencilState(&dsd, &m_compositeDepthStencil);
     if (FAILED(hr)) { ReleaseComposite(); return hr; }
 
-    DDILog("SwapChain11Proxy::EnsureComposite: VS=%p PS=%p sampler=%p\n",
-           m_compositeVS, m_compositePS, m_compositeSampler);
+    DDILog("SwapChain11Proxy::EnsureComposite: VS=%p PS(SBS)=%p PS(TB)=%p sampler=%p\n",
+           m_compositeVS, m_compositePS_SBS, m_compositePS_TB, m_compositeSampler);
     return S_OK;
 }
 
@@ -416,7 +450,8 @@ void SwapChain11Proxy::ReleaseComposite()
     if (m_compositeBlend)        { m_compositeBlend->Release();        m_compositeBlend        = nullptr; }
     if (m_compositeRaster)       { m_compositeRaster->Release();       m_compositeRaster       = nullptr; }
     if (m_compositeSampler)      { m_compositeSampler->Release();      m_compositeSampler      = nullptr; }
-    if (m_compositePS)           { m_compositePS->Release();           m_compositePS           = nullptr; }
+    if (m_compositePS_TB)        { m_compositePS_TB->Release();        m_compositePS_TB        = nullptr; }
+    if (m_compositePS_SBS)       { m_compositePS_SBS->Release();       m_compositePS_SBS       = nullptr; }
     if (m_compositeVS)           { m_compositeVS->Release();           m_compositeVS           = nullptr; }
     if (m_compositeState)        { m_compositeState->Release();        m_compositeState        = nullptr; }
 }
@@ -467,8 +502,9 @@ void SwapChain11Proxy::DoComposite()
     // Without a state of its own, only the topology goes back (MP3's loading screen draws a strip without re-setting it).
     D3D11_PRIMITIVE_TOPOLOGY gameTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
     if (!gameState) ctx->IAGetPrimitiveTopology(&gameTopology);
-    if (!(WeaveSelected() && RunSRWeave(ctx)))
-        DrawCompositePass(ctx, m_realBBRTV, m_bbWidth, m_bbHeight);
+    const OutputMode mode = SelectedOutputMode();
+    if (!(mode == OM_SR_WEAVE && RunSRWeave(ctx)))
+        DrawCompositePass(ctx, m_realBBRTV, m_bbWidth, m_bbHeight, mode);
     if (gameState)
     {
         ctx->ClearState();   // our state holds no back-buffer view across a ResizeBuffers
@@ -482,7 +518,8 @@ void SwapChain11Proxy::DoComposite()
 
 void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
                                          ID3D11RenderTargetView* rtv,
-                                         UINT width, UINT height)
+                                         UINT width, UINT height,
+                                         OutputMode mode)
 {
     // Unbind any SRVs that might collide with t0/t1 (the game's PSSet
     // probably already has shader inputs there). Cheap defensive clear.
@@ -516,8 +553,26 @@ void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
     ctx->PSSetShaderResources(0, 2, srvs);
     ctx->PSSetSamplers(0, 1, &m_compositeSampler);
 
+    // Pick the pixel shader for the active OutputMode. The null-check
+    // guards against a shader not yet compiled for a follow-up mode
+    // (modes 5-8) so a mis-configured OutputMode doesn't crash; the
+    // SBS path is used as a safe fallback until that mode's shader
+    // lands.
+    ID3D11PixelShader* ps = m_compositePS_SBS;
+    switch (mode)
+    {
+    case OM_HALF_TB:
+    case OM_FULL_TB:
+        if (m_compositePS_TB) ps = m_compositePS_TB;
+        break;
+    case OM_HALF_SBS:
+    case OM_FULL_SBS:
+    default:
+        break;
+    }
+
     ctx->VSSetShader(m_compositeVS, nullptr, 0);
-    ctx->PSSetShader(m_compositePS, nullptr, 0);
+    ctx->PSSetShader(ps, nullptr, 0);
     ctx->GSSetShader(nullptr, nullptr, 0);
     ctx->HSSetShader(nullptr, nullptr, 0);
     ctx->DSSetShader(nullptr, nullptr, 0);
@@ -538,6 +593,19 @@ void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
 bool SwapChain11Proxy::WeaveSelected() const
 {
     return _tcsicmp(gInfo.OutputMethodDll, _T("SimulatedRealityWeaveOutput")) == 0;
+}
+
+// Primary selector: gInfo.OutputMode (matches OGL / NvDirectMode / HD3D
+// convention). Backward-compat: configs that only set OutputMethodDll =
+// "SimulatedRealityWeaveOutput" still get OM_SR_WEAVE regardless of the
+// numeric mode. Mode 0 (iZ3D legacy dual-panel) and out-of-range values
+// fall back to OM_HALF_SBS.
+SwapChain11Proxy::OutputMode SwapChain11Proxy::SelectedOutputMode() const
+{
+    if (WeaveSelected()) return OM_SR_WEAVE;
+    const DWORD m = gInfo.OutputMode;
+    if (m >= OM_HALF_SBS && m <= OM_SR_WEAVE) return static_cast<OutputMode>(m);
+    return OM_HALF_SBS;
 }
 
 bool SwapChain11Proxy::EnsureSRWeaver()
@@ -635,7 +703,10 @@ bool SwapChain11Proxy::RunSRWeave(ID3D11DeviceContext* ctx)
     if (!EnsureSRWeaver()) return false;
     if (FAILED(EnsureSRSBSTexture())) return false;
 
-    DrawCompositePass(ctx, m_srSBSRTV, m_srSBSW, m_srSBSH);
+    // SR Weave reads a Half-SBS input texture; the compositor fills it in
+    // the format SR-Lib's Weave() expects, regardless of the user's
+    // configured output mode (which is OM_SR_WEAVE here anyway).
+    DrawCompositePass(ctx, m_srSBSRTV, m_srSBSW, m_srSBSH, OM_HALF_SBS);
 
     // Weave() reads the registered input SRV and writes into the bound RT.
     ctx->OMSetRenderTargets(1, &m_realBBRTV, nullptr);

@@ -150,11 +150,43 @@ private:
     void    ReleaseStereoBackBuffer();
     void    ReleaseComposite();
     void    DoComposite();
-    // The composite pass by destination: the SBS output draws into the real BB, the SR weave path into a 2WxH
-    // offscreen texture the weaver reads.
+
+    // -----------------------------------------------------------------
+    // Output mode. The composite picks a pixel shader per mode and
+    // routes to one of several destinations. Mode numbering matches
+    // S3DWrapperOGL and NvDirectMode so the same wiz3D_Config.xml
+    // <OutputMode Value="N"/> works across all our modern paths.
+    //
+    // Modes 1 and 2 share the SBS shader -- "Full SBS" is "Half SBS"
+    // with the game rendering at half display width, same for TB.
+    // Modes 5-8 are added by follow-up commits; the SR weave path
+    // (mode 9) remains the existing SR-Lib integration.
+    // -----------------------------------------------------------------
+    enum OutputMode {
+        OM_IZ3D_DUAL          = 0,  // iZ3D dual-panel (legacy); unsupported on DX11, falls back to Half SBS
+        OM_HALF_SBS           = 1,  // Half Side-by-Side (default)
+        OM_FULL_SBS           = 2,  // Full Side-by-Side -- game must render at half display width
+        OM_HALF_TB            = 3,  // Half Top-and-Bottom
+        OM_FULL_TB            = 4,  // Full Top-and-Bottom -- game must render at half display height
+        OM_ANAGLYPH           = 5,  // Anaglyph Red/Cyan (Dubois) -- follow-up commit
+        OM_LINE_INTERLEAVED   = 6,  // Row interleaved (passive 3D TVs) -- follow-up commit
+        OM_COLUMN_INTERLEAVED = 7,  // Column interleaved -- follow-up commit
+        OM_CHECKERBOARD       = 8,  // Checkerboard (DLP-Link projectors) -- follow-up commit
+        OM_SR_WEAVE           = 9,  // Simulated Reality Weave (Leia/Samsung Odyssey 3D)
+    };
+    // Reads gInfo.OutputMode and the legacy OutputMethodDll string, returning
+    // the enum. OutputMethodDll=="SimulatedRealityWeaveOutput" overrides to
+    // OM_SR_WEAVE for backward compat with existing SR configs. Mode 0 and
+    // out-of-range values fall back to OM_HALF_SBS.
+    OutputMode SelectedOutputMode() const;
+
+    // The composite pass by destination: the compositor output draws into
+    // the real BB, the SR weave path into a 2WxH offscreen texture the
+    // weaver reads. The chosen OutputMode picks which pixel shader runs.
     void    DrawCompositePass(ID3D11DeviceContext* ctx,
                               ID3D11RenderTargetView* rtv,
-                              UINT width, UINT height);
+                              UINT width, UINT height,
+                              OutputMode mode);
     // The output pass's own context state (D3D11.1), swapped in around it so the game's state comes back untouched.
     bool    EnsureCompositeState();
     ID3DDeviceContextState* m_compositeState = nullptr;
@@ -196,8 +228,12 @@ private:
     // Composite pipeline state. Once compiled they're reusable across
     // frames; cleared in dtor + ResizeBuffers (the BB format/size may
     // change, but the shaders themselves are independent of those).
+    // One PS per OutputMode group that uses the same sampling pattern:
+    // SBS/TB are linear-sampled, Anaglyph adds a Dubois CB (follow-up),
+    // Line/Col/Checker use point sampling (follow-up).
     ID3D11VertexShader*       m_compositeVS;
-    ID3D11PixelShader*        m_compositePS;
+    ID3D11PixelShader*        m_compositePS_SBS = nullptr;  // modes 1 (Half SBS) + 2 (Full SBS)
+    ID3D11PixelShader*        m_compositePS_TB  = nullptr;  // modes 3 (Half TB)  + 4 (Full TB)
     ID3D11SamplerState*       m_compositeSampler;
     ID3D11RasterizerState*    m_compositeRaster;
     ID3D11BlendState*         m_compositeBlend;
