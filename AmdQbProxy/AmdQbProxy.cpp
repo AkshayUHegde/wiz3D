@@ -30,6 +30,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "..\Shared\version.h"
+#include "..\Shared\OutputModeNames.h"       // ResolveOutputModeName (unified naming)
 #include <new>
 #include <stdio.h>
 #include <d3d11.h>
@@ -91,16 +92,25 @@ static void WriteLog(const char* msg)
 // ============================================================
 // Config
 // ============================================================
+// Numeric ids match Shared/OutputModeNames.h (unified across every modern
+// wiz3D wrapper). Historical HD3D configs with OutputMode=0..8 under the
+// old numbering (OU_HALF=0, SBS_HALF=1, SBS_FULL=2, OU_FULL=3, LINE=4,
+// COL=5, CHECKER=6, ANAGLYPH=7, SR=8) do NOT auto-migrate -- see 0.4.0
+// release notes for the mapping. Canonical shortnames ("Anaglyph",
+// "RowInterleaved", ...) in a new OutputMethodDll string config entry
+// work regardless of numeric drift.
 enum OutputMode {
-    OM_OU_HALF          = 0,  // Half Top-and-Bottom     (half res per eye, stacked)
-    OM_SBS_HALF         = 1,  // Half Side-by-Side       (half res per eye, side by side, default)
-    OM_SBS_FULL         = 2,  // Full Side-by-Side       (set game to half display width)
-    OM_OU_FULL          = 3,  // Full Top-and-Bottom     (set game to half display height)
-    OM_LINE_INTERLEAVED = 4,  // Line/Row Interleaved    (alternating horizontal rows, passive 3D TVs)
-    OM_COL_INTERLEAVED  = 5,  // Column Interleaved      (alternating vertical columns)
-    OM_CHECKERBOARD     = 6,  // Checkerboard            (alternating pixels, DLP projectors)
-    OM_ANAGLYPH         = 7,  // Anaglyph                (colour-filtered stereo, requires glasses)
-    OM_SR_WEAVE         = 8   // Simulated Reality Weave (Leia/Samsung Odyssey Moving Lightfield displays)
+    OM_IZ3D_DUAL           = 0,  // iZ3D dual-panel (not supported by HD3D; falls through to Half SBS)
+    OM_SBS_HALF            = 1,  // Half Side-by-Side       (default, half res per eye, side by side)
+    OM_SBS_FULL            = 2,  // Full Side-by-Side       (set game to half display width)
+    OM_OU_HALF             = 3,  // Half Top-and-Bottom     (half res per eye, stacked)
+    OM_OU_FULL             = 4,  // Full Top-and-Bottom     (set game to half display height)
+    OM_ANAGLYPH            = 5,  // Anaglyph                (colour-filtered stereo, requires glasses)
+    OM_ROW_INTERLEAVED     = 6,  // Row Interleaved         (alternating horizontal rows, passive 3D TVs)
+    OM_COLUMN_INTERLEAVED  = 7,  // Column Interleaved      (alternating vertical columns)
+    OM_CHECKERBOARD        = 8,  // Checkerboard            (alternating pixels, DLP projectors)
+    OM_SR_WEAVE            = 9,  // Simulated Reality Weave (Leia/Samsung Odyssey Moving Lightfield displays)
+    OM_STEREO_MIRROR       = 10, // Stereo mirror           (reserved; HD3D doesn't implement yet)
 };
 static OutputMode g_OutputMode = OM_SBS_HALF;
 static bool g_bSwapEyes = false;
@@ -139,6 +149,27 @@ static int ReadConfigInt(const char* xml, const char* tag, int defaultValue)
     return atoi(p);
 }
 
+// Pull <Tag Value="..."/> strings out of the loaded config text, same loose
+// schema as ReadConfigInt. Writes an empty string to outBuf when the tag
+// is absent or has an empty value. outBufSize must be >= 1.
+static void ReadConfigString(const char* xml, const char* tag,
+                             char* outBuf, size_t outBufSize)
+{
+    if (!outBuf || outBufSize == 0) return;
+    outBuf[0] = '\0';
+    char needle[64];
+    _snprintf_s(needle, sizeof(needle), _TRUNCATE, "<%s Value=\"", tag);
+    const char* p = strstr(xml, needle);
+    if (!p) return;
+    p += strlen(needle);
+    const char* end = strchr(p, '"');
+    if (!end) return;
+    size_t len = static_cast<size_t>(end - p);
+    if (len >= outBufSize) len = outBufSize - 1;
+    memcpy(outBuf, p, len);
+    outBuf[len] = '\0';
+}
+
 static void LoadConfig()
 {
     wchar_t path[MAX_PATH] = {};
@@ -174,11 +205,27 @@ static void LoadConfig()
     buf[bytesRead] = '\0';
     CloseHandle(hFile);
 
-    // Load OutputMode
+    // Load OutputMode. First try the OutputMethodDll string -- the shared
+    // resolver (Shared/OutputModeNames.h) accepts both canonical shortnames
+    // ("Anaglyph", "HalfSideBySide", ...) and legacy iZ3D plugin DLL names
+    // ("AnaglyphOutput", "SideBySideOutput", ...), and we care about the
+    // canonical shortnames so a user can set the same name here as in a
+    // wiz3D DX11 / OGL / DX9 config. Fall back to the numeric OutputMode
+    // for backward-compat.
     {
-        int mode = ReadConfigInt(buf, "OutputMode", g_OutputMode);
-        if (mode >= OM_OU_HALF && mode <= OM_SR_WEAVE)
-            g_OutputMode = static_cast<OutputMode>(mode);
+        char nameStr[64] = {};
+        ReadConfigString(buf, "OutputMethodDll", nameStr, sizeof(nameStr));
+        int resolved = wiz3d::ResolveOutputModeName(nameStr);
+        if (resolved != wiz3d::OUTMODE_UNKNOWN)
+        {
+            g_OutputMode = static_cast<OutputMode>(resolved);
+        }
+        else
+        {
+            int mode = ReadConfigInt(buf, "OutputMode", g_OutputMode);
+            if (mode >= OM_IZ3D_DUAL && mode <= OM_STEREO_MIRROR)
+                g_OutputMode = static_cast<OutputMode>(mode);
+        }
     }
 
     // Some games crash if the SR runtime DLLs are loaded into their process
@@ -820,7 +867,7 @@ __declspec(dllexport) int AmdQbProxy_IsStereoActive()
 
 __declspec(dllexport) void AmdQbProxy_SetOutputMode(int mode)
 {
-    if (mode >= 0 && mode <= static_cast<int>(OM_SR_WEAVE)) g_OutputMode = static_cast<OutputMode>(mode);
+    if (mode >= OM_IZ3D_DUAL && mode <= OM_STEREO_MIRROR) g_OutputMode = static_cast<OutputMode>(mode);
     char buf[128];
     wsprintfA(buf, "[AmdQbProxy] External SetOutputMode -> %d\n", mode);
     WriteLog(buf);
@@ -1921,8 +1968,8 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSC, UINT SyncInt
     bool tabMode         = (g_OutputMode == OM_OU_HALF || g_OutputMode == OM_OU_FULL);
     bool fullResSBS      = (g_OutputMode == OM_SBS_FULL);
     bool fullResTab      = (g_OutputMode == OM_OU_FULL);
-    bool interleavedMode = (g_OutputMode == OM_LINE_INTERLEAVED ||
-                            g_OutputMode == OM_COL_INTERLEAVED  ||
+    bool interleavedMode = (g_OutputMode == OM_ROW_INTERLEAVED ||
+                            g_OutputMode == OM_COLUMN_INTERLEAVED  ||
                             g_OutputMode == OM_CHECKERBOARD);
     bool anaglyphMode    = (g_OutputMode == OM_ANAGLYPH);
     bool srWeaveMode     = (g_OutputMode == OM_SR_WEAVE);
@@ -1982,8 +2029,8 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSC, UINT SyncInt
         // Point sampler used to guarantee no cross-eye blending at row/column edges.
         // CB slot 0 (uvOff) repurposed as swap flag: 0.0 = normal, 1.0 = eyes swapped.
         ID3D11PixelShader* pIntPS =
-            (g_OutputMode == OM_LINE_INTERLEAVED) ? g_pLineInterleavedPS :
-            (g_OutputMode == OM_COL_INTERLEAVED)  ? g_pColInterleavedPS  :
+            (g_OutputMode == OM_ROW_INTERLEAVED) ? g_pLineInterleavedPS :
+            (g_OutputMode == OM_COLUMN_INTERLEAVED)  ? g_pColInterleavedPS  :
                                                      g_pCheckerboardPS;
         if (pIntPS && g_pPointSampler)
         {
