@@ -20,6 +20,7 @@
 #include "..\Font\acgfx_dynrender_dx9.h"
 #include "..\Font\acgfx_font.h"
 #include "OSDRenderer9.h"
+#include "LaserSightRenderer9.h"
 #include "Trace.h"
 #include "..\S3DAPI\EnumToString.h"
 #include "..\S3DAPI\ReadData.h"
@@ -1266,7 +1267,8 @@ HRESULT CBaseStereoRenderer::StopEngine( )
 	m_pTextState.Release();
 	SAFE_DELETE(m_pFont);
 	SAFE_DELETE(m_pDynRender);
-	if (m_pOSD) { delete m_pOSD; m_pOSD = nullptr; }
+	if (m_pOSD)        { delete m_pOSD;        m_pOSD        = nullptr; }
+	if (m_pLaserSight) { delete m_pLaserSight; m_pLaserSight = nullptr; }
 	m_pLine.Release();
 	for (DWORD i = 0; i < m_RenderTarget.size(); i++)
 		m_RenderTarget[i].Clear();
@@ -2135,18 +2137,24 @@ void CBaseStereoRenderer::DrawInfo(CBaseSwapChain* pSwapChain)
 	// composite copies this to both eyes at Present. One Render call
 	// per DrawInfo pass.
 	{
+		const UINT bbW = pSwapChain->m_BackBufferSize.cx;
+		const UINT bbH = pSwapChain->m_BackBufferSize.cy;
+
 		if (!m_pOSD)
 			m_pOSD = new wiz3d::OSDRenderer9();
 		if (m_pOSD)
 		{
 			m_pOSD->TickFrame();
 			if (m_pOSD->Init(m_Direct3DDevice))
-			{
-				const UINT bbW = pSwapChain->m_BackBufferSize.cx;
-				const UINT bbH = pSwapChain->m_BackBufferSize.cy;
 				m_pOSD->Render(m_Direct3DDevice, bbW, bbH);
-			}
 		}
+
+		// Laser-sight crosshair (replaces the dead resources.zip path).
+		// Gated by gInfo.Input.LaserSightEnable; the renderer no-ops when off.
+		if (!m_pLaserSight)
+			m_pLaserSight = new wiz3d::LaserSightRenderer9();
+		if (m_pLaserSight && m_pLaserSight->Init(m_Direct3DDevice))
+			m_pLaserSight->Render(m_Direct3DDevice, bbW, bbH);
 	}
 }
 

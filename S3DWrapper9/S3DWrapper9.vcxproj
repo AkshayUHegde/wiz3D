@@ -402,6 +402,7 @@
     <ClInclude Include="DX9AutoShift.h" />
     <ClInclude Include="DX9LaserSight.h" />
     <ClInclude Include="OSDRenderer9.h" />
+    <ClInclude Include="LaserSightRenderer9.h" />
     <ClInclude Include="TraceDisplay\WizTrace.h" />
     <ClInclude Include="TraceDisplay\WizPdhHelper.h" />
     <ClInclude Include="EnumToString.h" />
@@ -471,6 +472,7 @@
     <ClCompile Include="DX9AutoShift.cpp" />
     <ClCompile Include="DX9LaserSight.cpp" />
     <ClCompile Include="OSDRenderer9.cpp" />
+    <ClCompile Include="LaserSightRenderer9.cpp" />
     <ClCompile Include="EnumToString.cpp" />
     <ClCompile Include="GlobalData.cpp" />
     <ClCompile Include="Trace.cpp" />

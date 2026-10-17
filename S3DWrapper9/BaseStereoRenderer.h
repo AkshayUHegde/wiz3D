@@ -26,7 +26,7 @@
 class UMDDeviceWrapper;
 
 class CBaseStereoRenderer;
-namespace wiz3d { class OSDRenderer9; }
+namespace wiz3d { class OSDRenderer9; class LaserSightRenderer9; }
 
 extern CBaseStereoRenderer* g_pCurrentStereoRenderer;
 
@@ -373,6 +373,9 @@ protected:
 	// %ALLUSERSPROFILE%\Font\OSDFont.fnt not shipping on current builds).
 	// Lazy-created on first DrawInfo call that has a non-null device.
 	wiz3d::OSDRenderer9*			m_pOSD = nullptr;
+	// Modern laser-sight crosshair (replaces the dead legacy path which
+	// depends on %ALLUSERSPROFILE%\resources.zip not shipping either).
+	wiz3d::LaserSightRenderer9*		m_pLaserSight = nullptr;
 	CComPtr<ID3DXLine>				m_pLine;
 	bool							m_bStereoModeChanged;
 
