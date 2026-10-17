@@ -41,6 +41,7 @@ namespace wiz3d
 class Device11Proxy;
 class Texture2D11Proxy;
 class OSDRenderer;
+class LaserSightRenderer;
 
 // IDXGISwapChain4, so QI for SwapChain2/3/4 returns `this`: a game handed the real chain would Present and GetBuffer
 // past the proxy, mixing real and wrapped back buffers.
@@ -270,6 +271,10 @@ private:
     // released in dtor. Independent of the stereo composite path, drawn
     // after it over the real BB.
     OSDRenderer*              m_osd = nullptr;
+
+    // Laser sight overlay (Ctrl+Numpad / hotkey). Lazy-created on first
+    // frame that has LaserSightEnable=1; released in dtor.
+    LaserSightRenderer*       m_laser = nullptr;
 };
 
 } // namespace wiz3d

@@ -13,6 +13,7 @@
 #include "Utils.h"                    // SaveImageToFile, screenshot extensions
 #include "ProductNames.h"
 #include "OSDRenderer.h"              // on-screen display overlay
+#include "LaserSightRenderer.h"       // crosshair at convergence
 #include <Shlobj.h>
 #include <d3dcompiler.h>
 #include "SR.hpp"                    // Simulated Reality weave (delay-loaded runtime)
@@ -84,7 +85,8 @@ SwapChain11Proxy::~SwapChain11Proxy()
     WriteInputData(&gInfo.Input);
     gKbdHook.clear();
     for (ID3D11Query*& q : m_frameEvents) if (q) { q->Release(); q = nullptr; }
-    if (m_osd) { delete m_osd; m_osd = nullptr; }
+    if (m_osd)   { delete m_osd;   m_osd   = nullptr; }
+    if (m_laser) { delete m_laser; m_laser = nullptr; }
     ReleaseSRWeave(true);
     ReleaseStereoBackBuffer();
     ReleaseComposite();
@@ -631,6 +633,12 @@ void SwapChain11Proxy::DoComposite()
         m_osd->TickFrame();
         m_osd->Render(ctx, m_realBBRTV, m_realBBW, m_realBBH);
     }
+    // Laser-sight crosshair overlay. Gated by gInfo.Input.LaserSightEnable
+    // internally; the renderer no-ops when off. Drawn AFTER the OSD so
+    // the crosshair is on top of any help overlay.
+    if (!m_laser) m_laser = new LaserSightRenderer();
+    if (m_laser && m_laser->Init(m_parent->GetReal()))
+        m_laser->Render(ctx, m_realBBRTV, m_realBBW, m_realBBH);
     if (gameState)
     {
         ctx->ClearState();   // our state holds no back-buffer view across a ResizeBuffers
