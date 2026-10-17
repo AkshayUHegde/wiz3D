@@ -15,6 +15,7 @@
 #include <Shlobj.h>
 #include <d3dcompiler.h>
 #include "SR.hpp"                    // Simulated Reality weave (delay-loaded runtime)
+#include "SRDisplayInfo.h"           // LeiaSR Displays runtime: recommended views-texture dimensions
 
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -569,6 +570,23 @@ bool SwapChain11Proxy::EnsureSRWeaver()
     m_srInterface = sr;
     DDILog("SwapChain11Proxy::EnsureSRWeaver: ready (hWnd=%p sr=%p)\n",
            (void*)scDesc.OutputWindow, (void*)sr);
+
+    // Query the LeiaSR Displays runtime for the panel-recommended SBS views
+    // texture dimensions. Log-only for now; task #32 will consume these to
+    // size the SBS input and output RT to panel-native, so sub-native games
+    // on 4K SR displays stop losing lenticular alignment through downstream
+    // scaling. False just means the SR Displays runtime isn't present on
+    // this host; the existing BB-sized weave path keeps working.
+    int srRecW = 0, srRecH = 0;
+    if (wiz3d::QueryRecommendedSRViewsSize(srRecW, srRecH))
+    {
+        DDILog("SwapChain11Proxy::EnsureSRWeaver: LeiaSR recommended views %dx%d; current game BB %ux%u -> SBS %ux%u\n",
+               srRecW, srRecH, m_bbWidth, m_bbHeight, m_bbWidth * 2, m_bbHeight);
+    }
+    else
+    {
+        DDILog("SwapChain11Proxy::EnsureSRWeaver: LeiaSR Displays API unavailable; continuing with BB-sized weave\n");
+    }
     return true;
 }
 
