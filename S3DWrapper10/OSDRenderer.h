@@ -133,6 +133,14 @@ private:
     // Settings-changed fade (2s like DX9).
     ULONGLONG m_statusFadeDeadline = 0;
 
+    // Snapshot of the stereo settings each TickFrame to detect changes
+    // and auto-trigger the status fade. Avoids wiring a dedicated
+    // callback through the shared KeyboardHook.
+    unsigned  m_lastActivePreset = (unsigned)-1;
+    float     m_lastStereoBase   = -1.f;
+    float     m_lastOneDivZPS    = -1.f;
+    bool      m_lastSwapEyes     = false;
+
     // Cached rendered text — skip re-blitting the DIB if content unchanged.
     wchar_t   m_lastStatus[128] = {};
     wchar_t   m_lastFps[32]     = {};

@@ -379,6 +379,31 @@ void OSDRenderer::TickFrame()
         m_frameCountSinceSample = 0;
         m_lastFpsSample = now;
     }
+
+    // Detect hotkey-driven setting changes vs the last-frame snapshot and
+    // auto-trigger the 2s status pop. Avoids wiring a callback through
+    // the shared KeyboardHook thread for every hotkey.
+    const CameraPreset* p = gInfo.Input.GetActivePreset();
+    const float stereoBase  = p ? p->StereoBase   : 0.f;
+    const float oneDivZPS   = p ? p->One_div_ZPS  : 0.f;
+    const bool  swapEyes    = gInfo.Input.SwapEyes != 0;
+    const unsigned preset   = gInfo.Input.ActivePreset;
+    if (m_lastActivePreset == (unsigned)-1) {
+        // Prime the snapshot on first tick without firing the pop.
+        m_lastActivePreset = preset;
+        m_lastStereoBase   = stereoBase;
+        m_lastOneDivZPS    = oneDivZPS;
+        m_lastSwapEyes     = swapEyes;
+    } else if (preset != m_lastActivePreset ||
+               stereoBase != m_lastStereoBase ||
+               oneDivZPS  != m_lastOneDivZPS  ||
+               swapEyes   != m_lastSwapEyes) {
+        NoteSettingChanged();
+        m_lastActivePreset = preset;
+        m_lastStereoBase   = stereoBase;
+        m_lastOneDivZPS    = oneDivZPS;
+        m_lastSwapEyes     = swapEyes;
+    }
 }
 
 bool OSDRenderer::WantStatus() const
