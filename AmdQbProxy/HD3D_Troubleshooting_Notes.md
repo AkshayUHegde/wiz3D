@@ -234,6 +234,22 @@ build still allows NvAPI loading for investigation.
 - **Likely fix**: User manually edits game config file to enable AMD HD3D option,
   bypassing the launcher's detection. The proxy would then handle the rest.
 
+### 🆕 Steep (Ubisoft Annecy, 2016) — quietly-shipped HD3D
+
+- **3D Support**: Native AMD HD3D (not marketed; Ubisoft never announced stereo support)
+- **Status**: NOT YET TESTED on our side; HD3D presence confirmed via SteepVR source code
+- **Architecture**: x64 (Steep.exe), DX11
+- **Evidence of HD3D support**:
+  - `SteepVR/vendor/stereo-bridge/NativeBridge.h:8` — "Source must be the current native HD3D back buffer: L at y=0, R at y=eyeHeight."
+  - `SteepVR/vendor/stereo-bridge/DisplaySettings.h:14` — "Keep the HD3D game's logical fullscreen mode while presenting a windowed..."
+  - `NativeBridge::Present(IDXGISwapChain*, ID3D11Texture2D* nativePair, UINT eyeHeight, bool swapEyes)` consumes a double-height texture, L at y=0, R at y=eyeHeight — exactly the AMD HD3D top-and-bottom layout.
+  - SteepVR vendors `AmdQbProxy/` + `AmdAdlProxy/` + `D3d11VendorProxy/` directly from this repo (rev `981de7b` region).
+- **Mechanism in-engine**: Steep's engine has infrastructure for rendering two camera views in one simulation interval (originally for a "controller camera" / picture-in-picture-style view). That machinery IS the HD3D two-view path at the engine level. Enabling HD3D via our proxies lights up the dual-view render and emits a double-height back buffer; SteepVR then re-targets both views at IPD-offset player camera. For wiz3D's SBS output, we just need the double-height back buffer and our standard compositor does the rest.
+- **Fullscreen caveat**: SteepVR's DisplaySettings code implies Steep's HD3D only engages when the game thinks it's running fullscreen. Windowed launches likely won't trigger the dual-view path. Document this for users.
+- **Supported executable (per SteepVR)**: SHA-256 `e8b14fe6f3b45975080f1b8e78249bf8fefbbd73ee4c182156c0b8a66452e8cb` (x64, confirmed working with SteepVR's hooks; likely the current Steam/Uplay build). Other builds may still be HD3D-capable; this is just the one with pinned RVA offsets in SteepVR.
+- **How this was discovered**: SteepVR's maker (farmerarmor on GitHub) uncovered the HD3D leftover. Methodology not yet traced (see hidden-HD3D research notes). Steep is now the paradigm example of a "quiet HD3D" game: supported by the engine, never marketed by the publisher, discoverable through code inspection of the game binary or by trying wiz3D-style HD3D spoofing against the exe.
+- **Next steps**: deploy current hd3d/x64 release to a Steep install, launch fullscreen, verify double-height back buffer and SBS compositor fire. If confirmed, promote to ✅ and probe other Ubisoft engine siblings (Anvil / AnvilNext / Dunia / Disrupt era) for the same leftover.
+
 ---
 
 ## NVIDIA 3D Vision Architecture (Observed from Logs)
@@ -418,6 +434,22 @@ be updated with new builds:
 - `releases/wiz3D/hd3d/Sleeping Dogs/` (confirmed working build)
 
 Only update `x86/` and `x64/` folders with new builds.
+
+---
+
+## Known-Problematic Games (2026-10-17 user reports)
+
+### Deus Ex Human Revolution / Director's Cut
+
+Three user reports across HD3D, StereoInjector DX10-11, and 3D Vision Direct DX11 — all paths fail in different ways. Confirmed broken on both the base game (`dxhr.exe`) and Director's Cut (`DXHRDC.exe`).
+
+**HD3D x86 — crashes on launch.** No log received (crashes before log flush). Needs the user to reproduce with a crash dump + attach it.
+
+**StereoInjector DX10-11 x86** — game boots, backbuffer is split SBS, but each half shows the SAME mono scene. Root cause: our DX11 VS CRC fingerprint / modification path never fires (see task #18 — `TryBuildModifiedVS never fires, vsModOk=0 across all games`). Without modified VS, no eye offset is applied so both halves are identical. Fix requires task #18.
+
+**NvDirectMode (3D Vision Direct) DX11 x86** — Direct Mode activates (`Stereo_SetDriverMode(2 = DIRECT)` seen 3x), game sets up stereo handles, but `Stereo_SetActiveEye` is NEVER called. The game emits mono-only Present calls (`currentEye=3`). DXHR / DXHR:DC are 3D Vision **Automatic** Mode games (driver-side VS stereo), not Direct Mode — the game sees the Direct Mode activation flag but doesn't implement the per-eye render loop. On exit, the proxy also AVs at `d3d11.dll + 0x4EEC` (shutdown-order crash — may or may not be task #10, mini-dump needed to pinpoint).
+
+Short term: `DXHRDC.exe` added as a file alias to the base-game profile (so mono-UI CRCs apply to DC when stereo eventually works), full fix depends on #18 and a per-game HD3D investigation with user log.
 
 ---
 

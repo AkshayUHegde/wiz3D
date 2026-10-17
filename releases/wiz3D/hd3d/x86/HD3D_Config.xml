@@ -1,37 +1,77 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <Config>
     <AmdQbProxy>
-        <!-- OutputMode: selects the stereo output format.
-             0 = Half Top-and-Bottom  — game runs at full resolution; each eye gets half the vertical height (stacked)
-             1 = Half Side-by-Side    — game runs at full resolution; each eye gets half the horizontal width
-             2 = Full Side-by-Side    — set the game to HALF the display's horizontal resolution;
-                                        each eye is output at full display width (ideal for AR glasses / VR headsets)
-             3 = Full Top-and-Bottom  — set the game to HALF the display's vertical resolution;
-                                        each eye is output at full display height
-             4 = Row Interleaved      — alternating horizontal rows (odd rows = left eye, even = right eye);
-                                        for passive polarised 3D TVs and compatible monitors
-             5 = Column Interleaved   — alternating vertical columns (odd cols = left eye, even = right eye);
-                                        for column-polarised displays
-             6 = Checkerboard         — alternating pixels in a checkerboard pattern;
-                                        for DLP projectors and checkerboard-capable displays
-             7 = Anaglyph             — colour-filtered stereo; configure filter pair and method below
-             8 = Simulated Reality    — weaved output for Moving Lightfield displays (default)
-                                        (Leia / Samsung Odyssey 3D / Acer SpatialLabs);
-                                        requires the SR / LeiaSR runtime service to be installed
+        <!-- OutputMode: selects the stereo output format. Unified numbering
+             shared across every wiz3D wrapper (see Shared/OutputModeNames.h).
+             Mirrors 3D Vision Direct Mode's numbering so one setting works
+             the same way everywhere.
+
+             1 = Half Side-by-Side    — game runs at full resolution; each eye
+                                        gets half the horizontal width
+             2 = Full Side-by-Side    — set the game to HALF the display's
+                                        horizontal resolution; each eye is
+                                        output at full display width (ideal for
+                                        AR glasses / VR headsets)
+             3 = Half Top-and-Bottom  — game runs at full resolution; each eye
+                                        gets half the vertical height (stacked)
+             4 = Full Top-and-Bottom  — set the game to HALF the display's
+                                        vertical resolution; each eye is output
+                                        at full display height
+             5 = Anaglyph             — colour-filtered stereo; configure filter
+                                        pair and method below
+             6 = Row Interleaved      — alternating horizontal rows (passive
+                                        polarised 3D TVs; was "Line Interleaved")
+             7 = Column Interleaved   — alternating vertical columns (rare
+                                        column-polarised displays)
+             8 = Checkerboard         — alternating pixels in a checkerboard
+                                        pattern (DLP-Link 3D projectors)
+             9 = Simulated Reality    — weaved output for moving-lightfield
+                                        displays (Leia / Samsung Odyssey 3D /
+                                        Acer SpatialLabs — default); requires
+                                        the SR / LeiaSR runtime service to be
+                                        installed. Falls back to Half SBS when
+                                        the runtime is absent.
+
+             NOTE: wiz3D 0.4.0 renumbered this to match the unified scheme —
+             the old 0.3.x values (0=TB, 1=SBS, ..., 8=SR) no longer apply.
+             Users carrying an old HD3D_Config.xml forward should update the
+             number OR use the OutputMethodDll string below (preferred).
         -->
-        <OutputMode Value="8"/>
+        <OutputMode Value="9"/>
+
+        <!-- OutputMethodDll: optional canonical/legacy name override for
+             OutputMode. Leave empty to use the numeric OutputMode above.
+             Recognised values are either canonical shortnames or iZ3D-era
+             legacy plugin DLL filenames:
+
+               Canonical            Legacy DLL stem                 Numeric
+               -----------------    --------------------------      -------
+               HalfSideBySide       SideBySideOutput                1
+               FullSideBySide       FullSideBySideOutput            2
+               HalfTopAndBottom     TopAndBottomOutput              3
+               FullTopAndBottom     FullTopAndBottomOutput          4
+               Anaglyph             AnaglyphOutput                  5
+               RowInterleaved       InterlacedOutput                6
+               ColumnInterleaved    ColumnInterleavedOutput         7
+               Checkerboard         CheckerboardOutput              8
+               SimulatedRealityWeave SimulatedRealityWeaveOutput    9
+
+             Unknown strings pass through unchanged (HD3D doesn't have a
+             legacy DX9 plugin loader so it just falls back to Half SBS). -->
+        <OutputMethodDll Value=""/>
+
         <!-- SwapEyes: swap left/right eye views. Works with ALL output modes.
              0 = normal  (left eye on left/top/odd, right eye on right/bottom/even)
              1 = swapped (right eye on left/top/odd, left eye on right/bottom/even)
         -->
         <SwapEyes Value="0"/>
-        <!-- AnaglyphColour: colour of the anaglyph filter pair. Only used when OutputMode = 7.
+        <!-- AnaglyphColour: colour of the anaglyph filter pair. Only used when OutputMode = 5.
              0 = Red / Cyan    — most common; widest filter availability (default)
              1 = Green / Magenta — rarer; slightly better colour for some scenes
              2 = Amber / Blue  — best colour rendition; Trioscopic / ColorCode glasses
         -->
         <AnaglyphColour Value="0"/>
-        <!-- AnaglyphMethod: conversion algorithm. Only used when OutputMode = 7.
+        <!-- AnaglyphMethod: conversion algorithm. Only used when OutputMode = 5.
              0 = Dubois      — best for glasses use; minimises ghosting via spectral least-squares fit (default)
              1 = Compromise  — best for mixed audiences; designed to look good with AND without glasses
                                (Ahtik 2011 — averages Color/HalfColor/Dubois/Optimised with grey preservation)

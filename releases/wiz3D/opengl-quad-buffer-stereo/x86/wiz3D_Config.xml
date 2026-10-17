@@ -14,19 +14,43 @@
 	<GlobalSettings>
 
 		<!-- ───── OutputMode ────────────────────────────────────────────
-		     0 = iZ3D dual-panel hardware (legacy — original iZ3D monitor)
+		     Unified numbering shared across every wiz3D wrapper. See the
+		     Shared/OutputModeNames.h reference in the source tree, or the
+		     OutputMethodDll alternative below.
 		     1 = Half Side-by-Side    (each eye squashed to half width — works at the game's native res)
 		     2 = Full Side-by-Side    (each eye at full width — set the game to half the display width)
 		     3 = Half Top-and-Bottom  (each eye squashed to half height — works at native res)
 		     4 = Full Top-and-Bottom  (each eye at full height — set the game to half the display height)
 		     5 = Anaglyph Red/Cyan    (Dubois colour-optimized; for red/cyan glasses)
-		     6 = Line Interleaved     (passive 3D TVs / row-polarised monitors)
+		     6 = Row Interleaved      (passive 3D TVs / row-polarised monitors; was "Line Interleaved")
 		     7 = Column Interleaved   (rare column-polarised monitors)
 		     8 = Checkerboard         (DLP-Link 3D projectors)
 		     9 = Simulated Reality Weave (Samsung Odyssey 3D / Acer SpatialLabs lightfield
 		                                  displays — falls back to plain Half-SBS if the
 		                                  Simulated Reality runtime is not installed) -->
 		<OutputMode Value="9"/>
+
+		<!-- OutputMethodDll: optional canonical/legacy name override for OutputMode.
+		     Leave empty to use the numeric OutputMode above. Recognised values are
+		     either canonical shortnames or iZ3D-era legacy plugin DLL filenames:
+
+		       Canonical            Legacy DLL stem                 Numeric
+		       -----------------    --------------------------      -------
+		       HalfSideBySide       SideBySideOutput                1
+		       FullSideBySide       FullSideBySideOutput            2
+		       HalfTopAndBottom     TopAndBottomOutput              3
+		       FullTopAndBottom     FullTopAndBottomOutput          4
+		       Anaglyph             AnaglyphOutput                  5
+		       RowInterleaved       InterlacedOutput                6
+		       ColumnInterleaved    ColumnInterleavedOutput         7
+		       Checkerboard         CheckerboardOutput              8
+		       SimulatedRealityWeave SimulatedRealityWeaveOutput    9
+
+		     Unknown strings pass through unchanged, so legacy hardware plugin
+		     names (CMOShutterOutput, Zalman, VR920Output, DualProjectionOutput,
+		     S3D120HzProjectorsOutput, etc.) remain recognised by the DX9 plugin
+		     loader. -->
+		<OutputMethodDll Value=""/>
 
 		<!-- Swap left/right eye views: 0=normal, 1=swapped. Applies to every OutputMode. -->
 		<SwapEyes Value="0"/>

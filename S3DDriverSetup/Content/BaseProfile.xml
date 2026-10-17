@@ -2567,6 +2567,9 @@
 	<Profile Name="Deus Ex Human Revolution">
 		<File Name="dxhr5_win7.exe" />
 		<File Name="dxhr.exe" />
+		<!-- Director's Cut exe alias: shares the same mono-UI vertex-shader
+		     CRCs as the base game (verified via early 0.4.0 user reports). -->
+		<File Name="DXHRDC.exe" />
 		<Mono>
 			<VertexShader CRC="0x9C1431BE" />
 			<VertexShader CRC="0x08750EFE" />
