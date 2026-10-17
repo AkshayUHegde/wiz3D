@@ -577,7 +577,11 @@ inline float wiz3D_GetEffectiveEyeShift()
 	if (gInfo.COMWrapEyeShift != 0.0f) return gInfo.COMWrapEyeShift;
 	const CameraPreset* preset = gInfo.Input.GetActivePreset();
 	if (!preset) return 0.0f;
-	return preset->StereoBase * preset->One_div_ZPS;
+	// SeparationScale is the DefaultProfile-wide multiplier (DX9 applies it
+	// on each per-stage multiplier at use-site; DX10/11 Context11Proxy uses
+	// this top-level helper so we fold it in here). Default 1.0f, so a
+	// config with no SeparationScale override behaves identically.
+	return preset->StereoBase * preset->One_div_ZPS * gInfo.SeparationScale;
 }
 
 // you should declare gInfo in project

@@ -1201,6 +1201,10 @@ HRESULT SwapChain11Proxy::PresentFrame(bool present1, UINT SyncInterval, UINT Fl
     OnPresentBoundaryPre();
     const unsigned behind = timed ? GpuFramesBehind() : 0;
     if (timed) QueryPerformanceCounter(&t1);
+    // ForceVSyncOff: wiz3D_Config.xml -> DefaultProfile/ForceVSyncOff=1 forces
+    // SyncInterval=0 at Present time (parity with DX9's forced-VSync-off
+    // behaviour). Game's own VSync preference is overridden.
+    if (gInfo.ForceVSyncOff) SyncInterval = 0;
     HRESULT hr = present1 ? (m_real1 ? m_real1->Present1(SyncInterval, Flags, pParams) : E_NOINTERFACE)
                           : m_real->Present(SyncInterval, Flags);
     if (timed)

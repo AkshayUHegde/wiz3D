@@ -889,7 +889,10 @@ using wiz3d::BasesOrthogonal;
 static float ProjXScaleFromMatrix(const float* f, bool transposed) { return s_mat.ProjXScaleFromMatrix(f, transposed); }
 
 // Zero-parallax distance in world units, 0 with convergence off. The forward model is x += sep*(w - conv), so the
-// forward and the inverse patch both read conv from here.
+// forward and the inverse patch both read conv from here. The user's Shift+Numpad+/- hotkey adjusts
+// GetActivePreset()->One_div_ZPS directly (KeyboardHook INCREASE_ZPS / DECREASE_ZPS), so convergence
+// hotkey already drives this path. Per-shader-profile ConvergenceShift (profile->m_ConvergenceShift from
+// BaseProfile.xml <Mono>/<Weapon> entries) is a separate per-shader plumbing concern deferred to 0.5.0.
 float StereoConvergence()
 {
     const CameraPreset* p = gInfo.Input.GetActivePreset();

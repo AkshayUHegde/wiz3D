@@ -549,11 +549,22 @@ STDMETHODIMP CreateSwapChainForHwnd(IDXGIFactory2* This, IUnknown* pDevice, HWND
 {
     if (!WrapFactory2SwapChains())
         return Original_CreateSwapChainForHwnd(This, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
-    WrapperLog("\nCreateSwapChainForHwnd ENTER (Width=%u, Height=%u, Format=%d)\n",
+    // Forced-windowed parity with the slot-10 CreateSwapChain path: when
+    // DisableFullscreenModeEmulation=0 (iZ3D legacy / shutter outputs need
+    // windowed) and the game asked for fullscreen (non-NULL pFullscreenDesc
+    // with Windowed=FALSE), pass NULL as pFullscreenDesc to force windowed.
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFSOverride = pFullscreenDesc;
+    const bool wasFullscreen = pFullscreenDesc && !pFullscreenDesc->Windowed;
+    if (wasFullscreen && !gInfo.DisableFullscreenModeEmulation)
+    {
+        WrapperLog("  CreateSwapChainForHwnd: forcing windowed (DisableFullscreenModeEmulation=0)\n");
+        pFSOverride = nullptr;
+    }
+    WrapperLog("\nCreateSwapChainForHwnd ENTER (Width=%u, Height=%u, Format=%d, FS=%d)\n",
         pDesc ? pDesc->Width : 0, pDesc ? pDesc->Height : 0,
-        pDesc ? (int)pDesc->Format : -1);
+        pDesc ? (int)pDesc->Format : -1, (int)wasFullscreen);
     HRESULT hr = Original_CreateSwapChainForHwnd(This, pDevice, hWnd, pDesc,
-        pFullscreenDesc, pRestrictToOutput, ppSwapChain);
+        pFSOverride, pRestrictToOutput, ppSwapChain);
     WrapperLog("  Original_CreateSwapChainForHwnd returned 0x%08lX\n", hr);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain)
     {
