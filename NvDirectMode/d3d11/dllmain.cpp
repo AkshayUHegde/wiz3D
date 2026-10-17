@@ -837,11 +837,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
         break;
 
     case DLL_PROCESS_DETACH:
-        // Flip the shutdown shield BEFORE anything else at detach so any proxy
-        // destructor that fires during OS-driven DLL unload sees the flag and
-        // skips external-DLL callbacks that may already be unmapped. See
-        // NvDM_IsProcessDetaching definition above.
-        InterlockedExchange(&g_processDetaching, 1);
+        // Flip the shutdown shield only when the process is terminating
+        // (lpReserved != NULL). Explicit FreeLibrary unloads (lpReserved
+        // == NULL, dev tooling) still clean up normally. See
+        // NvDM_IsProcessDetaching definition above. Matches the shield
+        // pattern AmdQbProxy already uses at line 2816.
+        if (lpReserved != NULL)
+            InterlockedExchange(&g_processDetaching, 1);
         Log("=== NvDirectMode d3d11 proxy unloading ===\n");
         UninstallEOSOverlayBlock();
         if (g_hVEH)

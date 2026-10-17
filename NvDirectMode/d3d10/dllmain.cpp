@@ -361,7 +361,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
         break;
 
     case DLL_PROCESS_DETACH:
-        InterlockedExchange(&g_processDetaching, 1);  // shutdown shield; see dllmain.cpp header
+        if (lpReserved != NULL)
+            InterlockedExchange(&g_processDetaching, 1);  // shutdown shield; see dllmain.cpp header
         Log("=== NvDirectMode d3d10 proxy unloading ===\n");
         if (g_hVEH) { RemoveVectoredExceptionHandler(g_hVEH); g_hVEH = NULL; }
         if (g_hRealD3D10) { FreeLibrary(g_hRealD3D10); g_hRealD3D10 = NULL; }

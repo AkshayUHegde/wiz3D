@@ -581,7 +581,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
         break;
 
     case DLL_PROCESS_DETACH:
-        InterlockedExchange(&g_processDetaching, 1);  // shutdown shield; see dllmain.cpp header
+        if (lpReserved != NULL)
+            InterlockedExchange(&g_processDetaching, 1);  // shutdown shield; see dllmain.cpp header
         Log("=== NvDirectMode d3d9 proxy unloading ===\n");
         // Restore the D3D9 runtime's function bodies BEFORE removing the
         // VEH — if a hook fires between now and process death, the
