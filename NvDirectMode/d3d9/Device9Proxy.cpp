@@ -27,6 +27,7 @@
 extern "C" int NvDM_OutputMode();
 extern "C" int NvDM_SwapEyes();
 extern "C" int NvDM_OutputIsTopBottom();
+extern "C" int NvDM_IsProcessDetaching();
 extern "C" int NvDM_AnaglyphColour();
 extern "C" int NvDM_AnaglyphMethod();
 
@@ -557,7 +558,10 @@ void Device9Proxy::ReleaseSRPipeline()
 
     if (m_srInterfaceDX9)
     {
-        m_srInterfaceDX9->Delete();
+        // Shutdown shield: skip SR::Delete() during OS DLL unload — same
+        // rationale as the d3d11 proxy's ReleaseSRPipeline (DXHR:DC exit AV).
+        if (!NvDM_IsProcessDetaching())
+            m_srInterfaceDX9->Delete();
         m_srInterfaceDX9 = nullptr;
     }
 }

@@ -24,6 +24,9 @@ extern "C" int NvDM_SwapEyes();
 extern "C" int NvDM_OutputMode();
 extern "C" int NvDM_AnaglyphColour();
 extern "C" int NvDM_AnaglyphMethod();
+// Shutdown shield from dllmain -- set at DLL_PROCESS_DETACH so destructors
+// can skip calls into partially-unmapped external DLLs (SR runtime).
+extern "C" int NvDM_IsProcessDetaching();
 
 // ---------------------------------------------------------------------------
 // Stage 4b composite pipeline: D3DCompile resolver + HLSL source
@@ -322,7 +325,15 @@ void SwapChainProxy::ReleaseSRPipeline()
 
     if (m_srInterfaceDX11)
     {
-        m_srInterfaceDX11->Delete();
+        // Skip SR::Delete() if the process is already detaching -- the SR
+        // runtime DLLs may have been unmapped before our DLL in the OS's
+        // reverse-load-order teardown, and calling through a stale vtable
+        // AVs at the SR offset inside our DLL. The OS reclaims the SR
+        // runtime's memory when it unmaps those DLLs; leaking per-process
+        // in that path is harmless. Fixes DXHR:DC exit AV (2026-10-17 user
+        // report, crash at d3d11.dll + 0x4EEC during game teardown).
+        if (!NvDM_IsProcessDetaching())
+            m_srInterfaceDX11->Delete();
         m_srInterfaceDX11 = nullptr;
     }
 }

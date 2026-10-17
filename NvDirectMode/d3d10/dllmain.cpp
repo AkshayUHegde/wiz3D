@@ -31,6 +31,9 @@ static int   g_wrapDevices    = 1;
 static int   g_outputMode     = 9;   // Unified default = SR Weave; SR runtime failure falls back to Half SBS automatically (SR weave is NYI on d3d10 so the composite path falls back regardless). See Shared/OutputModeNames.h.
 static int   g_anaglyphColour  = 0;
 static int   g_anaglyphMethod  = 0;
+// Shutdown shield -- mirrors d3d11/dllmain.cpp (see that file's rationale).
+static volatile LONG g_processDetaching = 0;
+extern "C" int NvDM_IsProcessDetaching() { return (int)g_processDetaching; }
 
 static void LogOpen(void)
 {
@@ -358,6 +361,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
         break;
 
     case DLL_PROCESS_DETACH:
+        InterlockedExchange(&g_processDetaching, 1);  // shutdown shield; see dllmain.cpp header
         Log("=== NvDirectMode d3d10 proxy unloading ===\n");
         if (g_hVEH) { RemoveVectoredExceptionHandler(g_hVEH); g_hVEH = NULL; }
         if (g_hRealD3D10) { FreeLibrary(g_hRealD3D10); g_hRealD3D10 = NULL; }

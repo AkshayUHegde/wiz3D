@@ -56,6 +56,12 @@ static int   g_outputMode      = 9;  // overridden by OutputMode / OutputMethodD
 static int   g_anaglyphColour   = 0; // 0=RC (default), 1=GM, 2=AB, 3=TriOviz
 static int   g_anaglyphMethod   = 0; // 0=Dubois (default), 1=Compromise, 2=Color, 3=HalfColor, 4=Optimised, 5=Grey, 6=True
 static int   g_blockEOSOverlay  = 0; // refuse to load EOSOVH-Win32-Shipping.dll (Epic Games Launcher overlay). Diagnostic/opt-in — for games that statically import EOSSDK (TR2013) the block runs too late and can't help anyway.
+// Shutdown shield: set at DLL_PROCESS_DETACH so proxy destructors can skip
+// calls into external DLLs (SR runtime, etc.) that may already be partially
+// unmapped during the process's reverse-load-order DLL teardown. Observed
+// as the exit-AV at `d3d11.dll + 0x4EEC` in DXHR:DC (2026-10-17 user report).
+static volatile LONG g_processDetaching = 0;
+extern "C" int NvDM_IsProcessDetaching() { return (int)g_processDetaching; }
 
 static void LogOpen(void)
 {
@@ -831,6 +837,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
         break;
 
     case DLL_PROCESS_DETACH:
+        // Flip the shutdown shield BEFORE anything else at detach so any proxy
+        // destructor that fires during OS-driven DLL unload sees the flag and
+        // skips external-DLL callbacks that may already be unmapped. See
+        // NvDM_IsProcessDetaching definition above.
+        InterlockedExchange(&g_processDetaching, 1);
         Log("=== NvDirectMode d3d11 proxy unloading ===\n");
         UninstallEOSOverlayBlock();
         if (g_hVEH)

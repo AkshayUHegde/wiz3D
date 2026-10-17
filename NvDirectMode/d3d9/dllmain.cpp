@@ -45,6 +45,9 @@ static int   g_disableComposite = 0;   // diagnostic — 1 = skip per-eye captur
 static int   g_srSRGB           = 1;   // SR input color space. 1 = tell SR-Lib the SBS texture is sRGB (DX9 default — matches how Oil Rush + Hard Reset backbuffers actually contain colour: gamma-encoded even when the D3D9 format bit is a plain X8R8G8B8 rather than a _sRGB variant). 0 = tell SR-Lib the texture is linear. Flip to 0 if a game's colours look washed / darkened / gamma-shifted through the weave. Runtime effect: passed as the 2nd arg to SRInterfaceDX9::SetInputTexture.
 static int   g_traceD9Methods   = 0;   // MT Framework ERR09 diagnostic — when 1, log first ~200 calls per IDirect3D9 / IDirect3DDevice9 method with args + return HRESULT. Off by default (chatty).
 static int   g_traceLoadedModules = 0; // NvAPI-loading diagnostic — when 1, enumerate every DLL loaded in the game process at DllMain + after Direct3DCreate9, logging full path. Answers "did the game load OUR nvapi.dll, System32's, or none?" without needing external tools like listdlls / Procmon. Off by default.
+// Shutdown shield -- mirrors d3d11/dllmain.cpp (see that file's rationale).
+static volatile LONG g_processDetaching = 0;
+extern "C" int NvDM_IsProcessDetaching() { return (int)g_processDetaching; }
 
 static void LogOpen(void)
 {
@@ -578,6 +581,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
         break;
 
     case DLL_PROCESS_DETACH:
+        InterlockedExchange(&g_processDetaching, 1);  // shutdown shield; see dllmain.cpp header
         Log("=== NvDirectMode d3d9 proxy unloading ===\n");
         // Restore the D3D9 runtime's function bodies BEFORE removing the
         // VEH — if a hook fires between now and process death, the

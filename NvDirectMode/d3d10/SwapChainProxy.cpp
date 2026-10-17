@@ -38,6 +38,7 @@ public:
 #pragma comment(lib, "dxguid.lib")
 
 extern "C" int NvDM_OutputIsTopBottom();
+extern "C" int NvDM_IsProcessDetaching();
 extern "C" int NvDM_SwapEyes();
 extern "C" int NvDM_OutputMode();
 extern "C" int NvDM_AnaglyphColour();
@@ -604,7 +605,10 @@ void SwapChainProxy::ReleaseSRPipeline()
 
     if (m_srInterfaceDX10)
     {
-        m_srInterfaceDX10->Delete();
+        // Shutdown shield: skip SR::Delete() during OS DLL unload — same
+        // rationale as the d3d11 proxy's ReleaseSRPipeline (DXHR:DC exit AV).
+        if (!NvDM_IsProcessDetaching())
+            m_srInterfaceDX10->Delete();
         m_srInterfaceDX10 = nullptr;
     }
 }
