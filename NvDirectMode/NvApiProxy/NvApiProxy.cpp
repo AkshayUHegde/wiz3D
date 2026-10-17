@@ -444,7 +444,15 @@ static bool ShouldApplyGameSet(bool& userEngagedFlag)
 
 static bool ResolveWiz3DBridge()
 {
+    // Probe the DX9 wrapper first (loaded by DX9 games), then the DX10/11
+    // wrapper (loaded by DX11 games via Akshay's COM-wrap path). Both
+    // wrappers export the same Wiz3D_* surface over the same gInfo.Input,
+    // so NvApiProxy sees one authoritative bridge regardless of which
+    // wrapper the running game loaded. Preferring D3D9 when both are
+    // somehow loaded is a conservative tie-break; in practice only one
+    // runs per process.
     HMODULE m = GetModuleHandleA("S3DWrapperD3D9.dll");
+    if (!m) m = GetModuleHandleA("S3DWrapperD3D10.dll");
     if (!m)
     {
         if (g_Wiz3DModule)

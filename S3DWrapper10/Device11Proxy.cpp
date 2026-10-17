@@ -1,5 +1,6 @@
 #include "StdAfx.h"
 #include "Device11Proxy.h"
+#include "Wiz3DStereoApi.h"  // NVAPI stereo bridge (register-active-renderer)
 #include "Context11Proxy.h"
 #include "DXGIDeviceProxy.h"
 #include "Texture2D11Proxy.h"
@@ -217,10 +218,17 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
                (unsigned)g_ProfileData.GSCRCData.size(),
                wiz3D_GetEffectiveEyeShift());
     }
+    // Make this device the active NVAPI bridge target so NvApiProxy's
+    // Wiz3D_* lookups (via GetProcAddress on S3DWrapperD3D10.dll) start
+    // returning our authoritative gInfo.Input values -- enables 3D Vision
+    // Auto Mode games (GTA V, Max Payne 3, BF3, ...) to detect stereo and
+    // route their in-game 3D sliders to our injection.
+    Wiz3D_RegisterActiveRenderer(this);
 }
 
 Device11Proxy::~Device11Proxy()
 {
+    Wiz3D_UnregisterActiveRenderer(this);
     {
         // Release() has already dropped m_real, so the entry is found by its proxy; a stale one sends a new device at the same
         // address into this freed object.

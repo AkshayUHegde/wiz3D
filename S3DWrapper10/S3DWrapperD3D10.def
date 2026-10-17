@@ -11,3 +11,14 @@ EXPORTS
     wiz3D_WrapSwapChain								@9 PRIVATE
     wiz3D_WrapD3D10Device							@10 PRIVATE
     wiz3D_WrapD3D10SwapChain						@11 PRIVATE
+    ; NVAPI bridge: NvApiProxy.dll resolves these by name via GetProcAddress
+    ; (matches S3DWrapperD3D9.dll's export surface so one proxy serves both).
+    Wiz3D_GetStereoActive							@13
+    Wiz3D_SetStereoActive							@14
+    Wiz3D_GetSeparationPercent						@15
+    Wiz3D_SetSeparationPercent						@16
+    Wiz3D_GetConvergence							@17
+    Wiz3D_SetConvergence							@18
+    Wiz3D_StepSeparation							@19
+    Wiz3D_StepConvergence							@20
+    Wiz3D_HasProfileEntry							@21
