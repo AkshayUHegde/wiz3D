@@ -12,6 +12,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <algorithm>
+#include <vector>
 
 // Win32 defines DrawText as DrawTextW/DrawTextA macros; our TexSlot method
 // has the same base name. Undef locally so it doesn't collide (we still use
@@ -69,7 +70,11 @@ static HFONT MakeFont(const wchar_t* face, int ptSize, int weight, int& outHeigh
         DEFAULT_CHARSET,
         OUT_TT_PRECIS,
         CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
+        // ANTIALIASED_QUALITY produces grayscale AA (R==G==B per glyph
+        // pixel). Our outline compositor reads one channel as the coverage
+        // mask, which only works with grayscale AA -- ClearType would write
+        // different per-subpixel values and break the mask.
+        ANTIALIASED_QUALITY,
         VARIABLE_PITCH | FF_SWISS,
         face);
 }
@@ -188,39 +193,88 @@ void OSDRenderer::TexSlot::DrawRect(const RECT& r, COLORREF rgb, BYTE alpha)
     if (y1 > visibleH) visibleH = y1;
 }
 
-// DrawText via GDI, then stamp alpha=255 for all pixels GDI touched. GDI
-// DrawTextW on a DIB doesn't set the alpha byte (per-pixel alpha is zero
-// on initial glyph draw), so we post-process: any pixel in the clip rect
-// whose RGB is non-zero gets alpha=255. For ClearType AA transitions GDI
-// renders anti-aliased grey values -- the alpha stamp picks them up at
-// their luminance, so the quad composites smoothly over game content.
+// Draw text with a 2-pixel black outline (matches the DX9 / legacy-DX10
+// OSD's BMFont outlineThickness=2 look) and no backing panel.
+//
+// Technique: use a MONOCHROME glyph mask approach so the outline is
+// correctly alpha-blended independently of GDI's "alpha-byte-is-just-
+// padding" quirk on 32-bit DIBs.
+//   1) Scratch step: temporarily draw the text to the DIB with GDI in
+//      WHITE on BLACK (GDI anti-aliasing produces per-pixel grey values
+//      that *are* the glyph coverage mask). Pixels GDI touches are
+//      lum>0; pixels GDI leaves alone stay at lum=0.
+//   2) Snapshot the mask into a small heap buffer (one byte per pixel).
+//   3) Clear the rect back to all-zero.
+//   4) For every pixel in the rect: if ANY surrounding mask pixel in
+//      a 2px radius is non-zero, that pixel is "outlined" -- composite
+//      black with alpha = max-of-neighbours. Then if its own mask is
+//      non-zero, overwrite with fill colour at alpha = own-mask-value.
+//      The result is a 2px black halo around the fill, with proper AA.
 void OSDRenderer::TexSlot::DrawTextLine(const wchar_t* text, const RECT& r, HFONT font,
                                         COLORREF rgb, UINT flags)
 {
     if (!dc || !bits || !font || !text) return;
 
     HFONT prevFont = (HFONT)SelectObject(dc, font);
-    SetTextColor(dc, rgb);
 
-    RECT rr = r;
-    ::DrawTextW(dc, text, -1, &rr, flags);
-
-    // Post-process: synthesise alpha from luminance for pixels GDI touched.
     const int x0 = (std::max)(0L, (long)r.left),   x1 = (std::min)((long)w, (long)r.right);
     const int y0 = (std::max)(0L, (long)r.top),    y1 = (std::min)((long)h, (long)r.bottom);
-    const BYTE Rt = GetRValue(rgb), Gt = GetGValue(rgb), Bt = GetBValue(rgb);
+    const int rw = x1 - x0, rh = y1 - y0;
+    if (rw <= 0 || rh <= 0) { SelectObject(dc, prevFont); return; }
+
+    // 1) Zero the rect so GDI starts from a known baseline.
     for (int y = y0; y < y1; ++y) {
         BYTE* row = bits + (size_t)y * w * 4;
         for (int x = x0; x < x1; ++x) {
             BYTE* p = row + x * 4;
-            // GDI wrote (B, G, R, 0) on glyph pixels. The max channel is
-            // the ClearType luminance -- use that as alpha for a smooth
-            // premultiplied-ish blend. Pixels GDI didn't touch stay fully
-            // transparent (and whatever Clear or DrawRect put down).
-            BYTE lum = (std::max)((std::max)(p[0], p[1]), p[2]);
-            if (lum > 0 && p[3] == 0) {
-                // Fill the colour at full strength and use luminance as alpha.
-                p[0] = Bt; p[1] = Gt; p[2] = Rt; p[3] = lum;
+            p[0] = p[1] = p[2] = p[3] = 0;
+        }
+    }
+
+    // 2) Draw the text in white; GDI's anti-aliasing writes grey values
+    //    into R==G==B that serve as our coverage mask.
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT rc = r;
+    ::DrawTextW(dc, text, -1, &rc, flags);
+
+    // 3) Snapshot the mask (R channel is enough since R==G==B after
+    //    white-on-black AA).
+    std::vector<BYTE> mask((size_t)rw * rh, 0);
+    for (int y = 0; y < rh; ++y) {
+        const BYTE* row = bits + (size_t)(y + y0) * w * 4 + (size_t)x0 * 4;
+        for (int x = 0; x < rw; ++x) mask[(size_t)y * rw + x] = row[x * 4 + 2]; // R
+    }
+
+    // 4) Composite outline + fill into the DIB.
+    const BYTE Rt = GetRValue(rgb), Gt = GetGValue(rgb), Bt = GetBValue(rgb);
+    const int kOutline = 2;
+    for (int y = 0; y < rh; ++y) {
+        BYTE* row = bits + (size_t)(y + y0) * w * 4 + (size_t)x0 * 4;
+        for (int x = 0; x < rw; ++x) {
+            // Outline: max mask value within a 2-pixel radius (excluding
+            // the centre, which the fill owns).
+            BYTE outAlpha = 0;
+            for (int dy = -kOutline; dy <= kOutline && outAlpha < 255; ++dy) {
+                const int ny = y + dy;
+                if (ny < 0 || ny >= rh) continue;
+                for (int dx = -kOutline; dx <= kOutline && outAlpha < 255; ++dx) {
+                    const int nx = x + dx;
+                    if (nx < 0 || nx >= rw) continue;
+                    if (dx * dx + dy * dy > kOutline * kOutline) continue;
+                    const BYTE m = mask[(size_t)ny * rw + nx];
+                    if (m > outAlpha) outAlpha = m;
+                }
+            }
+            BYTE fillAlpha = mask[(size_t)y * rw + x];
+
+            BYTE* p = row + x * 4;
+            if (fillAlpha > 0) {
+                p[0] = Bt; p[1] = Gt; p[2] = Rt; p[3] = fillAlpha;
+            } else if (outAlpha > 0) {
+                p[0] = p[1] = p[2] = 0;
+                p[3] = outAlpha;
+            } else {
+                p[0] = p[1] = p[2] = p[3] = 0;
             }
         }
     }
@@ -599,11 +653,11 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
         if (wcscmp(text, m_lastStatus) != 0) {
             TexSlot& s = m_slots[(int)Slot::Status];
             s.Clear();
-            // Semi-opaque dark pill behind the text for readability over bright scenes.
-            RECT bg = { 0, 0, s.w, s.h };
-            s.DrawRect(bg, RGB(0, 0, 0), 160);
+            // No backing panel -- the 2px black outline from DrawTextLine
+            // gives readability over any background, matching the DX9 /
+            // legacy-DX10 BMFont outlineThickness=2 look.
             RECT textRect = { 12, 4, s.w - 12, s.h - 4 };
-            s.DrawTextLine(text, textRect, m_fontStatus.font, RGB(240, 240, 240),
+            s.DrawTextLine(text, textRect, m_fontStatus.font, RGB(255, 255, 255),
                        DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
             wcscpy_s(m_lastStatus, text);
         }
@@ -615,10 +669,8 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
         if (wcscmp(text, m_lastFps) != 0) {
             TexSlot& s = m_slots[(int)Slot::Fps];
             s.Clear();
-            RECT bg = { 0, 0, s.w, s.h };
-            s.DrawRect(bg, RGB(0, 0, 0), 160);
             RECT textRect = { 8, 2, s.w - 8, s.h - 2 };
-            s.DrawTextLine(text, textRect, m_fontFps.font, RGB(240, 240, 240),
+            s.DrawTextLine(text, textRect, m_fontFps.font, RGB(255, 255, 255),
                        DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
             wcscpy_s(m_lastFps, text);
         }
@@ -627,10 +679,8 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
     if (wantHelp && !m_helpTextRendered) {
         TexSlot& s = m_slots[(int)Slot::HotkeyHelp];
         s.Clear();
-        // Semi-opaque dark panel. ~65% opacity so game content shows faintly through.
-        RECT bg = { 0, 0, s.w, s.h };
-        s.DrawRect(bg, RGB(10, 10, 20), 180);
-        // Title.
+        // Hotkey help: no backing panel. Each line gets the 2px outline
+        // via DrawTextLine so the list stays readable over any game scene.
         RECT title = { 20, 20, s.w - 20, 60 };
         s.DrawTextLine(L"wiz3D  —  Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
                    DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);

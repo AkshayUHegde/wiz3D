@@ -10,6 +10,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <algorithm>
+#include <vector>
 
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -35,7 +36,10 @@ static HFONT MakeFont(const wchar_t* face, int ptSize, int weight, int& outHeigh
         DEFAULT_CHARSET,
         OUT_TT_PRECIS,
         CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
+        // Grayscale AA so our outline compositor can use R==G==B as a
+        // single-channel coverage mask (ClearType would write different
+        // per-subpixel values and break the mask).
+        ANTIALIASED_QUALITY,
         VARIABLE_PITCH | FF_SWISS,
         face);
 }
@@ -134,27 +138,66 @@ void OSDRenderer9::TexSlot::DrawRect(const RECT& r, COLORREF rgb, BYTE alpha)
     dirty = true;
 }
 
+// Draw text with a 2-pixel black outline (matches DX9/legacy-DX10 BMFont
+// outlineThickness=2 look), no backing panel. Mirrors the DX11
+// OSDRenderer::TexSlot::DrawTextLine implementation.
 void OSDRenderer9::TexSlot::DrawTextLine(const wchar_t* text, const RECT& r, HFONT font,
                                          COLORREF rgb, UINT flags)
 {
     if (!dc || !bits || !font || !text) return;
 
     HFONT prevFont = (HFONT)SelectObject(dc, font);
-    SetTextColor(dc, rgb);
-
-    RECT rr = r;
-    ::DrawTextW(dc, text, -1, &rr, flags);
 
     const int x0 = (std::max)(0L, (long)r.left),   x1 = (std::min)((long)w, (long)r.right);
     const int y0 = (std::max)(0L, (long)r.top),    y1 = (std::min)((long)h, (long)r.bottom);
-    const BYTE Rt = GetRValue(rgb), Gt = GetGValue(rgb), Bt = GetBValue(rgb);
+    const int rw = x1 - x0, rh = y1 - y0;
+    if (rw <= 0 || rh <= 0) { SelectObject(dc, prevFont); return; }
+
     for (int y = y0; y < y1; ++y) {
         BYTE* row = bits + (size_t)y * w * 4;
         for (int x = x0; x < x1; ++x) {
             BYTE* p = row + x * 4;
-            BYTE lum = (std::max)((std::max)(p[0], p[1]), p[2]);
-            if (lum > 0 && p[3] == 0) {
-                p[0] = Bt; p[1] = Gt; p[2] = Rt; p[3] = lum;
+            p[0] = p[1] = p[2] = p[3] = 0;
+        }
+    }
+
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT rc = r;
+    ::DrawTextW(dc, text, -1, &rc, flags);
+
+    std::vector<BYTE> mask((size_t)rw * rh, 0);
+    for (int y = 0; y < rh; ++y) {
+        const BYTE* row = bits + (size_t)(y + y0) * w * 4 + (size_t)x0 * 4;
+        for (int x = 0; x < rw; ++x) mask[(size_t)y * rw + x] = row[x * 4 + 2];
+    }
+
+    const BYTE Rt = GetRValue(rgb), Gt = GetGValue(rgb), Bt = GetBValue(rgb);
+    const int kOutline = 2;
+    for (int y = 0; y < rh; ++y) {
+        BYTE* row = bits + (size_t)(y + y0) * w * 4 + (size_t)x0 * 4;
+        for (int x = 0; x < rw; ++x) {
+            BYTE outAlpha = 0;
+            for (int dy = -kOutline; dy <= kOutline && outAlpha < 255; ++dy) {
+                const int ny = y + dy;
+                if (ny < 0 || ny >= rh) continue;
+                for (int dx = -kOutline; dx <= kOutline && outAlpha < 255; ++dx) {
+                    const int nx = x + dx;
+                    if (nx < 0 || nx >= rw) continue;
+                    if (dx * dx + dy * dy > kOutline * kOutline) continue;
+                    const BYTE m = mask[(size_t)ny * rw + nx];
+                    if (m > outAlpha) outAlpha = m;
+                }
+            }
+            BYTE fillAlpha = mask[(size_t)y * rw + x];
+
+            BYTE* p = row + x * 4;
+            if (fillAlpha > 0) {
+                p[0] = Bt; p[1] = Gt; p[2] = Rt; p[3] = fillAlpha;
+            } else if (outAlpha > 0) {
+                p[0] = p[1] = p[2] = 0;
+                p[3] = outAlpha;
+            } else {
+                p[0] = p[1] = p[2] = p[3] = 0;
             }
         }
     }
@@ -402,10 +445,8 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
         if (wcscmp(text, m_lastStatus) != 0) {
             TexSlot& s = m_slots[(int)Slot::Status];
             s.Clear();
-            RECT bg = { 0, 0, s.w, s.h };
-            s.DrawRect(bg, RGB(0, 0, 0), 160);
             RECT textRect = { 12, 4, s.w - 12, s.h - 4 };
-            s.DrawTextLine(text, textRect, m_fontStatus.font, RGB(240, 240, 240),
+            s.DrawTextLine(text, textRect, m_fontStatus.font, RGB(255, 255, 255),
                            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
             wcscpy_s(m_lastStatus, text);
         }
@@ -417,10 +458,8 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
         if (wcscmp(text, m_lastFps) != 0) {
             TexSlot& s = m_slots[(int)Slot::Fps];
             s.Clear();
-            RECT bg = { 0, 0, s.w, s.h };
-            s.DrawRect(bg, RGB(0, 0, 0), 160);
             RECT textRect = { 8, 2, s.w - 8, s.h - 2 };
-            s.DrawTextLine(text, textRect, m_fontFps.font, RGB(240, 240, 240),
+            s.DrawTextLine(text, textRect, m_fontFps.font, RGB(255, 255, 255),
                            DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
             wcscpy_s(m_lastFps, text);
         }
@@ -429,8 +468,6 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
     if (wantHelp && !m_helpTextRendered) {
         TexSlot& s = m_slots[(int)Slot::HotkeyHelp];
         s.Clear();
-        RECT bg = { 0, 0, s.w, s.h };
-        s.DrawRect(bg, RGB(10, 10, 20), 180);
         RECT title = { 20, 20, s.w - 20, 60 };
         s.DrawTextLine(L"wiz3D  --  Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
                        DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
