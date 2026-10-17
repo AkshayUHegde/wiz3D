@@ -189,8 +189,12 @@
 		<SeparationMode Value="0"/>
 		<!-- Frustum adjustment: 0=shift (toe-in), 1=off-axis (correct) -->
 		<FrustumAdjustMode Value="0"/>
-		<!-- Black border width at screen edges (fraction, 0.0-0.1) -->
-		<BlackAreaWidth Value="0.03"/>
+		<!-- Side-bars: black border width at the inner+outer edges of each eye.
+		     Fraction of each eye-width (0.0-0.1). Masks the peripheral edges to
+		     reduce retinal-rivalry eye strain on legacy stereo rigs. Default
+		     0.0 (bars off) for modern SBS/SR displays; iZ3D-era shutter users
+		     typically wanted 0.03. -->
+		<BlackAreaWidth Value="0.0"/>
 
 		<!-- ── Performance Tuning ──────────────────────────────────── -->
 		<!-- Presenter thread sleep time in ms (-2=auto, -1=off, 0-50=manual) -->

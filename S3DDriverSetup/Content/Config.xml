@@ -141,7 +141,7 @@
 		<!-- 0 = symmetric, 1 = right shift, 2 = left shift -->
 		<SeparationMode Value="0"/>
 		<FrustumAdjustMode Value="0"/>
-		<BlackAreaWidth Value="0.03"/>
+		<BlackAreaWidth Value="0.0"/>
 		<!-- 0..(1000/refreshRate) -->
 		<PresenterSleepTime Value="-2"/>
 		<PresenterFlushTime Value="-1"/>
