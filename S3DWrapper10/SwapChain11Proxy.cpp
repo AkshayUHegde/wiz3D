@@ -714,6 +714,53 @@ void SwapChain11Proxy::DrawCompositePass(ID3D11DeviceContext* ctx,
 
     ctx->Draw(3, 0);
 
+    // Side-bar overlay: for SBS and TB modes, draw a thin black border on
+    // the left/right (SBS) or top/bottom (TB) of each eye's half to match
+    // DX9's BlackAreaWidth comfort feature. Uses ID3D11DeviceContext1::ClearView
+    // (D3D11.1+, Win8+) for an atomic rect clear with no shader state churn.
+    // Modes 5-9 (Anaglyph, interleaved, checkerboard, SR weave) are per-pixel
+    // composites where each pixel represents both eyes, so bars don't apply.
+    const float barW = gInfo.BlackAreaWidth;
+    if (barW > 0.f && (mode == OM_HALF_SBS || mode == OM_FULL_SBS ||
+                       mode == OM_HALF_TB  || mode == OM_FULL_TB))
+    {
+        ID3D11DeviceContext1* ctx1 = nullptr;
+        if (SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D11DeviceContext1),
+                                          reinterpret_cast<void**>(&ctx1))) && ctx1)
+        {
+            const FLOAT black[4] = { 0.f, 0.f, 0.f, 1.f };
+            const bool  sbs = (mode == OM_HALF_SBS || mode == OM_FULL_SBS);
+            const UINT  halfW = sbs ? (width  / 2) : width;
+            const UINT  halfH = sbs ? height       : (height / 2);
+            // Bar thickness is a fraction of the per-eye dimension perpendicular
+            // to the eye split (per-eye-width for SBS, per-eye-height for TB).
+            const UINT  bar   = (UINT)(barW * (sbs ? halfW : halfH));
+            if (bar > 0 && bar * 2 < (sbs ? halfW : halfH))
+            {
+                D3D11_RECT rects[4];
+                if (sbs)
+                {
+                    // Four bars: inner left, outer left, inner right, outer right.
+                    rects[0] = { (LONG)0,              0, (LONG)bar,                        (LONG)height };
+                    rects[1] = { (LONG)(halfW - bar),  0, (LONG)halfW,                      (LONG)height };
+                    rects[2] = { (LONG)halfW,          0, (LONG)(halfW + bar),              (LONG)height };
+                    rects[3] = { (LONG)(width - bar),  0, (LONG)width,                      (LONG)height };
+                }
+                else
+                {
+                    // Four bars: top-outer, top-inner, bottom-inner, bottom-outer.
+                    rects[0] = { 0, (LONG)0,              (LONG)width, (LONG)bar                      };
+                    rects[1] = { 0, (LONG)(halfH - bar),  (LONG)width, (LONG)halfH                    };
+                    rects[2] = { 0, (LONG)halfH,          (LONG)width, (LONG)(halfH + bar)            };
+                    rects[3] = { 0, (LONG)(height - bar), (LONG)width, (LONG)height                   };
+                }
+                for (int i = 0; i < 4; ++i)
+                    ctx1->ClearView(rtv, black, &rects[i], 1);
+            }
+            ctx1->Release();
+        }
+    }
+
     // Unbind our SRVs so the game's next OMSetRenderTargets binding the
     // wrapped BB-RTV doesn't trip a D3D11 read/write hazard warning.
     ctx->PSSetShaderResources(0, 2, nullSRVs);
