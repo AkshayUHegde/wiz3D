@@ -298,6 +298,42 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
     m_bbWidth  = desc.BufferDesc.Width;
     m_bbHeight = desc.BufferDesc.Height;
     m_bbFormat = desc.BufferDesc.Format;
+    m_realBBW  = m_bbWidth;
+    m_realBBH  = m_bbHeight;
+
+    // SR Weave output needs the real BB at panel-native pixel pitch so the
+    // interlace pattern lines up with the lenslets. The LeiaSR Displays
+    // runtime reports the recommended SBS view-texture dimensions (equal
+    // to 2*panelW x panelH on the physical display); resize the real swap
+    // chain to half of that. m_bbWidth/m_bbHeight stay at the game's
+    // requested dims so GetDesc/m_leftBB/m_rightBB keep the game-side
+    // view intact; the compositor + weave write at m_realBBW/m_realBBH.
+    if (SelectedOutputMode() == OM_SR_WEAVE)
+    {
+        int srRecW = 0, srRecH = 0;
+        if (wiz3d::QueryRecommendedSRViewsSize(srRecW, srRecH))
+        {
+            const UINT panelW = static_cast<UINT>(srRecW / 2);
+            const UINT panelH = static_cast<UINT>(srRecH);
+            if (panelW > 0 && panelH > 0 &&
+                (panelW != m_bbWidth || panelH != m_bbHeight))
+            {
+                DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: SR Weave selected; resizing real BB %ux%u -> panel-native %ux%u\n",
+                       m_bbWidth, m_bbHeight, panelW, panelH);
+                HRESULT rhr = m_real->ResizeBuffers(0, panelW, panelH, DXGI_FORMAT_UNKNOWN, desc.Flags);
+                if (SUCCEEDED(rhr))
+                {
+                    m_realBBW = panelW;
+                    m_realBBH = panelH;
+                }
+                else
+                {
+                    DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: real BB resize failed 0x%08lX; staying at game dims (weave will be scaled downstream)\n", rhr);
+                }
+            }
+        }
+    }
+
     // The ZPS hotkey step is expressed in pixels and scaled by this width.
     gKbdHook.setBackBufferWidth(m_bbWidth);
     m_parent->SetPresentSize(m_bbWidth, m_bbHeight);
@@ -395,6 +431,7 @@ void SwapChain11Proxy::ReleaseStereoBackBuffer()
     if (m_leftBB)    { m_leftBB->Release();    m_leftBB    = nullptr; }
     if (m_rightBB)   { m_rightBB->Release();   m_rightBB   = nullptr; }
     m_bbWidth = m_bbHeight = 0;
+    m_realBBW = m_realBBH = 0;
     m_bbFormat = DXGI_FORMAT_UNKNOWN;
 }
 
@@ -581,7 +618,7 @@ void SwapChain11Proxy::DoComposite()
     if (!gameState) ctx->IAGetPrimitiveTopology(&gameTopology);
     const OutputMode mode = SelectedOutputMode();
     if (!(mode == OM_SR_WEAVE && RunSRWeave(ctx)))
-        DrawCompositePass(ctx, m_realBBRTV, m_bbWidth, m_bbHeight, mode);
+        DrawCompositePass(ctx, m_realBBRTV, m_realBBW, m_realBBH, mode);
     if (gameState)
     {
         ctx->ClearState();   // our state holds no back-buffer view across a ResizeBuffers
@@ -753,8 +790,12 @@ bool SwapChain11Proxy::EnsureSRWeaver()
 
 HRESULT SwapChain11Proxy::EnsureSRSBSTexture()
 {
-    const UINT        wantW   = m_bbWidth * 2;
-    const UINT        wantH   = m_bbHeight;
+    // Size the SBS input to the real BB's dims x 2 width. When the real BB
+    // has been resized to panel-native (SR_Weave path), this gives us the
+    // SR-recommended SBS size directly; otherwise it stays at game BB dims
+    // and we fall back to the pre-panel-native behaviour.
+    const UINT        wantW   = m_realBBW * 2;
+    const UINT        wantH   = m_realBBH;
     const DXGI_FORMAT wantFmt = m_bbFormat;
     if (!wantW || !wantH || wantFmt == DXGI_FORMAT_UNKNOWN) return E_FAIL;
     if (m_srSBSTex && m_srSBSW == wantW && m_srSBSH == wantH && m_srSBSFmt == wantFmt)
@@ -804,8 +845,8 @@ bool SwapChain11Proxy::RunSRWeave(ID3D11DeviceContext* ctx)
     // Weave() reads the registered input SRV and writes into the bound RT.
     ctx->OMSetRenderTargets(1, &m_realBBRTV, nullptr);
     D3D11_VIEWPORT vp = {};
-    vp.Width    = (float)m_bbWidth;
-    vp.Height   = (float)m_bbHeight;
+    vp.Width    = (float)m_realBBW;
+    vp.Height   = (float)m_realBBH;
     vp.MinDepth = 0.f;
     vp.MaxDepth = 1.f;
     ctx->RSSetViewports(1, &vp);
@@ -815,8 +856,8 @@ bool SwapChain11Proxy::RunSRWeave(ID3D11DeviceContext* ctx)
     if (s_logged < 3)
     {
         ++s_logged;
-        DDILog("SwapChain11Proxy::RunSRWeave: weave OK (%ux%u -> %ux%u)\n",
-               m_srSBSW, m_srSBSH, m_bbWidth, m_bbHeight);
+        DDILog("SwapChain11Proxy::RunSRWeave: weave OK (SBS %ux%u -> real BB %ux%u; game BB %ux%u)\n",
+               m_srSBSW, m_srSBSH, m_realBBW, m_realBBH, m_bbWidth, m_bbHeight);
     }
     return true;
 }
@@ -1022,6 +1063,37 @@ void SwapChain11Proxy::OnPresentBoundaryPost()
     ctx->EndFrame();
     ctx->ClearFrameCommands();
     ctx->SetPresentHookActive(true);
+}
+
+// GetDesc / GetDesc1: when the real BB has been resized away from the game's
+// requested dims (SR_Weave panel-native path), patch the returned description
+// so the game continues to see the dims it asked for. Everything downstream
+// in the game -- viewport, scissor, RTVs sized to its own cached BB dims --
+// keeps working at the game's resolution; the compositor and weave operate
+// on the real (panel-native) BB behind the scenes.
+HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc)
+{
+    HRESULT hr = m_real->GetDesc(pDesc);
+    if (SUCCEEDED(hr) && pDesc && m_bbWidth && m_bbHeight &&
+        (m_realBBW != m_bbWidth || m_realBBH != m_bbHeight))
+    {
+        pDesc->BufferDesc.Width  = m_bbWidth;
+        pDesc->BufferDesc.Height = m_bbHeight;
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetDesc1(DXGI_SWAP_CHAIN_DESC1* pDesc)
+{
+    if (!m_real1) return E_NOINTERFACE;
+    HRESULT hr = m_real1->GetDesc1(pDesc);
+    if (SUCCEEDED(hr) && pDesc && m_bbWidth && m_bbHeight &&
+        (m_realBBW != m_bbWidth || m_realBBH != m_bbHeight))
+    {
+        pDesc->Width  = m_bbWidth;
+        pDesc->Height = m_bbHeight;
+    }
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE SwapChain11Proxy::ResizeBuffers(

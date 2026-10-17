@@ -75,7 +75,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT Buffer, REFIID riid, void** ppSurface) override;
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL Fullscreen, IDXGIOutput* pTarget) override;
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* pFullscreen, IDXGIOutput** ppTarget) override           { return m_real->GetFullscreenState(pFullscreen, ppTarget); }
-    HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) override                                    { return m_real->GetDesc(pDesc); }
+    HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) override;
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) override;
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* pNewTargetParameters) override                { return m_real->ResizeTarget(pNewTargetParameters); }
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** ppOutput) override                             { return m_real->GetContainingOutput(ppOutput); }
@@ -83,7 +83,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* pLastPresentCount) override                            { return m_real->GetLastPresentCount(pLastPresentCount); }
 
     // IDXGISwapChain1
-    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* pDesc) override                                  { return m_real1 ? m_real1->GetDesc1(pDesc) : E_NOINTERFACE; }
+    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* pDesc) override;
     HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pDesc) override               { return m_real1 ? m_real1->GetFullscreenDesc(pDesc) : E_NOINTERFACE; }
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND* pHwnd) override                                                    { return m_real1 ? m_real1->GetHwnd(pHwnd) : E_NOINTERFACE; }
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID refiid, void** ppUnk) override                              { return m_real1 ? m_real1->GetCoreWindow(refiid, ppUnk) : E_NOINTERFACE; }
@@ -221,9 +221,15 @@ private:
     ID3D11ShaderResourceView* m_leftSRV;
     ID3D11ShaderResourceView* m_rightSRV;
     ID3D11RenderTargetView*   m_realBBRTV;
-    UINT                      m_bbWidth;
-    UINT                      m_bbHeight;
+    UINT                      m_bbWidth;      // Game-visible BB dims (what GetDesc returns to the game,
+    UINT                      m_bbHeight;     // what m_leftBB/m_rightBB are sized to for game rendering).
     DXGI_FORMAT               m_bbFormat;
+    // Real swap-chain BB dims. Equal to m_bbWidth/m_bbHeight except in
+    // SR_Weave mode: there we resize the real BB to LeiaSR's recommended
+    // panel-native dims so the weave output lands at lenslet pixel pitch
+    // instead of being scaled downstream by DWM / display.
+    UINT                      m_realBBW = 0;
+    UINT                      m_realBBH = 0;
 
     // Composite pipeline state. Once compiled they're reusable across
     // frames; cleared in dtor + ResizeBuffers (the BB format/size may
