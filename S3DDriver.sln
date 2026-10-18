@@ -902,7 +902,9 @@ Global
 		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Debug|x64.ActiveCfg = Debug|x64
 		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Debug|x64.Build.0 = Debug|x64
 		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Final Release|Win32.ActiveCfg = Final Release|Win32
+		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Final Release|Win32.Build.0 = Final Release|Win32
 		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Final Release|x64.ActiveCfg = Final Release|x64
+		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Final Release|x64.Build.0 = Final Release|x64
 		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Release|Win32.ActiveCfg = Release|Win32
 		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Release|Win32.Build.0 = Release|Win32
 		{C538D122-90DB-4D2B-ACCB-D5B43EABC2CC}.Release|x64.ActiveCfg = Release|x64

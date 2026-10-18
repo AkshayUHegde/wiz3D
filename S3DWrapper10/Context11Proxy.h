@@ -19,6 +19,7 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // bundled lib/d3d10 dxgitype.h still
 #include <algorithm>
 #include "ProfileFeature.h"
 #include "ShaderPatch11.h"   // right-eye shader twins
+#include "ShaderModifier11.h" // wiz3d::ModifiedVS11 (TryBuildModifiedVS Phase 2)
 
 namespace wiz3d
 {
@@ -83,6 +84,12 @@ public:
 
     Context11Proxy(ID3D11DeviceContext* real, Device11Proxy* parent);
     virtual ~Context11Proxy();
+
+    // Called by ~Device11Proxy before it Releases this context, so if the
+    // Release doesn't drop the final ref (over-ref'd by the game), our own
+    // destructor won't later try to notify a freed Device11Proxy via
+    // OnContextProxyDestroyed. Pairs with ~Device11Proxy's cleanup path.
+    void DetachFromParent();
 
     // IUnknown
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObj) override;
@@ -705,8 +712,23 @@ private:
     ID3D11GeometryShader*         m_boundGS     = nullptr;
     ID3D11HullShader*             m_boundHS     = nullptr;
     void TrackStageShader(StageIdx stage, void* shader);
-    void PatchStageCBsForDraw(StageIdx stage, void* shader, const ShaderAnalysis11Result* info, float eyeShift);
+    void PatchStageCBsForDraw(StageIdx stage, void* shader, const ShaderAnalysis11Result* info, float eyeShift, float conv);
     unsigned                      m_dsBuffersPatchedThisFrame = 0;
+
+    // TryBuildModifiedVS DX11 Phase 2: per-eye binding of modified vertex
+    // shaders produced by Device11Proxy. On the right-eye replay of a Draw
+    // for a shader with a modified sibling, we temporarily swap in the
+    // modified VS and bind our per-eye-info CB to the register the modified
+    // shader expects to read eye data from, then restore the game's VS so
+    // subsequent closures see consistent state. The eye-info CB is a 16-
+    // byte D3D11_USAGE_DYNAMIC buffer created lazily on first use; its
+    // contents mirror the DX10 DDI legacy ConstantBufferWrapper method 2
+    // layout: [sep, -(1/ZPS + convShift)^2, 0, StereoZNear].
+    ID3D11Buffer* m_eyeInfoCB = nullptr;
+    bool          BeginRightEyeShaderSwap(ID3D11VertexShader* vsAtDraw,
+                                          ID3D11VertexShader*& outOrig, UINT& outSlot);
+    void          EndRightEyeShaderSwap(ID3D11VertexShader* orig);
+    void          UpdateEyeInfoCB(const wiz3d::ModifiedVS11& mod);
 
     // The game's per-game behaviour (ProfileFeature.h), built from its profile on first use.
     ProfileFeatures m_features;

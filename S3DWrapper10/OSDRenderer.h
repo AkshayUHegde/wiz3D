@@ -126,10 +126,11 @@ private:
     const wchar_t* m_fontFace = L"Arial";   // "Inter" after successful load
     bool      LoadInterFontPrivate();        // call once at Init
     void      UnloadInterFontPrivate();      // call at ReleaseAll
-    // Which of the 3 Inter TTF files loaded successfully (Regular / SemiBold /
-    // Bold). RemoveFontResourceExW takes the same filename back, so we store
-    // the fully resolved paths rather than any opaque handle.
-    wchar_t   m_interPaths[3][MAX_PATH] = {};
+    // Inter TTFs are embedded in the DLL as RT_RCDATA resources (0.4.0+;
+    // dropped the on-disk Fonts/ folder requirement). AddFontMemResourceEx
+    // returns an opaque HANDLE that must be fed back to RemoveFontMemResourceEx
+    // -- one handle per TTF, up to three (Regular / SemiBold / Bold).
+    HANDLE    m_interMemHandles[3] = {};
     int       m_interLoadedCount = 0;
 
     // Per-slot DIBs + textures.

@@ -391,13 +391,40 @@ STDMETHODIMP CreateSwapChain( IDXGIFactory* This, IUnknown *pDevice, DXGI_SWAP_C
 
 static void HookFactory2SwapChainSlots(void* pFactory);   // slots 15, 16 and 24, defined beside their hooks below
 
+// FC3 2026-10-18 log showed the game creating 249 DXGI factories during one
+// level transition. Every factory shares the dxgi.dll vtable, so re-running
+// HookCode on the same function address 249*4 times was pure waste and may
+// have contributed to the Dunia 2 level-load hang (madCHook internal state
+// swelling + per-call page-protect dances). Cache the function addresses
+// we've already hooked and skip the rest.
+#include <unordered_set>
+static std::unordered_set<void*> s_hookedCreateSwapChainAddrs;
+static std::unordered_set<void*> s_hookedCreateSCForHwndAddrs;
+static std::unordered_set<void*> s_hookedCreateSCForCWAddrs;
+static std::unordered_set<void*> s_hookedCreateSCForCompAddrs;
+static CRITICAL_SECTION           s_hookedAddrsLock;
+static volatile LONG              s_hookedAddrsInit = 0;
+static void EnsureHookCacheInit()
+{
+	if (InterlockedCompareExchange(&s_hookedAddrsInit, 1, 0) == 0)
+		InitializeCriticalSection(&s_hookedAddrsLock);
+}
+
 // One place to install the swap-chain hooks, so the CreateDXGIFactory entry
 // points can't disagree about which factory IIDs deserve them.
 static void HookFactorySwapChainSlot(void* pFactory)
 {
 	if (!pFactory) return;
 	void** vt = *(void***)pFactory;
-	HookCode(vt[10], CreateSwapChain, (PVOID*)&Original_CreateSwapChain, HOOKING_FLAG);
+	EnsureHookCacheInit();
+	bool install = false;
+	{
+		EnterCriticalSection(&s_hookedAddrsLock);
+		install = s_hookedCreateSwapChainAddrs.insert(vt[10]).second;
+		LeaveCriticalSection(&s_hookedAddrsLock);
+	}
+	if (install)
+		HookCode(vt[10], CreateSwapChain, (PVOID*)&Original_CreateSwapChain, HOOKING_FLAG);
 	HookFactory2SwapChainSlots(pFactory);
 }
 
@@ -625,9 +652,18 @@ static void HookFactory2SwapChainSlots(void* pFactory)
         !asF2)
         return;
     void** vt2 = *(void***)asF2;
-    HookCode(vt2[15], CreateSwapChainForHwnd, (PVOID*)&Original_CreateSwapChainForHwnd, HOOKING_FLAG);
-    HookCode(vt2[16], CreateSwapChainForCoreWindow, (PVOID*)&Original_CreateSwapChainForCoreWindow, HOOKING_FLAG);
-    HookCode(vt2[24], CreateSwapChainForComposition, (PVOID*)&Original_CreateSwapChainForComposition, HOOKING_FLAG);
+    EnsureHookCacheInit();
+    bool install15 = false, install16 = false, install24 = false;
+    {
+        EnterCriticalSection(&s_hookedAddrsLock);
+        install15 = s_hookedCreateSCForHwndAddrs.insert(vt2[15]).second;
+        install16 = s_hookedCreateSCForCWAddrs.insert(vt2[16]).second;
+        install24 = s_hookedCreateSCForCompAddrs.insert(vt2[24]).second;
+        LeaveCriticalSection(&s_hookedAddrsLock);
+    }
+    if (install15) HookCode(vt2[15], CreateSwapChainForHwnd,        (PVOID*)&Original_CreateSwapChainForHwnd,        HOOKING_FLAG);
+    if (install16) HookCode(vt2[16], CreateSwapChainForCoreWindow,  (PVOID*)&Original_CreateSwapChainForCoreWindow,  HOOKING_FLAG);
+    if (install24) HookCode(vt2[24], CreateSwapChainForComposition, (PVOID*)&Original_CreateSwapChainForComposition, HOOKING_FLAG);
     asF2->Release();
 }
 

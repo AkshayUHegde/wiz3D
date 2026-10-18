@@ -24,6 +24,7 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // bundled lib/d3d10 dxgitype.h still
 #include <unordered_set>
 #include <unordered_map>
 #include "ShaderAnalyzer11.h"  // ShaderAnalysis11Result
+#include "ShaderModifier11.h"  // wiz3d::ModifiedVS11 (TryBuildModifiedVS Phase 1)
 #include "DeferredContext11.h" // CreateDeferredContextFor
 
 namespace wiz3d
@@ -43,6 +44,13 @@ public:
     // context is wrapped, so GetImmediateContext can return that same proxy
     // (with AddRef) instead of producing a different one each call.
     void SetImmediateContextProxy(Context11Proxy* ctxProxy);
+
+    // Called by ~Context11Proxy if a game over-releases the immediate context
+    // (common in RAGE shutdown — Max Payne 3 Releases the context one more
+    // time than it AddRef'd, so Context11Proxy destructs while the device
+    // still holds a stale m_ctxProxy pointer). Nulls m_ctxProxy so the
+    // device destructor doesn't dereference freed memory at line 249.
+    void OnContextProxyDestroyed(Context11Proxy* ctxProxy);
 
     // IUnknown
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObj) override;
@@ -170,6 +178,16 @@ public:
     void StoreShaderProjection(void* shaderPtr, const ShaderAnalysis11Result& info);
     const ShaderAnalysis11Result* LookupShaderProjection(void* shaderPtr) const;
 
+    // TryBuildModifiedVS Phase 1: for games whose profile has
+    // AlwaysModifyShaders=1 (or an individual VS entry with Modify=1), we
+    // attempt bytecode-level stereo-fix via ShaderAnalysis::ModifyShader at
+    // VS creation. Successful modifications are stored here keyed by the
+    // ORIGINAL ID3D11VertexShader* so Phase 2 can later substitute the
+    // modified sibling on right-eye draws. nullptr return means either no
+    // modification was attempted (default case) or the attempt failed.
+    void StoreModifiedVS(ID3D11VertexShader* orig, const wiz3d::ModifiedVS11& mod);
+    const wiz3d::ModifiedVS11* LookupModifiedVS(ID3D11VertexShader* orig) const;
+
     // Real-pointer → Texture2D11Proxy lookup map. Games sometimes obtain a
     // raw real ID3D11Resource* from one of our wrapped textures via paths
     // we don't fully wrap (most common: pProxyTex->QI(IDXGIResource) →
@@ -243,6 +261,11 @@ private:
     std::unordered_map<void*, ShaderAnalysis11Result> m_shaderProjections;
     CRITICAL_SECTION                                  m_shaderProjLock;
 
+    // TryBuildModifiedVS Phase 1 map. Keyed by original ID3D11VertexShader*;
+    // value owns an AddRef'd modified sibling released on ~Device11Proxy.
+    std::unordered_map<ID3D11VertexShader*, wiz3d::ModifiedVS11> m_modifiedVS;
+    CRITICAL_SECTION                                             m_modifiedVSLock;
+
     // Real-pointer → Texture2D11Proxy fallback. See accessor doc above. Game
     // owns the real-pointer lifetime via the proxy; entry is unregistered in
     // ~Texture2D11Proxy before the real Release fires.
@@ -255,5 +278,13 @@ private:
     unsigned                   m_recycleFrame = 0;
     LONG                       m_texMade = 0, m_texFreed = 0, m_rightReused = 0, m_rightFresh = 0;
 };
+
+// Cache lookup for WrapD3D11DeviceAndContext: FC3 (Dunia 2) hits
+// D3D11CreateDevice 4x during level load for the same real device and under
+// the fresh-proxy-per-call path each wrapper had its own shader-fingerprint
+// state. Returns the existing proxy with +1 AddRef (so the caller can treat
+// it like a new wrap) or nullptr if the real device isn't yet wrapped. Lock
+// internal to the implementation; concurrent dtor can't erase mid-lookup.
+Device11Proxy* FindAndAddRefDeviceByReal(ID3D11Device* real);
 
 } // namespace wiz3d

@@ -548,14 +548,18 @@ void STDMETHODCALLTYPE Context11Proxy::Draw(UINT VertexCount, UINT StartVertexLo
     { ScopedTicks t_(m_time.gameCalls); m_real->Draw(VertexCount, StartVertexLocation); }
     DUPLICATE_DRAW(Draw(VertexCount, StartVertexLocation));
     if (!m_presentHookActive) return;
+    ID3D11VertexShader* vsAtDraw = m_boundVS;   // Phase 2: snapshot for right-eye modified-VS swap
     m_frameCommands.emplace_back(
-        [this, VertexCount, StartVertexLocation]()
+        [this, VertexCount, StartVertexLocation, vsAtDraw]()
         {
             if (FrameTraceActive())
                 FrameTrace("    Draw eye=%c vcount=%u start=%u (replay)\n",
                            m_activeEye == Eye::Right ? 'R' : 'L',
                            VertexCount, StartVertexLocation);
+            ID3D11VertexShader* _origVS = nullptr; UINT _slot = 0;
+            const bool _swapped = BeginRightEyeShaderSwap(vsAtDraw, _origVS, _slot);
             m_real->Draw(VertexCount, StartVertexLocation);
+            if (_swapped) EndRightEyeShaderSwap(_origVS);
         });
 }
 
@@ -572,14 +576,18 @@ void STDMETHODCALLTYPE Context11Proxy::DrawIndexed(
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawIndexed(IndexCount, StartIndexLocation, BaseVertexLocation); }
     DUPLICATE_DRAW(DrawIndexed(IndexCount, StartIndexLocation, BaseVertexLocation));
     if (!m_presentHookActive) return;
+    ID3D11VertexShader* vsAtDraw = m_boundVS;   // Phase 2: snapshot for right-eye modified-VS swap
     m_frameCommands.emplace_back(
-        [this, IndexCount, StartIndexLocation, BaseVertexLocation]()
+        [this, IndexCount, StartIndexLocation, BaseVertexLocation, vsAtDraw]()
         {
             if (FrameTraceActive())
                 FrameTrace("    DrawIndexed eye=%c icount=%u start=%u base=%d (replay)\n",
                            m_activeEye == Eye::Right ? 'R' : 'L',
                            IndexCount, StartIndexLocation, BaseVertexLocation);
+            ID3D11VertexShader* _origVS = nullptr; UINT _slot = 0;
+            const bool _swapped = BeginRightEyeShaderSwap(vsAtDraw, _origVS, _slot);
             m_real->DrawIndexed(IndexCount, StartIndexLocation, BaseVertexLocation);
+            if (_swapped) EndRightEyeShaderSwap(_origVS);
         });
 }
 
@@ -593,12 +601,16 @@ void STDMETHODCALLTYPE Context11Proxy::DrawInstanced(
     DUPLICATE_DRAW(DrawInstanced(VertexCountPerInstance, InstanceCount,
                                  StartVertexLocation, StartInstanceLocation));
     if (!m_presentHookActive) return;
+    ID3D11VertexShader* vsAtDraw = m_boundVS;   // Phase 2: snapshot for right-eye modified-VS swap
     m_frameCommands.emplace_back(
         [this, VertexCountPerInstance, InstanceCount,
-         StartVertexLocation, StartInstanceLocation]()
+         StartVertexLocation, StartInstanceLocation, vsAtDraw]()
         {
+            ID3D11VertexShader* _origVS = nullptr; UINT _slot = 0;
+            const bool _swapped = BeginRightEyeShaderSwap(vsAtDraw, _origVS, _slot);
             m_real->DrawInstanced(VertexCountPerInstance, InstanceCount,
                                    StartVertexLocation, StartInstanceLocation);
+            if (_swapped) EndRightEyeShaderSwap(_origVS);
         });
 }
 
@@ -614,13 +626,17 @@ void STDMETHODCALLTYPE Context11Proxy::DrawIndexedInstanced(
                                         StartIndexLocation, BaseVertexLocation,
                                         StartInstanceLocation));
     if (!m_presentHookActive) return;
+    ID3D11VertexShader* vsAtDraw = m_boundVS;   // Phase 2: snapshot for right-eye modified-VS swap
     m_frameCommands.emplace_back(
         [this, IndexCountPerInstance, InstanceCount, StartIndexLocation,
-         BaseVertexLocation, StartInstanceLocation]()
+         BaseVertexLocation, StartInstanceLocation, vsAtDraw]()
         {
+            ID3D11VertexShader* _origVS = nullptr; UINT _slot = 0;
+            const bool _swapped = BeginRightEyeShaderSwap(vsAtDraw, _origVS, _slot);
             m_real->DrawIndexedInstanced(
                 IndexCountPerInstance, InstanceCount, StartIndexLocation,
                 BaseVertexLocation, StartInstanceLocation);
+            if (_swapped) EndRightEyeShaderSwap(_origVS);
         });
 }
 
@@ -630,8 +646,14 @@ void STDMETHODCALLTYPE Context11Proxy::DrawAuto()
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawAuto(); }
     DUPLICATE_DRAW(DrawAuto());
     if (!m_presentHookActive) return;
+    ID3D11VertexShader* vsAtDraw = m_boundVS;   // Phase 2: snapshot for right-eye modified-VS swap
     m_frameCommands.emplace_back(
-        [this]() { m_real->DrawAuto(); });
+        [this, vsAtDraw]() {
+            ID3D11VertexShader* _origVS = nullptr; UINT _slot = 0;
+            const bool _swapped = BeginRightEyeShaderSwap(vsAtDraw, _origVS, _slot);
+            m_real->DrawAuto();
+            if (_swapped) EndRightEyeShaderSwap(_origVS);
+        });
 }
 
 void STDMETHODCALLTYPE Context11Proxy::DrawInstancedIndirect(
@@ -642,11 +664,15 @@ void STDMETHODCALLTYPE Context11Proxy::DrawInstancedIndirect(
     DUPLICATE_DRAW(DrawInstancedIndirect(RightArgs(pBufferForArgs), AlignedByteOffsetForArgs));
     if (!m_presentHookActive) return;
     ComRefHolder bufRef(pBufferForArgs);
+    ID3D11VertexShader* vsAtDraw = m_boundVS;   // Phase 2: snapshot for right-eye modified-VS swap
     m_frameCommands.emplace_back(
-        [this, bufRef, AlignedByteOffsetForArgs]()
+        [this, bufRef, AlignedByteOffsetForArgs, vsAtDraw]()
         {
+            ID3D11VertexShader* _origVS = nullptr; UINT _slot = 0;
+            const bool _swapped = BeginRightEyeShaderSwap(vsAtDraw, _origVS, _slot);
             m_real->DrawInstancedIndirect(
                 UnwrapBuf(static_cast<ID3D11Buffer*>(bufRef.p)), AlignedByteOffsetForArgs);
+            if (_swapped) EndRightEyeShaderSwap(_origVS);
         });
 }
 
@@ -658,11 +684,15 @@ void STDMETHODCALLTYPE Context11Proxy::DrawIndexedInstancedIndirect(
     DUPLICATE_DRAW(DrawIndexedInstancedIndirect(RightArgs(pBufferForArgs), AlignedByteOffsetForArgs));
     if (!m_presentHookActive) return;
     ComRefHolder bufRef(pBufferForArgs);
+    ID3D11VertexShader* vsAtDraw = m_boundVS;   // Phase 2: snapshot for right-eye modified-VS swap
     m_frameCommands.emplace_back(
-        [this, bufRef, AlignedByteOffsetForArgs]()
+        [this, bufRef, AlignedByteOffsetForArgs, vsAtDraw]()
         {
+            ID3D11VertexShader* _origVS = nullptr; UINT _slot = 0;
+            const bool _swapped = BeginRightEyeShaderSwap(vsAtDraw, _origVS, _slot);
             m_real->DrawIndexedInstancedIndirect(
                 UnwrapBuf(static_cast<ID3D11Buffer*>(bufRef.p)), AlignedByteOffsetForArgs);
+            if (_swapped) EndRightEyeShaderSwap(_origVS);
         });
 }
 
@@ -1505,13 +1535,14 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                         const float sign = EyeShiftSign();
                         float eyeShift = wiz3D_GetEffectiveEyeShift()
                                        * ProfileShaderMultiplier(m_parent, m_boundVS) * sign;
+                        const float conv = ResolveShaderConvergence(m_parent, m_boundVS);
                         if (sign < 0.f && !targets.empty()) ++m_flippedWritesThisFrame;
                         const unsigned before = m_cbMatShiftedThisFrame, invBefore = m_invPatchedThisFrame;
                         if (!targets.empty())
                         {
                             ApplyTargetedEyeShiftToCB(
                                 static_cast<unsigned char*>(mapped.pData),
-                                bytes.size(), eyeShift, targets, true,
+                                bytes.size(), eyeShift, conv, targets, true,
                                 &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame,
                                 &m_invPatchedThisFrame, pResource);
                             if (m_cbMatShiftedThisFrame != before) bp->MarkShifted(s_frameId);
@@ -1528,10 +1559,13 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
             }
 
             // Multiplier resolved now: the shader bound at write time is the
-            // one the profile entry describes, not whatever replays later.
+            // one the profile entry describes, not whatever replays later. The
+            // convergence shift is captured here too, since the replay happens
+            // after the VS binding may have changed.
             const float profMult = ProfileShaderMultiplier(m_parent, m_boundVS);
+            const float profConv = ResolveShaderConvergence(m_parent, m_boundVS);
             m_frameCommands.emplace_back(
-                [this, resRef, subres, bytes, mapType, targets, profMult]()
+                [this, resRef, subres, bytes, mapType, targets, profMult, profConv]()
                 {
                     if (m_activeEye != Eye::Right) return;
                     auto* gameRes = static_cast<ID3D11Resource*>(resRef.p);
@@ -1545,7 +1579,7 @@ void STDMETHODCALLTYPE Context11Proxy::Unmap(ID3D11Resource* pResource, UINT Sub
                     {
                         ApplyTargetedEyeShiftToCB(
                             static_cast<unsigned char*>(mapped.pData),
-                            bytes.size(), eyeShift, targets, false,
+                            bytes.size(), eyeShift, profConv, targets, false,
                             &m_cbMatShiftedThisFrame, &m_cbMatRejectedThisFrame,
                             &m_invPatchedThisFrame, gameRes);
                     }
@@ -1681,8 +1715,9 @@ void Context11Proxy::DoUpdateSubresource(
                     const float sign = EyeShiftSign();
                     float eyeShift = wiz3D_GetEffectiveEyeShift()
                                    * ProfileShaderMultiplier(m_parent, m_boundVS) * sign;
+                    const float conv = ResolveShaderConvergence(m_parent, m_boundVS);
                     if (sign < 0.f) ++m_flippedWritesThisFrame;
-                    ApplyTargetedEyeShiftToCB(tmp.data(), bd.ByteWidth, eyeShift,
+                    ApplyTargetedEyeShiftToCB(tmp.data(), bd.ByteWidth, eyeShift, conv,
                                               targets, true, &m_cbMatShiftedThisFrame,
                                               &m_cbMatRejectedThisFrame,
                                               &m_invPatchedThisFrame, pDstResource);

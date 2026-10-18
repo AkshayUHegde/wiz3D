@@ -2,7 +2,7 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>D:\Coding\WiZ3D\bin\Release\Win64\S3DWrapperD3D12.dll</FullPath>
+      <FullPath>D:\Coding\WiZ3D\S3DWrapper12\bin\Release\Win64\S3DWrapperD3D12.dll</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />

@@ -89,6 +89,18 @@ END
 #endif    // English (United States) resources
 /////////////////////////////////////////////////////////////////////////////
 
+/////////////////////////////////////////////////////////////////////////////
+//
+// Inter font TTFs (SIL Open Font License 1.1). Embedded as RT_RCDATA so
+// OSDRenderer can register them via AddFontMemResourceEx without a Fonts/
+// folder on disk. OFL.txt also embedded for licence-compliance (we are a
+// redistribution of these TTFs). Names on the LHS are what the C++ side
+// passes to FindResourceW; MAKEINTRESOURCE isn't used since we address by
+// string name.
+INTER_REGULAR   RCDATA  "..\\Shared\\Fonts\\Inter-Regular.ttf"
+INTER_SEMIBOLD  RCDATA  "..\\Shared\\Fonts\\Inter-SemiBold.ttf"
+INTER_BOLD      RCDATA  "..\\Shared\\Fonts\\Inter-Bold.ttf"
+INTER_OFL       RCDATA  "..\\Shared\\Fonts\\OFL.txt"
 
 #ifndef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////

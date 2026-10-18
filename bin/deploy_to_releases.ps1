@@ -25,24 +25,36 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Win32', 'x64', 'both')]
-    [string]$Arch = 'both'
+    [string]$Arch = 'both',
+    # Which S3DDriver.sln build config to pick up DLLs from. 'Final Release'
+    # is the shipping default (optimised, and 0.4.0+ keeps zlog live by not
+    # defining FINAL_RELEASE in FinalRelease.props). 'Release' is the local
+    # diagnostic build that build_and_deploy.ps1 -Diagnostic produces.
+    [ValidateSet('Final Release', 'Release')]
+    [string]$MainBinDir = 'Final Release'
 )
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $archs = if ($Arch -eq 'both') { @('Win32', 'x64') } else { @($Arch) }
 
-# Common dependency DLLs shared across most release subfolders
+# Common dependency DLLs shared across most release subfolders.
+#
+# ZLOg.dll handling:
+#   0.4.0+ keeps zlog live in both configs (FINAL_RELEASE no longer defined
+#   in FinalRelease.props), so S3DAPI.dll statically imports ZLOg.dll in
+#   every shipping deploy. Error 126 at wrapper load if ZLOg.dll is missing.
+#   The ZLog Build.0 lines stay enabled for Debug/Release/Final Release in
+#   S3DDriver.sln so the DLL is produced for every config.
 $commonDeps    = @('S3DAPI.dll', 'S3DUtils.dll', 'ZLOg.dll')
 
-# Inter font files (SIL Open Font License 1.1) shipped alongside the
-# StereoInjector wrappers so OSDRenderer can load them privately via
-# AddFontResourceExW. OFL.txt is included for licence compliance.
-$interFontDir  = Join-Path $repoRoot 'Shared\Fonts'
-$interFontFiles = @('Inter-Regular.ttf', 'Inter-SemiBold.ttf', 'Inter-Bold.ttf', 'OFL.txt')
-# OpenGL wrapper only ships ZLOg.dll (statically imported via zlog::VldReportHook).
-# It has no LoadLibrary calls and never references S3DAPI/S3DUtils — those are
-# DX-wrapper helpers. nvapi is also excluded (no NvAPI usage on the OGL path).
-$openglDeps    = @('ZLOg.dll')
+# 0.4.0+: Inter TTFs are embedded in S3DWrapperD3D9.dll and S3DWrapperD3D10.dll
+# as RT_RCDATA resources (see each wrapper's app.rc). No Fonts/ folder ships
+# with the release tree. OFL.txt is also embedded as a resource for licence
+# compliance.
+# OpenGL wrapper ships no runtime deps -- all its imports are system DLLs
+# (opengl32, gdi32, shlwapi) or SR-Lib's own DLLs that the user has already
+# installed system-wide. Nothing else goes into OpenGL-Quad-Buffer-Stereo/.
+$openglDeps    = @()
 
 # Output methods supported by each render API. Most APIs ship the same set;
 # OpenGL only ships the SR weave method (no other OGL implementations exist yet).
@@ -117,9 +129,13 @@ function Copy-Files {
 }
 
 foreach ($archName in $archs) {
-    $archAlias = if ($archName -eq 'Win32') { 'x86' } else { 'x64' }
+    # 0.4.0+: release-tree leaf folders use '32-bit' / '64-bit' instead of
+    # the compiler-oriented 'x86' / 'x64'. The internal $archName (Win32 /
+    # x64) keeps its MSBuild-platform spelling; $archAlias is what every
+    # release path uses on disk.
+    $archAlias = if ($archName -eq 'Win32') { '32-bit' } else { '64-bit' }
     $outDirName = if ($archName -eq 'Win32') { 'Win32' } else { 'Win64' }
-    $binDir    = Join-Path $repoRoot "bin\Final Release\$outDirName"
+    $binDir    = Join-Path $repoRoot "bin\$MainBinDir\$outDirName"
     $omSrcDir  = Join-Path $binDir   'OutputMethods'
     # wiz3D-proxy.sln output (entry-point DLLs games actually load: d3d9.dll, etc)
     $proxyBinDir       = Join-Path $repoRoot "wiz3D-proxy\bin\Release\$archName"
@@ -133,92 +149,89 @@ foreach ($archName in $archs) {
     Write-Host ""
     Write-Host "=== $archName -> $archAlias ===" -ForegroundColor Cyan
 
-    # StereoInjector/ holds the iZ3D-derived software compositor family
-    # (DX7-11; future DX12/Vulkan/OGL-injector siblings). Separate from the
-    # vendor-passthrough paths (hd3d, 3d-vision-direct, opengl-quad-buffer-stereo)
+    # Stereo-Injector/ holds the iZ3D-derived software compositor family
+    # (DX7-11, DX12, future Vulkan/OGL-injector siblings). Separate from the
+    # vendor-passthrough paths (HD3D, 3D-Vision-Direct, OpenGL-Quad-Buffer-Stereo)
     # which get their own top-level folders because they drive different hardware.
 
-    # --- dx7 (32-bit only — no x64 release) ---
-    if ($archAlias -eq 'x86') {
-        $dst = Join-Path $repoRoot 'releases\wiz3D\StereoInjector\dx7'
+    # --- DX7 (32-bit only — no x64 release) ---
+    if ($archAlias -eq '32-bit') {
+        $dst = Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX7'
         Copy-Files -SrcDir $binDir   -DstDir $dst                          `
                    -Files (@('S3DWrapperD3D7.dll', 'S3DWrapperD3D9.dll') + $commonDeps)  `
-                   -Tag   'dx7 wrappers+deps'
+                   -Tag   'DX7 wrappers+deps'
         Copy-Files -SrcDir $omSrcDir -DstDir (Join-Path $dst 'OutputMethods') `
-                   -Files $standardOMs -Tag 'dx7 OutputMethods'
+                   -Files $standardOMs -Tag 'DX7 OutputMethods'
         Copy-Files -SrcDir $proxyBinDir -DstDir $dst                          `
                    -Files @('d3d9.dll', 'ddraw.dll')                         `
-                   -Tag   'dx7 proxies'
-        Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts') `
-                   -Files $interFontFiles -Tag 'dx7 Inter font'
+                   -Tag   'DX7 proxies'
     }
 
-    # --- dx8 (32-bit only) ---
-    if ($archAlias -eq 'x86') {
-        $dst = Join-Path $repoRoot 'releases\wiz3D\StereoInjector\dx8'
+    # --- DX8 (32-bit only) ---
+    if ($archAlias -eq '32-bit') {
+        $dst = Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX8'
         Copy-Files -SrcDir $binDir   -DstDir $dst                          `
                    -Files (@('S3DWrapperD3D8.dll', 'S3DWrapperD3D9.dll') + $commonDeps)  `
-                   -Tag   'dx8 wrappers+deps'
+                   -Tag   'DX8 wrappers+deps'
         Copy-Files -SrcDir $omSrcDir -DstDir (Join-Path $dst 'OutputMethods') `
-                   -Files $standardOMs -Tag 'dx8 OutputMethods'
+                   -Files $standardOMs -Tag 'DX8 OutputMethods'
         Copy-Files -SrcDir $proxyBinDir -DstDir $dst                          `
                    -Files @('d3d8.dll', 'd3d9.dll')                          `
-                   -Tag   'dx8 proxies'
-        Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts') `
-                   -Files $interFontFiles -Tag 'dx8 Inter font'
+                   -Tag   'DX8 proxies'
     }
 
-    # --- dx9 (both archs) ---
-    $dst = Join-Path $repoRoot "releases\wiz3D\StereoInjector\dx9\$archAlias"
+    # --- DX9 (both archs) ---
+    $dst = Join-Path $repoRoot "releases\wiz3D\Stereo-Injector\DX9\$archAlias"
     Copy-Files -SrcDir $binDir   -DstDir $dst                          `
                -Files (@('S3DWrapperD3D9.dll') + $commonDeps)          `
-               -Tag   "dx9/$archAlias wrappers+deps"
+               -Tag   "DX9/$archAlias wrappers+deps"
     Copy-Files -SrcDir $omSrcDir -DstDir (Join-Path $dst 'OutputMethods') `
-               -Files $standardOMs -Tag "dx9/$archAlias OutputMethods"
+               -Files $standardOMs -Tag "DX9/$archAlias OutputMethods"
     Copy-Files -SrcDir $proxyBinDir -DstDir $dst                          `
                -Files @('d3d9.dll')                                       `
-               -Tag   "dx9/$archAlias proxies"
-    Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts')     `
-               -Files $interFontFiles -Tag "dx9/$archAlias Inter font"
+               -Tag   "DX9/$archAlias proxies"
 
-    # --- dx10-11 (both archs) ---
-    $dst = Join-Path $repoRoot "releases\wiz3D\StereoInjector\dx10-11\$archAlias"
+    # --- DX10-11 (both archs) ---
+    # d3d9.dll ships here (without S3DWrapperD3D9.dll) as an "early loader" for
+    # DX11 games that still statically import d3d9 (GTA V's Epic install is the
+    # repro case). The d3d9 proxy's DllMain detects the sibling-DX10/11-wrapper
+    # layout and preloads dxgi.dll + d3d11.dll by path, so later by-name loads
+    # resolve to our proxies instead of System32's.
+    $dst = Join-Path $repoRoot "releases\wiz3D\Stereo-Injector\DX10-11\$archAlias"
     Copy-Files -SrcDir $binDir   -DstDir $dst                                          `
                -Files (@('S3DWrapperD3D10.dll') + $commonDeps)                         `
-               -Tag   "dx10-11/$archAlias wrappers+deps"
+               -Tag   "DX10-11/$archAlias wrappers+deps"
     Copy-Files -SrcDir $omSrcDir -DstDir (Join-Path $dst 'OutputMethods')              `
-               -Files $standardOMs -Tag "dx10-11/$archAlias OutputMethods"
+               -Files $standardOMs -Tag "DX10-11/$archAlias OutputMethods"
     Copy-Files -SrcDir $proxyBinDir -DstDir $dst                                       `
-               -Files @('d3d10.dll', 'd3d11.dll', 'dxgi.dll')                          `
-               -Tag   "dx10-11/$archAlias proxies"
-    Copy-Files -SrcDir $interFontDir -DstDir (Join-Path $dst 'Fonts')                  `
-               -Files $interFontFiles -Tag "dx10-11/$archAlias Inter font"
+               -Files @('d3d9.dll', 'd3d10.dll', 'd3d11.dll', 'dxgi.dll')              `
+               -Tag   "DX10-11/$archAlias proxies"
 
     # --- opengl quad-buffer stereo (both archs) ---
     # Folder name spells out the capability: this wrapper captures native
     # OpenGL quad-buffer stereo (PFD_STEREO / GL_BACK_LEFT/RIGHT) from games
     # that produce it (id Tech 3/4, CAD apps, sims). It does NOT generate
     # stereo from mono OpenGL games.
-    $dst = Join-Path $repoRoot "releases\wiz3D\opengl-quad-buffer-stereo\$archAlias"
+    $dst = Join-Path $repoRoot "releases\wiz3D\OpenGL-Quad-Buffer-Stereo\$archAlias"
     Copy-Files -SrcDir $binDir   -DstDir $dst                          `
                -Files (@('S3DWrapperOGL.dll') + $openglDeps)           `
-               -Tag   "opengl-qbs/$archAlias wrappers+deps"
+               -Tag   "OGL-QBS/$archAlias wrappers+deps"
     if ($openglOMs.Count -gt 0) {
         Copy-Files -SrcDir $omSrcDir -DstDir (Join-Path $dst 'OutputMethods') `
-                   -Files $openglOMs -Tag "opengl-qbs/$archAlias OutputMethods"
+                   -Files $openglOMs -Tag "OGL-QBS/$archAlias OutputMethods"
     } else {
-        Write-Host ("  {0,-22}  (none - OGL uses built-in modes)" -f "opengl-qbs/$archAlias OutputMethods")
+        Write-Host ("  {0,-22}  (none - OGL uses built-in modes)" -f "OGL-QBS/$archAlias OutputMethods")
     }
     Copy-Files -SrcDir $proxyBinDir -DstDir $dst                          `
                -Files @('opengl32.dll')                                   `
-               -Tag   "opengl-qbs/$archAlias proxies"
+               -Tag   "OGL-QBS/$archAlias proxies"
 
     # --- NvDirectMode (3D Vision Direct Mode proxies) ---
-    # Layout: releases/wiz3D/3d-vision-direct/<api>/<archAlias>/<dll>
+    # Layout: releases/wiz3D/3D-Vision-Direct/<API>/<archAlias>/<dll>
     # Each leaf gets its API-specific proxy DLL; nvapi[64].dll gets spread
     # in by the Spread-File loop after the per-arch loops finish.
     if (Test-Path $nvDirectModeBin) {
-        $ndmBase = Join-Path $repoRoot "releases\wiz3D\3d-vision-direct"
+        $ndmBase = Join-Path $repoRoot "releases\wiz3D\3D-Vision-Direct"
         if (-not (Test-Path $ndmBase)) { New-Item -ItemType Directory -Path $ndmBase -Force | Out-Null }
         # Top-level ReadMe — install instructions, test targets, known limits.
         # Source is checked-in at NvDirectMode\ReadMe.txt; release tree is
@@ -238,9 +251,9 @@ foreach ($archName in $archs) {
             if (Test-Path $uninstallSrc) { Copy-Item -Path $uninstallSrc -Destination $LeafDir -Force }
         }
 
-        $dx9Dst    = Join-Path $ndmBase "dx9\$archAlias"
-        $dx10Dst   = Join-Path $ndmBase "dx10\$archAlias"
-        $dx11Dst   = Join-Path $ndmBase "dx11\$archAlias"
+        $dx9Dst    = Join-Path $ndmBase "DX9\$archAlias"
+        $dx10Dst   = Join-Path $ndmBase "DX10\$archAlias"
+        $dx11Dst   = Join-Path $ndmBase "DX11\$archAlias"
         # NOTE: no NvDirectMode/opengl release leaf. No shipped OpenGL game uses
         # NvAPI_Stereo_SetActiveEye (Direct Mode is DX-only in practice). OpenGL
         # games that want 3D Vision stereo go through a DX-bridge wrapper like
@@ -248,57 +261,58 @@ foreach ($archName in $archs) {
         # picks that traffic up automatically. The opengl32 proxy stays in source
         # (NvDirectMode/opengl32/) but isn't deployed.
 
-        Copy-Files -SrcDir $nvDirectModeBin -DstDir $dx9Dst   -Files @('d3d9.dll')    -Tag "ndm/dx9/$archAlias"
+        Copy-Files -SrcDir $nvDirectModeBin -DstDir $dx9Dst   -Files @('d3d9.dll')    -Tag "NDM/DX9/$archAlias"
         Copy-NdmExtras -LeafDir $dx9Dst
-        Copy-Files -SrcDir $nvDirectModeBin -DstDir $dx10Dst  -Files @('d3d10.dll')   -Tag "ndm/dx10/$archAlias"
+        Copy-Files -SrcDir $nvDirectModeBin -DstDir $dx10Dst  -Files @('d3d10.dll')   -Tag "NDM/DX10/$archAlias"
         Copy-NdmExtras -LeafDir $dx10Dst
-        # dx11 leaf gets BOTH d3d11.dll AND dxgi.dll — game can use either
+        # DX11 leaf gets BOTH d3d11.dll AND dxgi.dll — game can use either
         # D3D11CreateDeviceAndSwapChain (caught by d3d11.dll) or
         # CreateDXGIFactory -> CreateSwapChain (caught by dxgi.dll).
-        Copy-Files -SrcDir $nvDirectModeBin -DstDir $dx11Dst  -Files @('d3d11.dll','dxgi.dll') -Tag "ndm/dx11/$archAlias"
+        Copy-Files -SrcDir $nvDirectModeBin -DstDir $dx11Dst  -Files @('d3d11.dll','dxgi.dll') -Tag "NDM/DX11/$archAlias"
         Copy-NdmExtras -LeafDir $dx11Dst
         # EOSStub ships alongside NvDirectMode-d3d11 x86 only. It replaces
         # EOSSDK-Win32-Shipping.dll to disable Epic Online Services and its
         # overlay, which crashes SR weave (see AmdQbProxy/HD3D_Troubleshooting_Notes.md).
         # x64 variant does not yet exist — the stub covers 32-bit games only.
-        if ($archAlias -eq 'x86') {
-            Copy-Files -SrcDir $proxyBinDir -DstDir $dx11Dst -Files @('EOSSDK-Win32-Shipping.dll') -Tag "ndm/dx11/x86 EOSStub"
+        if ($archAlias -eq '32-bit') {
+            Copy-Files -SrcDir $proxyBinDir -DstDir $dx11Dst -Files @('EOSSDK-Win32-Shipping.dll') -Tag "NDM/DX11/32-bit EOSStub"
         }
     } else {
-        Write-Host ("  ndm/$archAlias            SKIP (NvDirectMode bin not built: $nvDirectModeBin)") -ForegroundColor Yellow
+        Write-Host ("  NDM/$archAlias            SKIP (NvDirectMode bin not built: $nvDirectModeBin)") -ForegroundColor Yellow
     }
 
-    # --- hd3d (AMD HD3D vendor-path proxies) ---
+    # --- HD3D (AMD HD3D vendor-path proxies) ---
     # atidxx32/64 (AmdQbProxy), atiadlxy/atiadlxx (AmdAdlProxy), dxgi
     # (DxgiVendorProxy), d3d11 (D3d11VendorProxy) — all built by S3DDriver.sln,
     # shipped from Final Release like the rest of that solution.
-    # (Uninstall_HD3D.bat is checked in directly under the hd3d leaves.)
-    $hd3dDst   = Join-Path $repoRoot "releases\wiz3D\hd3d\$archAlias"
-    $hd3dFiles = if ($archAlias -eq 'x86') {
+    # (Uninstall_HD3D.bat is checked in directly under the HD3D leaves.)
+    $hd3dDst   = Join-Path $repoRoot "releases\wiz3D\HD3D\$archAlias"
+    $hd3dFiles = if ($archAlias -eq '32-bit') {
         @('atidxx32.dll', 'atiadlxy.dll', 'dxgi.dll', 'd3d11.dll')
     } else {
         @('atidxx64.dll', 'atiadlxx.dll', 'dxgi.dll', 'd3d11.dll')
     }
-    Copy-Files -SrcDir $binDir -DstDir $hd3dDst -Files $hd3dFiles -Tag "hd3d/$archAlias"
+    Copy-Files -SrcDir $binDir -DstDir $hd3dDst -Files $hd3dFiles -Tag "HD3D/$archAlias"
 
-    # --- hd3d DX12 (same HD3D vendor-path, DX12 target) ---
-    # Un-shelved from commit 527f7bcf (2026-05-12). The DX12 leaf was dropped
-    # under the assumption that the DXGI-based HD3D path covers DX12 games;
-    # that was true for signalling only. DX12 stereo-output needs its own
-    # swap-chain wrapper, now in S3DWrapperD3D12. x64 only — DX12 games are
-    # 64-bit. Targets: Shadow of the Tomb Raider DX12, Sniper Elite 4 DX12,
-    # Rise of the Tomb Raider DX12.
-    if ($archAlias -eq 'x64') {
-        $hd3dDx12Dst = Join-Path $repoRoot "releases\wiz3D\hd3d\dx12 x64"
+    # --- DX12 (Stereo-Injector family; wiz3D's own DX12 swap-chain wrapper) ---
+    # Un-shelved from commit 527f7bcf (2026-05-12). The DX12 leaf was originally
+    # bundled under HD3D (the DXGI-based HD3D path covers DX12 signalling), but
+    # DX12 stereo-output needs its own swap-chain wrapper, now in
+    # S3DWrapperD3D12. Moved to Stereo-Injector/ in 0.4.0 since it IS a software
+    # compositor, not a vendor passthrough. x64 only — DX12 games are 64-bit.
+    # Targets: Shadow of the Tomb Raider DX12, Sniper Elite 4 DX12, Rise of the
+    # Tomb Raider DX12.
+    if ($archAlias -eq '64-bit') {
+        $siDx12Dst = Join-Path $repoRoot "releases\wiz3D\Stereo-Injector\DX12\64-bit"
         # atidxx64/atiadlxx/dxgi/d3d12 all land in the shared Final Release bin
-        # like the dx11 leaf. D3d12VendorProxy's Final Release|x64 now has
+        # like the DX11 leaf. D3d12VendorProxy's Final Release|x64 now has
         # BLOCK_NVAPI_STEREO defined (matching D3d11VendorProxy pattern) so its
         # output is the HD3D variant.
-        Copy-Files -SrcDir $binDir -DstDir $hd3dDx12Dst -Files @('atidxx64.dll','atiadlxx.dll','dxgi.dll','d3d12.dll') -Tag "hd3d/dx12/x64 vendor"
+        Copy-Files -SrcDir $binDir -DstDir $siDx12Dst -Files @('atidxx64.dll','atiadlxx.dll','dxgi.dll','d3d12.dll') -Tag "DX12/x64 vendor"
         # S3DWrapperD3D12.dll ships from its own project tree, built standalone.
         $s3dw12Src = Join-Path $repoRoot "S3DWrapper12\bin\Release\Win64"
         if (Test-Path $s3dw12Src) {
-            Copy-Files -SrcDir $s3dw12Src -DstDir $hd3dDx12Dst -Files @('S3DWrapperD3D12.dll') -Tag "hd3d/dx12/x64 wrapper"
+            Copy-Files -SrcDir $s3dw12Src -DstDir $siDx12Dst -Files @('S3DWrapperD3D12.dll') -Tag "DX12/x64 wrapper"
         }
         # Opt-in EOSStub x64. Generated from Rise of the Tomb Raider's actual
         # EOSSDK-Win64-Shipping.dll (574 exports). Deposited in an EOSStub\
@@ -306,8 +320,8 @@ foreach ($archName in $archs) {
         # need Epic Online Services disabled (e.g. for SR Weave cohabitation).
         $eosX64Src = Join-Path $repoRoot "wiz3D-proxy\bin\Release\Win64"
         if (Test-Path (Join-Path $eosX64Src 'EOSSDK-Win64-Shipping.dll')) {
-            $eosDst = Join-Path $hd3dDx12Dst 'EOSStub'
-            Copy-Files -SrcDir $eosX64Src -DstDir $eosDst -Files @('EOSSDK-Win64-Shipping.dll') -Tag "hd3d/dx12/x64 EOSStub"
+            $eosDst = Join-Path $siDx12Dst 'EOSStub'
+            Copy-Files -SrcDir $eosX64Src -DstDir $eosDst -Files @('EOSSDK-Win64-Shipping.dll') -Tag "DX12/x64 EOSStub"
         }
     }
 }
@@ -341,14 +355,41 @@ $relRoot = Join-Path $repoRoot 'releases\wiz3D'
 # --- BaseProfile.xml into every DX wrapper folder ---
 $baseProfileSrc = Join-Path $repoRoot 'S3DDriverSetup\Content\BaseProfile.xml'
 $profileTargets = @(
-    "$relRoot\StereoInjector\dx7",
-    "$relRoot\StereoInjector\dx8",
-    "$relRoot\StereoInjector\dx9\x86",
-    "$relRoot\StereoInjector\dx9\x64",
-    "$relRoot\StereoInjector\dx10-11\x86",
-    "$relRoot\StereoInjector\dx10-11\x64"
+    "$relRoot\Stereo-Injector\DX7",
+    "$relRoot\Stereo-Injector\DX8",
+    "$relRoot\Stereo-Injector\DX9\32-bit",
+    "$relRoot\Stereo-Injector\DX9\64-bit",
+    "$relRoot\Stereo-Injector\DX10-11\32-bit",
+    "$relRoot\Stereo-Injector\DX10-11\64-bit"
 )
+# BaseProfile.xml also goes next to the DX12 leaf when the 64-bit arch is built this round.
+if ($archs -contains 'x64') {
+    $profileTargets += "$relRoot\Stereo-Injector\DX12\64-bit"
+}
 Spread-File -SrcPath $baseProfileSrc -DstDirs $profileTargets -Tag 'BaseProfile.xml'
+
+# --- wiz3D_Config.xml into every Stereo-Injector leaf ---
+# Source of truth is S3DDriverSetup\Content\Config.xml (what the installer /
+# dev loop reads). Before 2026-10-18 the per-leaf release copies could drift
+# -- user shipped with ShowFPS=1 for weeks because the leaf copies weren't
+# wired through here. HD3D/OpenGL/DX12 keep their own XML schemas and are
+# NOT touched by this spread.
+$wiz3dConfigSrc = Join-Path $repoRoot 'S3DDriverSetup\Content\Config.xml'
+$wiz3dConfigTargets = @(
+    "$relRoot\Stereo-Injector\DX7",
+    "$relRoot\Stereo-Injector\DX8",
+    "$relRoot\Stereo-Injector\DX9\32-bit",
+    "$relRoot\Stereo-Injector\DX9\64-bit",
+    "$relRoot\Stereo-Injector\DX10-11\32-bit",
+    "$relRoot\Stereo-Injector\DX10-11\64-bit"
+)
+foreach ($t in $wiz3dConfigTargets) {
+    $dst = Join-Path $t 'wiz3D_Config.xml'
+    if (Test-Path $t) {
+        Copy-Item -Path $wiz3dConfigSrc -Destination $dst -Force
+    }
+}
+Write-Host ("  {0,-30}  spread to {1} dirs" -f 'wiz3D_Config.xml', $wiz3dConfigTargets.Count)
 
 # --- Root docs: license + notices + user quick-start ---
 # Canonical copies live at the repo root (they're part of the GitHub repo);
@@ -360,20 +401,20 @@ Write-Host ("  {0,-30}  copied to release root" -f 'LICENSE.txt, NOTICES, README
 
 # --- nvapi[64].dll across DX subfolders that need it ---
 foreach ($archName in $archs) {
-    $archAlias = if ($archName -eq 'Win32') { 'x86' } else { 'x64' }
-    $nvapiName = if ($archAlias -eq 'x86') { 'nvapi.dll' } else { 'nvapi64.dll' }
+    $archAlias = if ($archName -eq 'Win32') { '32-bit' } else { '64-bit' }
+    $nvapiName = if ($archAlias -eq '32-bit') { 'nvapi.dll' } else { 'nvapi64.dll' }
     $srcNvapi  = Join-Path $repoRoot "NvDirectMode\bin\Release\$archName\$nvapiName"
     # nvapi spreads into:
-    #   - regular wiz3D dx9 and dx10-11 (3D Vision-aware games using passive)
-    #   - all three 3d-vision-direct/<api>/<arch>/ leaves (Direct Mode games need NvApiProxy
+    #   - regular wiz3D DX9 and DX10-11 (3D Vision-aware games using passive)
+    #   - all three 3D-Vision-Direct/<API>/<arch>/ leaves (Direct Mode games need NvApiProxy
     #     beside the NvDirectMode proxy DLL because they call NvAPI_Stereo_SetActiveEye etc.)
-    # NOT into opengl-quad-buffer-stereo: the OGL wrapper never touches NvAPI.
+    # NOT into OpenGL-Quad-Buffer-Stereo: the OGL wrapper never touches NvAPI.
     $nvapiTargets = @(
-        "$relRoot\StereoInjector\dx9\$archAlias",
-        "$relRoot\StereoInjector\dx10-11\$archAlias",
-        "$relRoot\3d-vision-direct\dx9\$archAlias",
-        "$relRoot\3d-vision-direct\dx10\$archAlias",
-        "$relRoot\3d-vision-direct\dx11\$archAlias"
+        "$relRoot\Stereo-Injector\DX9\$archAlias",
+        "$relRoot\Stereo-Injector\DX10-11\$archAlias",
+        "$relRoot\3D-Vision-Direct\DX9\$archAlias",
+        "$relRoot\3D-Vision-Direct\DX10\$archAlias",
+        "$relRoot\3D-Vision-Direct\DX11\$archAlias"
     )
     Spread-File -SrcPath $srcNvapi -DstDirs $nvapiTargets -Tag "$nvapiName ($archAlias)"
 }

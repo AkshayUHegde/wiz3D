@@ -44,19 +44,23 @@ static HFONT MakeFont(const wchar_t* face, int ptSize, int weight, int& outHeigh
         face);
 }
 
-static bool ResolveDllFontsDir(wchar_t out[MAX_PATH])
+// Load a single Inter TTF from this DLL's embedded RT_RCDATA resources
+// into the process's private font space via AddFontMemResourceEx.
+// 0.4.0+: replaces the on-disk Fonts/ folder requirement so S3DWrapperD3D9.dll
+// ships standalone. Returns true on success and populates outHandle.
+static bool LoadRCDATAFontIntoMem(HMODULE hMod, LPCWSTR resName, HANDLE& outHandle)
 {
-    HMODULE hMod = nullptr;
-    if (!GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&ResolveDllFontsDir),
-            &hMod) || !hMod) return false;
-    if (!GetModuleFileNameW(hMod, out, MAX_PATH)) return false;
-    wchar_t* lastSlash = wcsrchr(out, L'\\');
-    if (!lastSlash) return false;
-    *(lastSlash + 1) = L'\0';
-    return true;
+    outHandle = nullptr;
+    HRSRC hRes = ::FindResourceW(hMod, resName, RT_RCDATA);
+    if (!hRes) return false;
+    DWORD size = ::SizeofResource(hMod, hRes);
+    HGLOBAL hData = ::LoadResource(hMod, hRes);
+    if (!hData || !size) return false;
+    void* data = ::LockResource(hData);
+    if (!data) return false;
+    DWORD numFonts = 0;
+    outHandle = ::AddFontMemResourceEx(data, size, nullptr, &numFonts);
+    return outHandle != nullptr && numFonts > 0;
 }
 
 void OSDRenderer9::GDIFont::Destroy()
@@ -163,6 +167,11 @@ void OSDRenderer9::TexSlot::DrawTextLine(const wchar_t* text, const RECT& r, HFO
 
     SetTextColor(dc, RGB(255, 255, 255));
     RECT rc = r;
+    // Previously squeezed glyphs to 94% horizontal via SetWorldTransform.
+    // Dropped: it was garbling narrow glyphs (user 2026-10-18 report of
+    // "wiz3D" rendering as "wz3D" at 15 px) and clipping the right side
+    // of longer body strings in the help overlay. See the DX11
+    // OSDRenderer.cpp comment for the full rationale.
     ::DrawTextW(dc, text, -1, &rc, flags);
 
     std::vector<BYTE> mask((size_t)rw * rh, 0);
@@ -227,31 +236,33 @@ OSDRenderer9::~OSDRenderer9() { ReleaseAll(); }
 
 bool OSDRenderer9::LoadInterFontPrivate()
 {
-    wchar_t dllPath[MAX_PATH] = {};
-    if (!ResolveDllFontsDir(dllPath)) return false;
-
-    static const wchar_t* kFiles[3] = {
-        L"Fonts\\Inter-Regular.ttf",
-        L"Fonts\\Inter-SemiBold.ttf",
-        L"Fonts\\Inter-Bold.ttf",
+    HMODULE hMod = nullptr;
+    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(&LoadRCDATAFontIntoMem), &hMod))
+        return false;
+    static const LPCWSTR kResNames[3] = {
+        L"INTER_REGULAR", L"INTER_SEMIBOLD", L"INTER_BOLD"
     };
     m_interLoadedCount = 0;
-    for (int i = 0; i < 3; ++i) {
-        _snwprintf_s(m_interPaths[i], _TRUNCATE, L"%s%s", dllPath, kFiles[i]);
-        if (AddFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0) > 0)
+    for (int i = 0; i < 3; ++i)
+    {
+        if (LoadRCDATAFontIntoMem(hMod, kResNames[i], m_interMemHandles[i]))
             m_interLoadedCount++;
         else
-            m_interPaths[i][0] = L'\0';
+            m_interMemHandles[i] = nullptr;
     }
     return m_interLoadedCount > 0;
 }
 
 void OSDRenderer9::UnloadInterFontPrivate()
 {
-    for (int i = 0; i < 3; ++i) {
-        if (m_interPaths[i][0]) {
-            RemoveFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0);
-            m_interPaths[i][0] = L'\0';
+    for (int i = 0; i < 3; ++i)
+    {
+        if (m_interMemHandles[i])
+        {
+            ::RemoveFontMemResourceEx(m_interMemHandles[i]);
+            m_interMemHandles[i] = nullptr;
         }
     }
     m_interLoadedCount = 0;
@@ -265,7 +276,12 @@ bool OSDRenderer9::Init(IDirect3DDevice9* device)
 
     m_dev = device;
 
-    if (LoadInterFontPrivate())
+    // See the matching DX11 OSDRenderer::Initialize comment: Inter v4's
+    // GSUB rules get GDI to substitute SPACE with a right-arrow glyph on
+    // the 2026-10-18 field build, so we fall back to Arial until the
+    // Inter embedding is reworked. The TTFs stay as RT_RCDATA for the
+    // one-line flip-back.
+    if (false && LoadInterFontPrivate())
         m_fontFace = L"Inter";
 
     int px = 0;
@@ -277,7 +293,10 @@ bool OSDRenderer9::Init(IDirect3DDevice9* device)
         ReleaseAll(); m_initFailed = true; return false;
     }
 
-    if (!m_slots[(int)Slot::Status].Create(device, 640, 48))      { ReleaseAll(); m_initFailed = true; return false; }
+    // Status slot widened to 720 to match the DX11 OSD. Pairs with the 94%
+    // horizontal squeeze in DrawTextLine so the worst-case status string
+    // fits without clipping.
+    if (!m_slots[(int)Slot::Status].Create(device, 720, 48))      { ReleaseAll(); m_initFailed = true; return false; }
     if (!m_slots[(int)Slot::Fps].Create(device, 180, 36))         { ReleaseAll(); m_initFailed = true; return false; }
     if (!m_slots[(int)Slot::HotkeyHelp].Create(device, 720, 520)) { ReleaseAll(); m_initFailed = true; return false; }
 
@@ -356,7 +375,10 @@ void OSDRenderer9::TickFrame()
 
 bool OSDRenderer9::WantStatus() const
 {
-    if (gInfo.ShowOSD) return true;
+    // ShowOSD tri-state (see OSDRenderer::WantStatus for the full note):
+    //   2 = always-on, 1 = popup-only (default), 0 = fully off.
+    if (gInfo.ShowOSD >= 2) return true;
+    if (gInfo.ShowOSD == 0) return false;
     return GetTickCount64() < m_statusFadeDeadline;
 }
 
@@ -376,13 +398,14 @@ void OSDRenderer9::BuildStatusText(wchar_t* out, size_t cap) const
     const int presetIdx = (int)gInfo.Input.ActivePreset + 1;
     const float sepPercent = p ? (p->StereoBase / 0.008f) : 0.f;
     const float convUnits  = (p && p->One_div_ZPS != 0.f) ? (1.f / p->One_div_ZPS) : 0.f;
+    // Convergence at 2 decimals (see DX11 OSDRenderer::BuildStatusText).
     if (gInfo.Input.SwapEyes) {
         _snwprintf_s(out, cap, _TRUNCATE,
-                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.1f   |   Eyes Swapped",
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.2f   |   Eyes Swapped",
                      presetIdx, sepPercent, convUnits);
     } else {
         _snwprintf_s(out, cap, _TRUNCATE,
-                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.1f",
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.2f",
                      presetIdx, sepPercent, convUnits);
     }
 }
@@ -469,7 +492,7 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
         TexSlot& s = m_slots[(int)Slot::HotkeyHelp];
         s.Clear();
         RECT title = { 20, 20, s.w - 20, 60 };
-        s.DrawTextLine(L"wiz3D  --  Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
+        s.DrawTextLine(L"wiz3D Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
                        DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
         static const wchar_t* lines[] = {
             L"Numpad *",             L"Toggle stereo on / off",
@@ -481,6 +504,7 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
             L"Ctrl + Numpad /",      L"Toggle laser-sight crosshair",
             L"PrtScn",               L"Stereo screenshot",
             L"Shift + F1",           L"Toggle this hotkey list",
+            L"Ctrl + F1",            L"Toggle OSD strip + FPS",
             L"Shift + Numpad *",     L"Open the wizard overlay",
         };
         int row = 72;

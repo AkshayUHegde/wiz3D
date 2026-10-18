@@ -207,7 +207,10 @@ void ShaderWrapper::ProcessStereoShader( CONST UINT* pCode, const shader_analyze
 		}
 	}
 
-	if(gInfo.AlwaysModifyShaders && m_ProjectionData.matrixData.cb.size())
+	// 0.4.0+: wiz3D_Config.xml -> TryModifyAllShaders=1 extends the per-game flag
+	// to a global user-opt-in. Legacy DX10 DDI path (Win11-blocked, mostly) honours
+	// it for symmetry with the DX9 and new-DX11 paths.
+	if((gInfo.AlwaysModifyShaders || gInfo.TryModifyAllShaders) && m_ProjectionData.matrixData.cb.size())
 		bModifyShader = true;
 
 	if(gInfo.ModifyIncorrectProjectionShaders && m_ProjectionData.matrixData.cb.size())

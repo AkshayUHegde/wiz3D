@@ -2,3 +2,9 @@ LIBRARY S3DWrapperD3D12
 EXPORTS
     InitializeExchangeServer  @1  PRIVATE
     D3D12CreateDevice         @2
+    ; Called by D3d12VendorProxy from its CreateSwapChainForHwnd hook.
+    ; Returns a wrapped IDXGISwapChain1 giving the game ArraySize=2 eye
+    ; slices when desc->Stereo is TRUE and the opaque is a DX12 queue.
+    Dx12Stereo_Create         @3
+    Dx12Stereo_SetEnabled     @4
+    Dx12Stereo_SetOutputMode  @5

@@ -81,6 +81,37 @@ static LONG CALLBACK VectoredCrashHandler(EXCEPTION_POINTERS* pExInfo)
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
+    // Known-false-alarm third-party DLLs: these fire first-chance ACCESS_VIOLATIONs
+    // during their normal operation that the games then swallow. If we log + dump
+    // we scare users with a wiz3D_crash.dmp for something wiz3D didn't cause.
+    // Check BEFORE taking the g_crashLogged latch so a later real crash still
+    // produces a dump. User report 2026-10-18: Far Cry 3 generates a spfileq.dll
+    // "crash" every launch; the game continues fine. See the known-false-alarm
+    // memory entry for the full module list.
+    {
+        void* probeAddr = pExInfo->ExceptionRecord->ExceptionAddress;
+        HMODULE probeMod = NULL;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)probeAddr, &probeMod))
+        {
+            WCHAR probeName[MAX_PATH];
+            GetModuleFileNameW(probeMod, probeName, MAX_PATH);
+            WCHAR* pSlash = wcsrchr(probeName, L'\\');
+            const WCHAR* leaf = pSlash ? pSlash + 1 : probeName;
+            static const WCHAR* kKnownFalseAlarms[] = {
+                L"spfileq.dll",   // Windows Setup File Queue -- benign first-chance AV during queue walks
+                L"setupapi.dll",  // Windows Setup API -- benign first-chance AV during device enumeration (FC3 2026-10-18)
+                L"dxdiagn.dll",   // DirectX Diagnostics -- benign first-chance AV during HW enumeration
+            };
+            for (const WCHAR* m : kKnownFalseAlarms)
+            {
+                if (_wcsicmp(leaf, m) == 0)
+                    return EXCEPTION_CONTINUE_SEARCH;
+            }
+        }
+    }
+
     if (InterlockedCompareExchange(&g_crashLogged, 1, 0) != 0)
         return EXCEPTION_CONTINUE_SEARCH;
 
@@ -1095,8 +1126,32 @@ static void LogFactoryDiagnostics(REFIID riid, void* pFactory)
     if (!pFactory)
         return;
 
+    // Gate the vtable scan behind a one-time latch per unique function
+    // address. FC3 2026-10-18 log had 249 of these back-to-back during a
+    // level transition (Dunia 2 probes CreateDXGIFactory2 in a loop); each
+    // one did GetModuleHandleExA + GetModuleFileNameA + a SEH-guarded read
+    // on the hooked bytes, which was observable overhead on the game-side
+    // thread. We only need the diagnostic once per code address.
     void** vtable = *(void***)pFactory;
     void* createSwapChainFn = vtable[10];
+    static volatile LONG s_fnDiagLock   = 0;
+    static void*         s_fnDiagRing[8] = {0};
+    static int           s_fnDiagCount  = 0;
+    bool firstTime = false;
+    while (InterlockedCompareExchange(&s_fnDiagLock, 1, 0) != 0) { YieldProcessor(); }
+    {
+        bool seen = false;
+        for (int i = 0; i < s_fnDiagCount && !seen; ++i)
+            if (s_fnDiagRing[i] == createSwapChainFn) seen = true;
+        if (!seen && s_fnDiagCount < (int)(sizeof(s_fnDiagRing)/sizeof(s_fnDiagRing[0]))) {
+            s_fnDiagRing[s_fnDiagCount++] = createSwapChainFn;
+            firstTime = true;
+        }
+    }
+    InterlockedExchange(&s_fnDiagLock, 0);
+    if (!firstTime)
+        return;
+
     Log("  vtable[10] (CreateSwapChain) = %p\n", createSwapChainFn);
 
     HMODULE hMod = NULL;

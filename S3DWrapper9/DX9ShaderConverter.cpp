@@ -891,7 +891,11 @@ bool DX9VertexShaderConverter::ProcessShader( CONST DWORD * pFunction, UINT Size
 				}
 				if (!m_CurrentShaderData.shaderIsMono)
 				{
-					if(gInfo.AlwaysModifyShaders)
+					// 0.4.0+: wiz3D_Config.xml -> TryModifyAllShaders=1 is a global
+					// user-opt-in equivalent of a per-game <AlwaysModifyShaders=1>, so
+					// a user hitting a flat-shader symptom in an untuned game can flip
+					// the switch without having to patch BaseProfile.xml by hand.
+					if(gInfo.AlwaysModifyShaders || gInfo.TryModifyAllShaders)
 						bModifyShader = true;
 					else if(gInfo.ModifyIncorrectProjectionShaders)
 					{

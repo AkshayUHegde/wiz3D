@@ -235,6 +235,15 @@ void OSDRenderer::TexSlot::DrawTextLine(const wchar_t* text, const RECT& r, HFON
     //    into R==G==B that serve as our coverage mask.
     SetTextColor(dc, RGB(255, 255, 255));
     RECT rc = r;
+    // Previously applied a 94% x-scale world transform here as a
+    // publication-tightness trick. It was visibly garbling narrow glyphs
+    // -- user 2026-10-18 reported "wiz3D" rendering as "wz3D" in the
+    // hotkey-help overlay, which lined up with sub-pixel sampling across
+    // "iz" at 15 px font + 0.94x. Also clipped the right side of longer
+    // body strings because DrawTextW's rect clips in logical coords that
+    // the transform shrinks. Slot widths (720 Status / 720 HotkeyHelp)
+    // are already sized to hold the worst-case content at 1:1, so the
+    // squeeze is pure liability now.
     ::DrawTextW(dc, text, -1, &rc, flags);
 
     // 3) Snapshot the mask (R channel is enough since R==G==B after
@@ -388,10 +397,18 @@ bool OSDRenderer::Init(ID3D11Device* device)
 
     if (!EnsureShaders(device)) { ReleaseAll(); m_initFailed = true; return false; }
 
-    // Try to load Inter from the DLL's folder for an SR-Loom / Stereopticon
-    // visual match. Falls back to Arial if the TTFs aren't deployed next to
-    // the DLL (so dev builds without the deploy step still get a working OSD).
-    if (LoadInterFontPrivate())
+    // Inter v4 is embedded as RT_RCDATA and loaded here for an SR-Loom /
+    // Stereopticon visual match, but 2026-10-18 field build hit SPACE
+    // being substituted with a right-arrow glyph in every rendered string
+    // (user screenshot: "wiz3D→Hotkeys", "Toggle→stereo→on→/→off", …).
+    // Inter v4 ships GSUB rules (contextual alternates / stylistic sets)
+    // that GDI's shaper is honoring on this Windows build; the space
+    // glyph gets substituted with a visible-whitespace symbol. Until we
+    // either strip GSUB from the embedded TTFs or move to a shaper that
+    // lets us disable features, fall back to Arial unconditionally.
+    // The DLL still ships the TTFs (resource-embedded, free) so flipping
+    // back is one edit when Inter rendering is sorted.
+    if (false && LoadInterFontPrivate())
         m_fontFace = L"Inter";
 
     int px = 0;
@@ -404,7 +421,11 @@ bool OSDRenderer::Init(ID3D11Device* device)
     }
 
     // Fixed slot sizes picked to fit the maximum content.
-    if (!m_slots[(int)Slot::Status].Create(device, 640, 48))      { ReleaseAll(); m_initFailed = true; return false; }
+    // Status slot is wider than it visually needs to be: paired with the 94%
+    // horizontal squeeze in DrawTextLine, we want enough DIB room to hold the
+    // worst-case status string ("wiz3D | Preset 2 | Sep 100% | Conv 1000 units
+    // [Eyes Swapped]") without clipping right-side glyphs.
+    if (!m_slots[(int)Slot::Status].Create(device, 720, 48))      { ReleaseAll(); m_initFailed = true; return false; }
     if (!m_slots[(int)Slot::Fps].Create(device, 180, 36))         { ReleaseAll(); m_initFailed = true; return false; }
     if (!m_slots[(int)Slot::HotkeyHelp].Create(device, 720, 520)) { ReleaseAll(); m_initFailed = true; return false; }
 
@@ -436,60 +457,68 @@ void OSDRenderer::ReleaseAll()
     m_dev = nullptr;
 }
 
-// Free-function helper so GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS can take
-// its address directly (can't take address of a non-static member function).
-static bool ResolveDllFontsDir(wchar_t out[MAX_PATH])
+// Load Inter TTFs from the DLL's embedded RT_RCDATA resources into the
+// process's private font space. The TTFs are bound to resource IDs in
+// S3DWrapper10/app.rc so no on-disk Fonts/ folder needs to ship with the
+// wrapper. Returns true if at least one TTF loaded; the caller falls back
+// to Arial if none did.
+//
+// 0.4.0+: Inter TTFs are embedded in S3DWrapperD3D10.dll as RT_RCDATA
+// resources (IDs IDR_INTER_REGULAR/SEMIBOLD/BOLD, defined in resource.h and
+// bound to the .ttf files in app.rc). AddFontMemResourceEx registers each
+// TTF from memory and returns an opaque HANDLE we feed to
+// RemoveFontMemResourceEx at teardown. Dropped the on-disk Fonts/ folder
+// dependency: deployment is now a single DLL per leaf.
+//
+// Proton note: Wine's GDI32 implements AddFontMemResourceEx correctly, so
+// this works under Proton too -- D3D11 goes via DXVK; OSD rendering stays
+// on GDI's side of the fence.
+static bool LoadRCDATAFontIntoMem(HMODULE hMod, LPCWSTR resName, HANDLE& outHandle)
 {
-    HMODULE hMod = nullptr;
-    if (!GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&ResolveDllFontsDir),
-            &hMod) || !hMod) return false;
-    if (!GetModuleFileNameW(hMod, out, MAX_PATH)) return false;
-    wchar_t* lastSlash = wcsrchr(out, L'\\');
-    if (!lastSlash) return false;
-    *(lastSlash + 1) = L'\0';
-    return true;
+    outHandle = nullptr;
+    HRSRC hRes = ::FindResourceW(hMod, resName, RT_RCDATA);
+    if (!hRes) return false;
+    DWORD size = ::SizeofResource(hMod, hRes);
+    HGLOBAL hData = ::LoadResource(hMod, hRes);
+    if (!hData || !size) return false;
+    void* data = ::LockResource(hData);
+    if (!data) return false;
+    DWORD numFonts = 0;
+    outHandle = ::AddFontMemResourceEx(data, size, nullptr, &numFonts);
+    return outHandle != nullptr && numFonts > 0;
 }
 
-// Load Inter TTFs from Fonts/ next to the wiz3D DLL into the private
-// font space of this process. Falls through if the files aren't deployed
-// (dev builds without the deploy step), which lets the caller fall back
-// to Arial. Returns true if at least one TTF loaded.
-//
-// Proton note: Wine's GDI32 implements AddFontResourceExW correctly and
-// honours FR_PRIVATE / FR_NOT_ENUM, so this path works on Proton the
-// same as on native Windows -- D3D11 goes via DXVK, the OSD rendering
-// stays on GDI's side of the fence.
 bool OSDRenderer::LoadInterFontPrivate()
 {
-    wchar_t dllPath[MAX_PATH] = {};
-    if (!ResolveDllFontsDir(dllPath)) return false;
+    HMODULE hMod = nullptr;
+    // Resolve this DLL's handle so FindResource reads from our own module.
+    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(&LoadRCDATAFontIntoMem), &hMod))
+        return false;
 
-    static const wchar_t* kFiles[3] = {
-        L"Fonts\\Inter-Regular.ttf",
-        L"Fonts\\Inter-SemiBold.ttf",
-        L"Fonts\\Inter-Bold.ttf",
+    static const LPCWSTR kResNames[3] = {
+        L"INTER_REGULAR", L"INTER_SEMIBOLD", L"INTER_BOLD"
     };
     m_interLoadedCount = 0;
-    for (int i = 0; i < 3; ++i) {
-        _snwprintf_s(m_interPaths[i], _TRUNCATE, L"%s%s", dllPath, kFiles[i]);
-        // AddFontResourceExW returns the number of fonts added (0 on failure).
-        if (AddFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0) > 0)
+    for (int i = 0; i < 3; ++i)
+    {
+        if (LoadRCDATAFontIntoMem(hMod, kResNames[i], m_interMemHandles[i]))
             m_interLoadedCount++;
         else
-            m_interPaths[i][0] = L'\0';   // mark slot empty for Unload
+            m_interMemHandles[i] = nullptr;
     }
     return m_interLoadedCount > 0;
 }
 
 void OSDRenderer::UnloadInterFontPrivate()
 {
-    for (int i = 0; i < 3; ++i) {
-        if (m_interPaths[i][0]) {
-            RemoveFontResourceExW(m_interPaths[i], FR_PRIVATE | FR_NOT_ENUM, 0);
-            m_interPaths[i][0] = L'\0';
+    for (int i = 0; i < 3; ++i)
+    {
+        if (m_interMemHandles[i])
+        {
+            ::RemoveFontMemResourceEx(m_interMemHandles[i]);
+            m_interMemHandles[i] = nullptr;
         }
     }
     m_interLoadedCount = 0;
@@ -544,11 +573,13 @@ void OSDRenderer::TickFrame()
 
 bool OSDRenderer::WantStatus() const
 {
-    // DX9's DataInput has no ShowOSD toggle; the status overlay is a
-    // transient 2s pop after a hotkey changes a stereo value. gInfo.ShowOSD
-    // (on GlobalInfo, not Input) is the "always-on" variant used by some
-    // test configs -- honour it too.
-    if (gInfo.ShowOSD) return true;
+    // ShowOSD is a tri-state (0 = off, 1 = popup-only, 2 = always-on):
+    //   2 -- strip renders every frame.
+    //   1 -- strip only during the 2s fade after a hotkey-driven setting
+    //        change (NoteSettingChanged sets m_statusFadeDeadline).
+    //   0 -- strip is fully off, even for the popup.
+    if (gInfo.ShowOSD >= 2) return true;
+    if (gInfo.ShowOSD == 0) return false;
     return GetTickCount64() < m_statusFadeDeadline;
 }
 
@@ -569,13 +600,17 @@ void OSDRenderer::BuildStatusText(wchar_t* out, size_t cap) const
     const int presetIdx = (int)gInfo.Input.ActivePreset + 1;  // 1-based for user
     const float sepPercent = p ? (p->StereoBase / 0.008f) : 0.f;  // StereoBase = percent * 0.008
     const float convUnits  = (p && p->One_div_ZPS != 0.f) ? (1.f / p->One_div_ZPS) : 0.f;
+    // Convergence shown at 2 decimals so a 4 px-per-press hotkey tap is
+    // visible even at 4K BB where each step moves convUnits by ~0.02 units
+    // (one decimal would collapse 3-4 consecutive presses onto the same
+    // "2.0" reading before the user saw any number change).
     if (gInfo.Input.SwapEyes) {
         _snwprintf_s(out, cap, _TRUNCATE,
-                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.1f   |   Eyes Swapped",
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.2f   |   Eyes Swapped",
                      presetIdx, sepPercent, convUnits);
     } else {
         _snwprintf_s(out, cap, _TRUNCATE,
-                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.1f",
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.2f",
                      presetIdx, sepPercent, convUnits);
     }
 }
@@ -682,7 +717,7 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
         // Hotkey help: no backing panel. Each line gets the 2px outline
         // via DrawTextLine so the list stays readable over any game scene.
         RECT title = { 20, 20, s.w - 20, 60 };
-        s.DrawTextLine(L"wiz3D  —  Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
+        s.DrawTextLine(L"wiz3D Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
                    DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
         // Body: two columns. Keep it tight so it fits in the 720x520 slot.
         static const wchar_t* lines[] = {
@@ -695,6 +730,7 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
             L"Ctrl + Numpad /",      L"Toggle laser-sight crosshair",
             L"PrtScn",               L"Stereo screenshot",
             L"Shift + F1",           L"Toggle this hotkey list",
+            L"Ctrl + F1",            L"Toggle OSD strip + FPS",
             L"Shift + Numpad *",     L"Open the wizard overlay",
         };
         int row = 72;

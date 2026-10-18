@@ -882,6 +882,18 @@ float ProfileShaderMultiplier(Device11Proxy* parent, void* vs)
     return (it != g_ProfileData.VSCRCData.end()) ? it->second.m_Multiplier : 1.f;
 }
 
+// Sibling to ProfileShaderMultiplier, reading the ConvergenceShift field a <VertexShader> entry may carry
+// alongside Multiplier. Used by ResolveShaderConvergence to let specific shaders sit at a different
+// zero-parallax depth from the global one -- DX9 parity (BaseStereoRenderer_Main.cpp:1037).
+float ProfileShaderConvergenceShift(Device11Proxy* parent, void* vs)
+{
+    if (g_ProfileData.VSCRCData.empty()) return 0.f;
+    const DWORD crc = BoundShaderCRC(parent, vs);
+    if (!crc) return 0.f;
+    ShaderProfileDataMap::const_iterator it = g_ProfileData.VSCRCData.find(crc);
+    return (it != g_ProfileData.VSCRCData.end()) ? it->second.m_ConvergenceShift : 0.f;
+}
+
 // Matrix helpers live in Shared/StereoMatrix.h; these keep the call sites.
 float EyeShiftB(float eyeShift) { return s_mat.EyeShiftB(eyeShift); }
 using wiz3d::MatrixBasisNorms;
@@ -891,12 +903,26 @@ static float ProjXScaleFromMatrix(const float* f, bool transposed) { return s_ma
 // Zero-parallax distance in world units, 0 with convergence off. The forward model is x += sep*(w - conv), so the
 // forward and the inverse patch both read conv from here. The user's Shift+Numpad+/- hotkey adjusts
 // GetActivePreset()->One_div_ZPS directly (KeyboardHook INCREASE_ZPS / DECREASE_ZPS), so convergence
-// hotkey already drives this path. Per-shader-profile ConvergenceShift (profile->m_ConvergenceShift from
-// BaseProfile.xml <Mono>/<Weapon> entries) is a separate per-shader plumbing concern deferred to 0.5.0.
+// hotkey already drives this path. Per-shader-profile ConvergenceShift goes through
+// ResolveShaderConvergence below (DX9 parity, BaseProfile.xml <VertexShader ConvergenceShift> wiring).
 float StereoConvergence()
 {
     const CameraPreset* p = gInfo.Input.GetActivePreset();
     return (p && p->One_div_ZPS != 0.f) ? 1.f / p->One_div_ZPS : 0.f;
+}
+
+// DX9 BaseStereoRenderer-inl.h:50 scales the shear coefficient A by (1/ZPS + shift)/(1/ZPS), which moves the
+// zero-parallax point from 1/(1/ZPS) to 1/(1/ZPS + shift). Mirror that here so the DX11 CB patch (which shifts the
+// camera translation by eyeShift*conv rather than scaling A directly) lands at the same world depth. Returns 0 for
+// the degenerate case where the sum is zero (shift cancels global convergence); callers treat 0 as "no parallax point".
+float ResolveShaderConvergence(Device11Proxy* parent, void* vs)
+{
+    const float shift = ProfileShaderConvergenceShift(parent, vs);
+    if (shift == 0.f) return StereoConvergence();
+    const CameraPreset* p = gInfo.Input.GetActivePreset();
+    if (!p) return StereoConvergence();
+    const float denom = p->One_div_ZPS + shift;
+    return (denom != 0.f) ? 1.f / denom : 0.f;
 }
 
 // DX9 shears view space by x' = x + m31*z + m41 (BaseStereoRenderer-inl.h:141): eyeShift is m31, which only re-centres,
@@ -1005,8 +1031,11 @@ static float InverseFocal(const float* f, bool transposed)
 
 // outShifted / outRejected / outInvPatched count for the frame report (may be null). fullColumn (draw duplication):
 // shift the whole first column and add the eye offset; else the replay's m[2][0] shear, its inverse likewise.
+// conv is the effective zero-parallax distance for this draw -- normally StereoConvergence(), or a per-shader
+// override from ResolveShaderConvergence when the bound VS carries a profile ConvergenceShift.
 void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
                                float eyeShift,
+                               float conv,
                                const std::vector<EyeShiftMatrix>& matrices,
                                bool fullColumn,
                                unsigned* outShifted,
@@ -1025,7 +1054,7 @@ void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         if (m.viewComponent >= 0)
         {
             if (base + kRegBytes > byteCount) continue;
-            reinterpret_cast<float*>(data + base)[m.viewComponent & 3] -= m.viewSign * eyeShift * StereoConvergence();
+            reinterpret_cast<float*>(data + base)[m.viewComponent & 3] -= m.viewSign * eyeShift * conv;
             if (outShifted) ++*outShifted;
             continue;
         }
@@ -1047,7 +1076,7 @@ void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
                 if (outRejected) ++*outRejected;
                 continue;
             }
-            s_mat.PatchInverse(f, transposed, eyeShift, fullColumn ? StereoConvergence() : 0.f,
+            s_mat.PatchInverse(f, transposed, eyeShift, fullColumn ? conv : 0.f,
                                CameraInversesOn() ? InverseFocal(f, transposed) : 0.f);
             if (outShifted) ++*outShifted;
             if (outInvPatched) ++*outInvPatched;
@@ -1110,7 +1139,9 @@ void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         if (fullColumn)
         {
             const float b  = eyeShift * camXScale;
-            const float m41 = EyeOffsetM41(eyeShift) * camXScale;
+            // EyeOffsetM41(eyeShift) = -eyeShift * StereoConvergence(); use the per-draw conv override
+            // so a per-shader ConvergenceShift reshapes the parallax constant to match.
+            const float m41 = -eyeShift * conv * camXScale;
             if (transposed)
             {
                 f[0] += b * f[12];  f[1] += b * f[13];
@@ -1147,15 +1178,19 @@ void Context11Proxy::PatchBoundCBsForDraw()
     const float eyeShift = wiz3D_GetEffectiveEyeShift()
                          * ProfileShaderMultiplier(m_parent, m_boundVS) * EyeShiftSign();
     if (eyeShift == 0.f) return;
-    PatchStageCBsForDraw(ST_VS, m_boundVS, m_parent->LookupShaderProjection(m_boundVS), eyeShift);
+    // Per-shader convergence (DX9 BaseStereoRenderer_Main.cpp:1037 parity). The VS owns the forward
+    // transform, so its profile ConvergenceShift sets the zero-parallax point for every CB it reads;
+    // the DS inherits it since the two stages are co-bound.
+    const float conv = ResolveShaderConvergence(m_parent, m_boundVS);
+    PatchStageCBsForDraw(ST_VS, m_boundVS, m_parent->LookupShaderProjection(m_boundVS), eyeShift, conv);
     // Tessellated geometry projects in the domain shader; its buffers come after the vertex stage's, so a buffer both
     // read ends up carrying both shaders' matrices.
-    if (m_boundDS && m_boundDSInfo) PatchStageCBsForDraw(ST_DS, m_boundDS, m_boundDSInfo, eyeShift);
+    if (m_boundDS && m_boundDSInfo) PatchStageCBsForDraw(ST_DS, m_boundDS, m_boundDSInfo, eyeShift, conv);
 }
 
 // One stage's constant buffers for the draw: its projection matrices shifted and learned inverses re-applied; the vertex
 // stage also gives back the game's bytes where it reads no matrix, unless the domain stage reads one there.
-void Context11Proxy::PatchStageCBsForDraw(StageIdx stage, void* shader, const ShaderAnalysis11Result* info, float eyeShift)
+void Context11Proxy::PatchStageCBsForDraw(StageIdx stage, void* shader, const ShaderAnalysis11Result* info, float eyeShift, float conv)
 {
     if (!info || !info->parsed) return;
     const DWORD crc = BoundShaderCRC(m_parent, shader);
@@ -1222,7 +1257,7 @@ void Context11Proxy::PatchStageCBsForDraw(StageIdx stage, void* shader, const Sh
         m_drawPatchScratch.assign(b->Shadow().begin(), b->Shadow().end());
         unsigned shifted = 0, inverses = 0;
         ApplyTargetedEyeShiftToCB(m_drawPatchScratch.data(), m_drawPatchScratch.size(),
-                                  eyeShift, targets, true, &shifted, nullptr, &inverses, b);
+                                  eyeShift, conv, targets, true, &shifted, nullptr, &inverses, b);
         NoteRightConstants(b);
         if (WriteWholeRightCB(b, m_drawPatchScratch))
         {
@@ -1606,6 +1641,8 @@ void Context11Proxy::SyncBoundConstants(bool right, bool plainOnly, bool fromDis
     const int e = right ? 1 : 0;
     const float eyeShift = !right ? 0.f
         : wiz3D_GetEffectiveEyeShift() * (fromDispatch ? 1.f : ProfileShaderMultiplier(m_parent, m_boundVS)) * EyeShiftSign();
+    // Compute shaders have no profile shader bound, so they always use the global convergence.
+    const float conv = (right && !fromDispatch) ? ResolveShaderConvergence(m_parent, m_boundVS) : StereoConvergence();
     ScopedTicks sa_(right ? m_time.syncApply : m_timeScratch);
     for (size_t ji = 0; ji < used; ++ji)
     {
@@ -1669,7 +1706,7 @@ void Context11Proxy::SyncBoundConstants(bool right, bool plainOnly, bool fromDis
         m_drawPatchScratch.assign(src, src + j.n);
         unsigned shifted = 0, inverses = 0;
         if (right && !j.targets.empty())
-            ApplyTargetedEyeShiftToCB(m_drawPatchScratch.data(), m_drawPatchScratch.size(), eyeShift, j.targets, true,
+            ApplyTargetedEyeShiftToCB(m_drawPatchScratch.data(), m_drawPatchScratch.size(), eyeShift, conv, j.targets, true,
                                       &shifted, nullptr, &inverses, j.b);
         // The profile's features edit a ring block here (a small buffer's copy they edit in EditRightCBs): the block
         // is the cbuffer they named, at the offsets they found in it.
@@ -1761,7 +1798,9 @@ void Context11Proxy::PatchCameraMatrices(StageIdx stage)
     const float multiplier = stage == ST_CS ? 1.f : ProfileShaderMultiplier(m_parent, m_boundVS);
     const float eyeShift = wiz3D_GetEffectiveEyeShift() * multiplier * EyeShiftSign();
     if (eyeShift == 0.f) return;
-    const float conv = StereoConvergence();
+    // Compute shaders use the global convergence; VS/PS inherit the bound VS's per-shader shift so a camera-matrix
+    // inverse rebuild lands on the same zero-parallax plane as the forward draw patch.
+    const float conv = (stage == ST_CS) ? StereoConvergence() : ResolveShaderConvergence(m_parent, m_boundVS);
     const CBEyeSlots& s = m_cbSlots[stage];
     std::vector<EyeShiftMatrix> targets;
     for (UINT slot = 0; slot < s.high && slot < kMaxCBs; ++slot)
@@ -1824,7 +1863,7 @@ void Context11Proxy::PatchCameraMatrices(StageIdx stage)
             }
         m_drawPatchScratch.assign(bytes.begin(), bytes.end());
         unsigned shifted = 0, inverses = 0;
-        ApplyTargetedEyeShiftToCB(m_drawPatchScratch.data(), m_drawPatchScratch.size(), eyeShift, targets, true,
+        ApplyTargetedEyeShiftToCB(m_drawPatchScratch.data(), m_drawPatchScratch.size(), eyeShift, conv, targets, true,
                                   &shifted, nullptr, &inverses, b);
         if (!shifted || !WriteWholeRightCB(b, m_drawPatchScratch)) continue;
         NoteRightConstants(b);

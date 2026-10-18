@@ -21,6 +21,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include "Dx12StereoChain.h"
 
 // ---------------------------------------------------------------------------
 // Diagnostic log
@@ -132,6 +133,44 @@ extern "C" __declspec(dllexport) HRESULT WINAPI D3D12CreateDevice(
     WriteLog("[wiz3D-D3D12] D3D12CreateDevice (passthrough) -> 0x%08lX\n", hr);
     // TODO: when stereo work begins, wrap the returned ID3D12Device here
     return hr;
+}
+
+// ---------------------------------------------------------------------------
+// Dx12Stereo_Create — C export called by D3d12VendorProxy's hooked
+// CreateSwapChainForHwnd. Forwards to the wrapper namespace. Signature must
+// match wiz3d::Dx12Stereo::CreateForHwndFn.
+// ---------------------------------------------------------------------------
+extern "C" __declspec(dllexport) HRESULT WINAPI Dx12Stereo_Create(
+    wiz3d::Dx12Stereo::CreateForHwndFn native,
+    IDXGIFactory2*  factory,
+    IUnknown*       opaque,
+    HWND            window,
+    const DXGI_SWAP_CHAIN_DESC1* desc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen,
+    IDXGIOutput*    output,
+    IDXGISwapChain1** result)
+{
+    EnsureWrapperInitialized();
+    return wiz3d::Dx12Stereo::Create(native, factory, opaque, window,
+                                      desc, fullscreen, output, result);
+}
+
+extern "C" __declspec(dllexport) void WINAPI Dx12Stereo_SetEnabled(int enabled)
+{
+    wiz3d::Dx12Stereo::SetEnabled(enabled != 0);
+    WriteLog("[wiz3D-D3D12] Dx12Stereo_SetEnabled(%d)\n", enabled);
+}
+
+// Set compositor output mode: 0 = MonoMirror (debug), 1 = SBS (default).
+// Only affects swap chains created after this call. In-flight chains keep
+// their mode because changing it mid-chain would require re-creating the
+// underlying real DXGI swap chain at a different width.
+extern "C" __declspec(dllexport) void WINAPI Dx12Stereo_SetOutputMode(int mode)
+{
+    wiz3d::Dx12Stereo::SetOutputMode(
+        mode == 0 ? wiz3d::Dx12Stereo::OutputMode::MonoMirror
+                  : wiz3d::Dx12Stereo::OutputMode::Sbs);
+    WriteLog("[wiz3D-D3D12] Dx12Stereo_SetOutputMode(%d)\n", mode);
 }
 
 // ---------------------------------------------------------------------------

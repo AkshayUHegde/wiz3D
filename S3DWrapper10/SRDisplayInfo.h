@@ -27,4 +27,14 @@ namespace wiz3d
 // output ints unchanged if the SR runtime is absent or any step fails.
 bool QueryRecommendedSRViewsSize(int& outWidthSBS, int& outHeight);
 
+// Returns the panel-native per-eye dimensions the SR weave should target.
+// Preferred source is the LeiaSR Displays runtime (QueryRecommendedSRViewsSize/2);
+// if that is absent, falls back to the Windows monitor the given hwnd lives on
+// (MonitorFromWindow + GetMonitorInfo). This way sub-native fullscreen games
+// still get a lenticular-aligned weave even on SR panels without the Displays
+// SDK installed. Returns false only when both sources fail (hwnd invalid, no
+// monitor info, no SR runtime). outPanelW / outPanelH are the PANEL dims (one
+// eye's worth), not the SBS width.
+bool QueryPanelNativeSize(void* hwnd, int& outPanelW, int& outPanelH);
+
 }  // namespace wiz3d

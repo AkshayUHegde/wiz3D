@@ -306,35 +306,78 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
     m_realBBH  = m_bbHeight;
 
     // SR Weave output needs the real BB at panel-native pixel pitch so the
-    // interlace pattern lines up with the lenslets. The LeiaSR Displays
-    // runtime reports the recommended SBS view-texture dimensions (equal
-    // to 2*panelW x panelH on the physical display); resize the real swap
-    // chain to half of that. m_bbWidth/m_bbHeight stay at the game's
-    // requested dims so GetDesc/m_leftBB/m_rightBB keep the game-side
-    // view intact; the compositor + weave write at m_realBBW/m_realBBH.
+    // interlace pattern lines up with the lenslets. QueryPanelNativeSize
+    // tries the LeiaSR Displays runtime first, then falls back to the OS
+    // monitor the game window lives on -- so sub-native fullscreen games
+    // get a lenticular-aligned weave even without the Displays SDK installed.
+    // m_bbWidth/m_bbHeight stay at the game's requested dims so GetDesc /
+    // m_leftBB / m_rightBB keep the game-side view intact; the compositor
+    // and weave write at m_realBBW/m_realBBH.
     if (SelectedOutputMode() == OM_SR_WEAVE)
     {
-        int srRecW = 0, srRecH = 0;
-        if (wiz3d::QueryRecommendedSRViewsSize(srRecW, srRecH))
+        int panelW = 0, panelH = 0;
+        if (wiz3d::QueryPanelNativeSize(desc.OutputWindow, panelW, panelH)
+            && panelW > 0 && panelH > 0
+            && ((UINT)panelW != m_bbWidth || (UINT)panelH != m_bbHeight))
         {
-            const UINT panelW = static_cast<UINT>(srRecW / 2);
-            const UINT panelH = static_cast<UINT>(srRecH);
-            if (panelW > 0 && panelH > 0 &&
-                (panelW != m_bbWidth || panelH != m_bbHeight))
+            // Sub-native windowed launchers (EA MELE, EA Jedi: Fallen Order:
+            // 2560x1440 window on a 3840x2160 panel) left the weave output
+            // being downscaled by DWM into the smaller window, so the launcher
+            // only filled the top-left ~1440p of the panel. Resize the HWND
+            // so its CLIENT area matches panel-native — the game's WndProc
+            // gets WM_SIZE and either reissues ResizeBuffers (good: 1:1
+            // present) or doesn't (also fine: the composite shader stretches
+            // the game's 2560x1440 render across the panel-native real BB
+            // and DWM presents 1:1 into the now-panel-sized client).
+            // AdjustWindowRectEx converts the desired client rect to the
+            // window rect the current style/border/caption needs; without
+            // this, SetWindowPos(w, h) sets the OUTER rect and the client
+            // area ends up smaller by caption + borders, DWM still
+            // downscales, and lenticular alignment still breaks (observed
+            // in Jedi: Fallen Order 2026-10-18 — SetWindowPos fired, user
+            // still saw 1440p).
+            if (desc.Windowed)
             {
-                DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: SR Weave selected; resizing real BB %ux%u -> panel-native %ux%u\n",
-                       m_bbWidth, m_bbHeight, panelW, panelH);
-                HRESULT rhr = m_real->ResizeBuffers(0, panelW, panelH, DXGI_FORMAT_UNKNOWN, desc.Flags);
-                if (SUCCEEDED(rhr))
+                RECT client = {};
+                if (GetClientRect(desc.OutputWindow, &client) &&
+                    ((client.right - client.left)  < panelW ||
+                     (client.bottom - client.top)  < panelH))
                 {
-                    m_realBBW = panelW;
-                    m_realBBH = panelH;
-                }
-                else
-                {
-                    DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: real BB resize failed 0x%08lX; staying at game dims (weave will be scaled downstream)\n", rhr);
+                    const LONG  style   = GetWindowLong(desc.OutputWindow, GWL_STYLE);
+                    const LONG  exStyle = GetWindowLong(desc.OutputWindow, GWL_EXSTYLE);
+                    const BOOL  hasMenu = GetMenu(desc.OutputWindow) != nullptr;
+                    RECT target = { 0, 0, (LONG)panelW, (LONG)panelH };
+                    AdjustWindowRectEx(&target, style, hasMenu, exStyle);
+                    const int outerW = target.right - target.left;
+                    const int outerH = target.bottom - target.top;
+                    SetWindowPos(desc.OutputWindow, nullptr,
+                                 0, 0, outerW, outerH,
+                                 SWP_NOACTIVATE | SWP_NOZORDER);
+                    DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: resized sub-native windowed hWnd=%p client %ldx%ld -> panel %dx%d (window outer %dx%d, style=0x%08lX ex=0x%08lX)\n",
+                           (void*)desc.OutputWindow,
+                           (long)(client.right - client.left),
+                           (long)(client.bottom - client.top),
+                           panelW, panelH, outerW, outerH, style, exStyle);
                 }
             }
+
+            DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: SR Weave; resizing real BB %ux%u -> panel-native %dx%d (hWnd=%p)\n",
+                   m_bbWidth, m_bbHeight, panelW, panelH, (void*)desc.OutputWindow);
+            HRESULT rhr = m_real->ResizeBuffers(0, (UINT)panelW, (UINT)panelH, DXGI_FORMAT_UNKNOWN, desc.Flags);
+            if (SUCCEEDED(rhr))
+            {
+                m_realBBW = (UINT)panelW;
+                m_realBBH = (UINT)panelH;
+            }
+            else
+            {
+                DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: real BB resize failed 0x%08lX; staying at game dims (weave will be scaled downstream)\n", rhr);
+            }
+        }
+        else
+        {
+            DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: SR Weave; panel-native query returned %dx%d (no resize; already matches BB or query failed)\n",
+                   panelW, panelH);
         }
     }
 
@@ -836,21 +879,19 @@ bool SwapChain11Proxy::EnsureSRWeaver()
     DDILog("SwapChain11Proxy::EnsureSRWeaver: ready (hWnd=%p sr=%p)\n",
            (void*)scDesc.OutputWindow, (void*)sr);
 
-    // Query the LeiaSR Displays runtime for the panel-recommended SBS views
-    // texture dimensions. Log-only for now; task #32 will consume these to
-    // size the SBS input and output RT to panel-native, so sub-native games
-    // on 4K SR displays stop losing lenticular alignment through downstream
-    // scaling. False just means the SR Displays runtime isn't present on
-    // this host; the existing BB-sized weave path keeps working.
-    int srRecW = 0, srRecH = 0;
-    if (wiz3d::QueryRecommendedSRViewsSize(srRecW, srRecH))
+    // Log the resolved panel-native size so a user comparing weave output on
+    // a sub-native game can tell which source (LeiaSR Displays API vs OS
+    // monitor fallback vs nothing) was used. The actual real-BB resize is
+    // driven by EnsureStereoBackBuffer; this is diagnostic-only.
+    int panelW = 0, panelH = 0;
+    if (wiz3d::QueryPanelNativeSize(scDesc.OutputWindow, panelW, panelH))
     {
-        DDILog("SwapChain11Proxy::EnsureSRWeaver: LeiaSR recommended views %dx%d; current game BB %ux%u -> SBS %ux%u\n",
-               srRecW, srRecH, m_bbWidth, m_bbHeight, m_bbWidth * 2, m_bbHeight);
+        DDILog("SwapChain11Proxy::EnsureSRWeaver: panel-native %dx%d; game BB %ux%u; real BB %ux%u\n",
+               panelW, panelH, m_bbWidth, m_bbHeight, m_realBBW, m_realBBH);
     }
     else
     {
-        DDILog("SwapChain11Proxy::EnsureSRWeaver: LeiaSR Displays API unavailable; continuing with BB-sized weave\n");
+        DDILog("SwapChain11Proxy::EnsureSRWeaver: panel-native query failed (SR Displays SDK + monitor fallback both missed); BB-sized weave\n");
     }
     return true;
 }
@@ -1058,54 +1099,136 @@ static bool ScreenshotPath(bool stereo, TCHAR (&out)[MAX_PATH])
 // left eye alone with stereo off.
 void SwapChain11Proxy::WriteScreenshot()
 {
-    if (!m_parent || !m_leftBB) return;
+    if (!m_parent || !m_leftBB) { DDILog("Screenshot: FAILED (no parent/leftBB)\n"); return; }
     ID3D11Device* dev = m_parent->GetReal();
+    if (!dev) { DDILog("Screenshot: FAILED (no real device)\n"); return; }
     ID3D11DeviceContext* ctx = nullptr;
     dev->GetImmediateContext(&ctx);
-    if (!ctx) return;
+    if (!ctx) { DDILog("Screenshot: FAILED (GetImmediateContext returned null)\n"); return; }
+
     const bool stereo = gInfo.Input.StereoActive && m_rightBB;
-    const UINT views = stereo ? 2 : 1;
+    const UINT views  = stereo ? 2 : 1;
     D3D11_TEXTURE2D_DESC td = {};
     m_leftBB->GetDesc(&td);
-    const UINT rowBytes = td.Width * (UINT)(GetBitWidthOfDXGIFormat(td.Format) / 8), pitch = rowBytes * views;
-    std::vector<char> pixels((size_t)pitch * td.Height);
+    const size_t bpp = GetBitWidthOfDXGIFormat(td.Format);
+    if (!bpp || !td.Width || !td.Height) {
+        DDILog("Screenshot: FAILED (invalid dims/fmt %ux%u fmt=%d bpp=%zu)\n",
+               td.Width, td.Height, (int)td.Format, bpp);
+        ctx->Release(); return;
+    }
+    const UINT rowBytes = td.Width * (UINT)(bpp / 8);
+    const UINT pitch    = rowBytes * views;
+    std::vector<char> pixels((size_t)pitch * td.Height, 0);
 
+    // Build staging desc. STAGING + CPU_READ requires BindFlags=0 and no
+    // Misc flags, and single-sample. The resolve step below downsamples
+    // MSAA sources first, so the staging texture itself is always 1x.
     D3D11_TEXTURE2D_DESC sd = td;
-    sd.MipLevels = 1; sd.ArraySize = 1; sd.SampleDesc.Count = 1; sd.SampleDesc.Quality = 0;
-    sd.MiscFlags = 0; sd.BindFlags = 0; sd.CPUAccessFlags = 0; sd.Usage = D3D11_USAGE_DEFAULT;
+    sd.MipLevels        = 1;
+    sd.ArraySize        = 1;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.MiscFlags        = 0;
+    sd.BindFlags        = 0;
+    sd.CPUAccessFlags   = 0;
+    sd.Usage            = D3D11_USAGE_DEFAULT;
+
     ID3D11Texture2D* resolved = nullptr;
+    if (td.SampleDesc.Count > 1) {
+        HRESULT hrR = dev->CreateTexture2D(&sd, nullptr, &resolved);
+        if (FAILED(hrR)) {
+            DDILog("Screenshot: resolve-tex CreateTexture2D failed hr=0x%08lX (fmt=%d %ux%u samples=%u)\n",
+                   hrR, (int)td.Format, td.Width, td.Height, td.SampleDesc.Count);
+            resolved = nullptr;
+        }
+    }
+
+    sd.Usage          = D3D11_USAGE_STAGING;
+    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     ID3D11Texture2D* stg = nullptr;
-    if (td.SampleDesc.Count > 1 && FAILED(dev->CreateTexture2D(&sd, nullptr, &resolved))) resolved = nullptr;
-    sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    if (FAILED(dev->CreateTexture2D(&sd, nullptr, &stg))) stg = nullptr;
-    bool ok = rowBytes && stg && (td.SampleDesc.Count == 1 || resolved);
+    HRESULT hrS = dev->CreateTexture2D(&sd, nullptr, &stg);
+    if (FAILED(hrS)) {
+        DDILog("Screenshot: staging CreateTexture2D failed hr=0x%08lX (fmt=%d %ux%u)\n",
+               hrS, (int)td.Format, td.Width, td.Height);
+        if (resolved) resolved->Release();
+        ctx->Release();
+        return;
+    }
+
+    bool ok = (td.SampleDesc.Count == 1 || resolved);
+    if (!ok) {
+        DDILog("Screenshot: MSAA source with no resolve texture; aborting\n");
+    }
+
     ID3D11Texture2D* eyes[2] = { stereo ? m_rightBB : m_leftBB, m_leftBB };
     for (UINT v = 0; ok && v < views; ++v)
     {
-        if (resolved)
-        {
+        if (resolved) {
             ctx->ResolveSubresource(resolved, 0, eyes[v], 0, td.Format);
             ctx->CopyResource(stg, resolved);
+        } else {
+            ctx->CopyResource(stg, eyes[v]);
         }
-        else ctx->CopyResource(stg, eyes[v]);
         D3D11_MAPPED_SUBRESOURCE m = {};
-        if (FAILED(ctx->Map(stg, 0, D3D11_MAP_READ, 0, &m)) || !m.pData) { ok = false; break; }
+        HRESULT hrM = ctx->Map(stg, 0, D3D11_MAP_READ, 0, &m);
+        if (FAILED(hrM) || !m.pData) {
+            DDILog("Screenshot: Map(eye=%u) failed hr=0x%08lX pData=%p\n", v, hrM, m.pData);
+            ok = false; break;
+        }
         for (UINT y = 0; y < td.Height; ++y)
-            memcpy(&pixels[(size_t)y * pitch + v * rowBytes], (const char*)m.pData + (size_t)y * m.RowPitch, rowBytes);
+            memcpy(&pixels[(size_t)y * pitch + v * rowBytes],
+                   (const char*)m.pData + (size_t)y * m.RowPitch, rowBytes);
         ctx->Unmap(stg, 0);
     }
-    if (stg) stg->Release();
+    stg->Release();
     if (resolved) resolved->Release();
     ctx->Release();
 
-    TCHAR path[MAX_PATH] = {};
-    if (ok && ScreenshotPath(stereo, path))
-    {
-        SaveImageToFile(path, td.Format, td.Width * views, td.Height, pixels.data(), pitch, true);
-        DDILog("Screenshot: %ls (%ux%u, format %d) %s\n", path, td.Width * views, td.Height, (int)td.Format,
-               PathFileExists(path) ? "written" : "NOT written");
+    if (!ok) {
+        DDILog("Screenshot: FAILED (format %d, %u samples, %ux%u)\n",
+               (int)td.Format, td.SampleDesc.Count, td.Width, td.Height);
+        if (gInfo.MakeScreenshot) {
+            gInfo.MakeScreenshot = FALSE;
+            if (gInfo.MakeScreenshotCallback) gInfo.MakeScreenshotCallback();
+        }
+        return;
     }
-    else DDILog("Screenshot: FAILED (format %d, %u samples)\n", (int)td.Format, td.SampleDesc.Count);
+
+    TCHAR path[MAX_PATH] = {};
+    if (!ScreenshotPath(stereo, path)) {
+        DDILog("Screenshot: ScreenshotPath failed (couldn't resolve My Pictures)\n");
+        if (gInfo.MakeScreenshot) {
+            gInfo.MakeScreenshot = FALSE;
+            if (gInfo.MakeScreenshotCallback) gInfo.MakeScreenshotCallback();
+        }
+        return;
+    }
+
+    // Games don't write a meaningful alpha into the swap-chain BB (it's a
+    // present target, not a composited surface) so the raw alpha channel
+    // is often 0 or random. DevIL honours it verbatim and the PNG comes
+    // out see-through. Force opaque for the 32bpp UNORM formats where
+    // alpha is byte offset 3 (R8G8B8A8 = fmt 28, B8G8R8A8 = fmt 87, their
+    // TYPELESS and _SRGB cousins all share the same layout). SaveImageToFile
+    // converts B8G8R8A8 → R8G8B8A8 in-place via its own buffer, but by then
+    // the alpha=0xFF we've written is already in each pixel, so it survives.
+    if (td.Format == DXGI_FORMAT_R8G8B8A8_UNORM      ||
+        td.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+        td.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS   ||
+        td.Format == DXGI_FORMAT_B8G8R8A8_UNORM      ||
+        td.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
+        td.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS)
+    {
+        const size_t total = pixels.size();
+        for (size_t i = 3; i < total; i += 4) pixels[i] = (char)0xFF;
+    }
+
+    bool saved = SaveImageToFile(path, td.Format, td.Width * views, td.Height,
+                                 pixels.data(), pitch, true);
+    const bool exists = PathFileExists(path) != 0;
+    DDILog("Screenshot: %ls (%ux%u, format %d) saved=%d exists=%d\n",
+           path, td.Width * views, td.Height, (int)td.Format,
+           (int)saved, (int)exists);
     if (gInfo.MakeScreenshot)
     {
         gInfo.MakeScreenshot = FALSE;
@@ -1272,6 +1395,35 @@ HRESULT SwapChain11Proxy::PresentFrame(bool present1, UINT SyncInterval, UINT Fl
     // SyncInterval=0 at Present time (parity with DX9's forced-VSync-off
     // behaviour). Game's own VSync preference is overridden.
     if (gInfo.ForceVSyncOff) SyncInterval = 0;
+    // Cursor clip in fullscreen -- parity with DX9's CBaseSwapChain::CheckSecondWindowPosition
+    // (BaseSwapChain.cpp:1042-1063). Keeps the OS pointer inside the game window so a
+    // raw-input or mouse-look title doesn't lose focus to a stray cross-monitor nudge.
+    // Only clips when the swap chain is actually fullscreen, so windowed games stay unaffected.
+    // IsDebuggerPresent short-circuit matches DX9's dev-mode convenience.
+    if (m_real && !IsDebuggerPresent())
+    {
+        BOOL isFullscreen = FALSE;
+        if (SUCCEEDED(m_real->GetFullscreenState(&isFullscreen, nullptr)) && isFullscreen)
+        {
+            DXGI_SWAP_CHAIN_DESC scd = {};
+            if (SUCCEEDED(m_real->GetDesc(&scd)) && scd.OutputWindow)
+            {
+                RECT rcClient;
+                if (GetClientRect(scd.OutputWindow, &rcClient))
+                {
+                    POINT origin = { rcClient.left, rcClient.top };
+                    ClientToScreen(scd.OutputWindow, &origin);
+                    RECT rcScreen = {
+                        origin.x,
+                        origin.y,
+                        origin.x + (rcClient.right  - rcClient.left),
+                        origin.y + (rcClient.bottom - rcClient.top),
+                    };
+                    ClipCursor(&rcScreen);
+                }
+            }
+        }
+    }
     HRESULT hr = present1 ? (m_real1 ? m_real1->Present1(SyncInterval, Flags, pParams) : E_NOINTERFACE)
                           : m_real->Present(SyncInterval, Flags);
     if (timed)

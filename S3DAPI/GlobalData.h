@@ -18,10 +18,15 @@
 #define DEFAULT_ONE_DIV_ZPS	1.f / (1.f + DEFAULT_ZNEAR)
 #define STEP_STEREOBASE		PERCENT_TO_SEPARATION(2.5f)
 #define STEP_ONE_DIV_ZPS	1.f			//--- in pixels ---
+// Hotkey step for convergence. 0.25 px/press (the legacy iZ3D value) is
+// below human perception at common render widths -- user feedback 2026-10-18
+// said "convergence didn't work" because a Shift+Num+ press moved the
+// zero-parallax plane by ~0.08% of its current value. 4 px/press gives a
+// clearly visible shift while still fine-grained enough for tuning.
 // The hotkeys' steps, finer than the ones above (which autofocus and the NvAPI bridge use): a small working
 // StereoBase still tunes in useful increments.
 #define KEY_STEP_STEREOBASE		PERCENT_TO_SEPARATION(0.5f)
-#define KEY_STEP_ONE_DIV_ZPS	0.25f		//--- in pixels ---
+#define KEY_STEP_ONE_DIV_ZPS	4.f			//--- in pixels (see STEP_ONE_DIV_ZPS note above) ---
 #define MIN_ONE_DIV_ZPS	   -1e+7f
 #define MAX_ONE_DIV_ZPS		1e+7f
 #define STEP_MULTIPLIER		0.001f
@@ -206,6 +211,7 @@ enum EventId
 	TOGGLE_WIZARD,
 	TOGGLE_FPS,
 	TOGGLE_HOTKEY,
+	TOGGLE_SHOW_OSD,
 	INCREASE_PRESENTER_SLEEP_TIME,
 	DECREASE_PRESENTER_SLEEP_TIME,
 	INCREASE_PRESENTER_FLUSH_TIME,
@@ -378,7 +384,13 @@ public:
 	bool		AlternativeSetFullscreenStateOrder;
 
 	bool		ShowFPS;
-	bool		ShowOSD;
+	// Tri-state in 0.4.0 (was a bool). 0 = fully off (no strip, no popup),
+	// 1 = popup-only (strip appears for 2s on setting change, else hidden)
+	// -- the default, 2 = always-on strip. The OSD toggle hotkey (Shift+F1,
+	// inherited from iZ3D's HUD-toggle binding) cycles 2 <-> 0 while leaving
+	// popup = 1 untouched for the common case where the user just doesn't
+	// want a persistent HUD. WantStatus() reads it directly.
+	DWORD		ShowOSD;
 	DWORD		SeparationMode;
 	DWORD		FrustumAdjustMode;
 	FLOAT		BlackAreaWidth;
@@ -403,6 +415,18 @@ public:
 
 	// VS Creation
 	bool		AlwaysModifyShaders;
+	// Global user-opt-in equivalent of AlwaysModifyShaders. Set via
+	// wiz3D_Config.xml -> DefaultProfile/TryModifyAllShaders=1 when the user
+	// is troubleshooting a "flat shader" symptom (crosshairs / HUD / UI
+	// element rendering at screen depth) in a game that doesn't yet have a
+	// per-game profile entry. OR'd into the gate alongside the per-profile
+	// AlwaysModifyShaders flag and per-shader <Modify=1> entries, so a user
+	// can experiment without editing BaseProfile.xml. Defaults off because
+	// blanket modification can introduce artefacts in post-process-heavy
+	// games (full-screen quads separating, depth-reconstruction drift,
+	// shadow-map distortion). See the Config.xml comment block for the
+	// trade-off summary.
+	bool		TryModifyAllShaders;
 	DWORD		VSSeparationUpdateMode;
 	DWORD		VertexShaderModificationMethod;
 	bool		ModifyIncorrectProjectionShaders;
@@ -517,7 +541,8 @@ public:
 			{ "ToggleLaserSight", TOGGLE_LASER_SIGHT,                       623 },	//--- Ctrl + Num /			---
 			{ "ToggleWizard", TOGGLE_WIZARD,                                362 },	//--- Shift + Num*			---
 			{ "ToggleFPS", TOGGLE_FPS,                                      0 },	//---           			---
-			{ "ToggleHotkeysOSD", TOGGLE_HOTKEY,						    368 },	//--- Shift + F1			---
+			{ "ToggleHotkeysOSD", TOGGLE_HOTKEY,						    368 },	//--- Shift + F1 (iZ3D legacy hotkey-help)	---
+			{ "ToggleOSD", TOGGLE_SHOW_OSD,                                 624 },	//--- Ctrl + F1 (status strip + FPS)	---
 			{ "PresenterSleepTimeIncrease", INCREASE_PRESENTER_SLEEP_TIME,  221 },  //--- ]				        ---
 			{ "PresenterSleepTimeDecrease", DECREASE_PRESENTER_SLEEP_TIME,  219 },  //--- [				        ---
 			{ "PresenterFlushTimeIncrease", INCREASE_PRESENTER_FLUSH_TIME,	186 },  //--- ;				        ---

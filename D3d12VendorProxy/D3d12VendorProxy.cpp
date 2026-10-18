@@ -206,6 +206,49 @@ static HRESULT WINAPI HookedCreateSwapChain(
     return hr;
 }
 
+// Lazy-loaded Dx12Stereo_Create export from S3DWrapperD3D12.dll. Loaded on
+// first HookedCreateSwapChainForHwnd fire, cached thereafter. If the wrapper
+// DLL isn't beside us or doesn't expose the export, we fall through to the
+// native CreateSwapChainForHwnd directly (passthrough with logging only).
+typedef HRESULT (WINAPI* PFN_Dx12Stereo_Create)(
+    void* native,                                       /* native CreateSwapChainForHwnd fn ptr */
+    IDXGIFactory2*, IUnknown*, HWND,
+    const DXGI_SWAP_CHAIN_DESC1*,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*,
+    IDXGIOutput*, IDXGISwapChain1**);
+
+static HMODULE               g_hWrapperD3D12       = nullptr;
+static PFN_Dx12Stereo_Create g_pfnDx12StereoCreate = nullptr;
+static bool                  g_bWrapperProbed      = false;
+
+static void LoadStereoWrapper()
+{
+    if (g_bWrapperProbed) return;
+    g_bWrapperProbed = true;
+
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(g_hSelf, path, MAX_PATH);
+    wchar_t* sep = wcsrchr(path, L'\\');
+    if (!sep) return;
+    size_t rem = MAX_PATH - static_cast<size_t>(sep - path) - 1;
+    wcscpy_s(sep + 1, rem, L"S3DWrapperD3D12.dll");
+
+    g_hWrapperD3D12 = LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!g_hWrapperD3D12)
+    {
+        WriteLog("[D3d12Proxy] S3DWrapperD3D12.dll not found beside proxy - stereo passthrough\n");
+        return;
+    }
+
+    g_pfnDx12StereoCreate = reinterpret_cast<PFN_Dx12Stereo_Create>(
+        GetProcAddress(g_hWrapperD3D12, "Dx12Stereo_Create"));
+
+    char log[160];
+    wsprintfA(log, "[D3d12Proxy] S3DWrapperD3D12.dll loaded (hMod=%p) Dx12Stereo_Create=%p\n",
+              g_hWrapperD3D12, g_pfnDx12StereoCreate);
+    WriteLog(log);
+}
+
 static HRESULT WINAPI HookedCreateSwapChainForHwnd(
     IDXGIFactory2* pFactory, IUnknown* pDevice, HWND hWnd,
     const DXGI_SWAP_CHAIN_DESC1* pDesc,
@@ -225,9 +268,25 @@ static HRESULT WINAPI HookedCreateSwapChainForHwnd(
     }
     WriteLog(buf);
 
-    HRESULT hr = g_pfnCreateSwapChainForHwnd(pFactory, pDevice, hWnd, pDesc,
-                                              pFullscreenDesc, pRestrictToOutput, ppSwapChain);
-    wsprintfA(buf, "[D3d12Proxy] CreateSwapChainForHwnd -> 0x%08X\n", hr);
+    LoadStereoWrapper();
+
+    HRESULT hr;
+    if (g_pfnDx12StereoCreate)
+    {
+        // Wrapper decides internally: if desc.Stereo and opaque is a DX12 queue,
+        // wraps with StereoChain; otherwise falls through to native unchanged.
+        hr = g_pfnDx12StereoCreate(
+            reinterpret_cast<void*>(g_pfnCreateSwapChainForHwnd),
+            pFactory, pDevice, hWnd, pDesc,
+            pFullscreenDesc, pRestrictToOutput, ppSwapChain);
+    }
+    else
+    {
+        hr = g_pfnCreateSwapChainForHwnd(pFactory, pDevice, hWnd, pDesc,
+                                          pFullscreenDesc, pRestrictToOutput, ppSwapChain);
+    }
+    wsprintfA(buf, "[D3d12Proxy] CreateSwapChainForHwnd -> 0x%08X (wrapperActive=%d)\n",
+              hr, g_pfnDx12StereoCreate ? 1 : 0);
     WriteLog(buf);
     return hr;
 }

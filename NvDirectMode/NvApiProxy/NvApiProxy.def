@@ -4,3 +4,5 @@ EXPORTS
     NvAPI_QueryInterface
     Wiz3D_GetActiveEye
     Wiz3D_SetEyeChangeCallback
+    Wiz3D_NvApi_GetReverseStereoBlit
+    Wiz3D_NvApi_GetAutoModeHint

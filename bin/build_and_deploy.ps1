@@ -24,7 +24,13 @@ param(
     [string]$Arch = 'both',
     [switch]$SkipBuild,
     [switch]$SkipProxy,
-    [switch]$SkipNvDirectMode
+    [switch]$SkipNvDirectMode,
+    # Final Release is the default shipping build. 0.4.0 kept zlog live in
+    # that config by removing FINAL_RELEASE from FinalRelease.props, so
+    # DEBUG_MESSAGE / DEBUG_TRACE sites still emit — users and CI both get
+    # the optimised build with log traces. -Diagnostic drops to Release
+    # (same codegen, different linker/pdb layout) for local repro work.
+    [switch]$Diagnostic
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,7 +60,16 @@ if (-not $SkipNvDirectMode -and (Test-Path $nvDirectModeSln)) {
 if (-not $SkipBuild) {
     foreach ($s in $slnsToBuild) {
         $slnName = Split-Path -Leaf $s
-        $cfg = if ($s -eq $mainSln) { 'Final Release' } else { 'Release' }
+        # Final Release is the shipped config (optimised + zlog live after
+        # the 0.4.0 FinalRelease.props change). -Diagnostic switches to
+        # Release for a less-optimised local repro build. The proxy and
+        # NvDirectMode solutions only define Debug/Release, so they stay
+        # on Release either way.
+        $cfg = if ($s -eq $mainSln) {
+            if ($Diagnostic) { 'Release' } else { 'Final Release' }
+        } else {
+            'Release'
+        }
         foreach ($a in $archs) {
             Write-Host ""
             Write-Host "=== Building $slnName  $cfg|$a ===" -ForegroundColor Cyan
@@ -68,8 +83,25 @@ if (-not $SkipBuild) {
             }
         }
     }
+
+    # S3DWrapperD3D12 isn't in any solution (lives next to S3DWrapper12/).
+    # Side-build it in Release|x64 only — DX12 is 64-bit, and this project
+    # has no Final Release config to pick up through S3DDriver.sln.
+    $s3dWrapperD3D12 = Join-Path $repoRoot 'S3DWrapper12\S3DWrapperD3D12.vcxproj'
+    if ($archs -contains 'x64' -and (Test-Path $s3dWrapperD3D12)) {
+        Write-Host ""
+        Write-Host "=== Building S3DWrapperD3D12.vcxproj  Release|x64 (side-build) ===" -ForegroundColor Cyan
+        & $msbuild $s3dWrapperD3D12 /p:Configuration=Release /p:Platform=x64 /m /nologo /verbosity:minimal
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  (S3DWrapperD3D12 msbuild exit $LASTEXITCODE - DX12 stereo wrapper may be missing from the hd3d/dx12 deploy)" -ForegroundColor Yellow
+        }
+    }
 }
 
 Write-Host ""
 Write-Host "=== Deploying ===" -ForegroundColor Cyan
-& (Join-Path $PSScriptRoot 'deploy_to_releases.ps1') -Arch $Arch
+if ($Diagnostic) {
+    & (Join-Path $PSScriptRoot 'deploy_to_releases.ps1') -Arch $Arch -MainBinDir 'Release'
+} else {
+    & (Join-Path $PSScriptRoot 'deploy_to_releases.ps1') -Arch $Arch
+}

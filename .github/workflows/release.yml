@@ -34,7 +34,10 @@ jobs:
 
   # Runs only after all four smoke-test legs succeed. Builds the shipped
   # Final Release config plus the proxy/NvDirectMode solutions, stages the
-  # releases/ tree, and uploads it as the build artifact.
+  # releases/ tree, and uploads it as the build artifact. 0.4.0+: Final
+  # Release keeps zlog live (FinalRelease.props no longer defines
+  # FINAL_RELEASE) so shipped artifacts carry DEBUG_MESSAGE / DEBUG_TRACE
+  # output for field triage.
   final-release:
     needs: smoke-test
     runs-on: windows-2025-vs2026
@@ -71,7 +74,8 @@ jobs:
 
       # deploy_to_releases.ps1 with no -Arch defaults to 'both' and pairs
       # S3DDriver's Final Release output with the proxy's Release output for
-      # both Win32 and x64 in one pass.
+      # both Win32 and x64 in one pass. ZLOg.dll ships with Final Release
+      # since 0.4.0 (zlog is live in that config now).
       - name: Stage releases tree
         run: .\bin\deploy_to_releases.ps1
 

@@ -20,6 +20,20 @@ inline bool CBaseSwapChain::IsSwapEyes()
 	return (GetBaseDevice()->m_Input.SwapEyes != 0);
 }
 
+// Wrapper-internal literal accessors: always return the physical left/right member
+// regardless of IsSwapEyes. Used by sites that move stereo data between internal
+// surfaces (shared-texture pre-copy for shutter paths, mono-image mirror to the
+// secondary monitor, presenter-thread view copy). Those sites should not apply
+// the user's SwapEyes toggle -- the swap belongs on the final output path, not
+// on internal data movement. Previously the single swap-aware accessor was called
+// in both internal copy sites AND the final output methods, so SwapEyes=1 cancelled
+// end-to-end (users saw no swap in SR; WideSwapChain's aliased left==right surface
+// made the SBS variant crash in BAA DX9 x86). See project_dx9_swapeyes.md.
+inline IDirect3DSurface9* CBaseSwapChain::GetLeftBackBufferRT_Literal()  { return m_pLeftBackBuffer;  }
+inline IDirect3DSurface9* CBaseSwapChain::GetRightBackBufferRT_Literal() { return m_pRightBackBuffer; }
+inline RECT*              CBaseSwapChain::GetLeftBackBufferRect_Literal()  { return &m_LeftViewRect;  }
+inline RECT*              CBaseSwapChain::GetRightBackBufferRect_Literal() { return &m_RightViewRect; }
+
 inline IDirect3DSurface9* CBaseSwapChain::GetLeftBackBufferRT()
 {
 	if (!IsStereoActive() || !IsSwapEyes())

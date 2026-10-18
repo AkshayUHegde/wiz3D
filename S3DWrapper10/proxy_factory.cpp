@@ -111,6 +111,43 @@ void WrapD3D11DeviceAndContext(void** ppDeviceInOut, void** ppContextInOut)
     if (!ppDeviceInOut || !*ppDeviceInOut) return;
 
     auto* realDevice  = static_cast<ID3D11Device*>(*ppDeviceInOut);
+
+    // Cache hit: the real device is already wrapped. Return the existing
+    // proxy with +1 AddRef and drop the duplicate real-device ref this
+    // call brought in. Keeps shader fingerprint / overlay / RTV state
+    // unified across the game's redundant D3D11CreateDevice calls (FC3
+    // Dunia 2 does this 4x per level load, same real device each time).
+    if (Device11Proxy* cached = FindAndAddRefDeviceByReal(realDevice))
+    {
+        realDevice->Release();
+        DDILog("WrapD3D11DeviceAndContext: realDevice=%p -> reusing wiz3d::Device11Proxy=%p (cache hit)\n",
+               realDevice, cached);
+        if (ppContextInOut && *ppContextInOut)
+        {
+            auto* realCtx = static_cast<ID3D11DeviceContext*>(*ppContextInOut);
+            Context11Proxy* ctxProxy = cached->GetContextProxy();
+            if (ctxProxy && ctxProxy->GetReal() == realCtx)
+            {
+                ctxProxy->AddRef();
+                realCtx->Release();   // duplicate ref from the paired CreateDevice
+                *ppContextInOut = static_cast<ID3D11DeviceContext*>(ctxProxy);
+                DDILog("WrapD3D11DeviceAndContext: realCtx=%p -> reusing wiz3d::Context11Proxy=%p\n",
+                       realCtx, ctxProxy);
+            }
+            else
+            {
+                // Different real context (rare: game passed its own device at
+                // another wrap entry). Wrap it against the cached device.
+                auto* newCtx = new Context11Proxy(realCtx, cached);
+                *ppContextInOut = static_cast<ID3D11DeviceContext*>(newCtx);
+                DDILog("WrapD3D11DeviceAndContext: realCtx=%p (fresh) -> wiz3d::Context11Proxy=%p\n",
+                       realCtx, newCtx);
+            }
+        }
+        *ppDeviceInOut = static_cast<ID3D11Device*>(cached);
+        return;
+    }
+
     auto* deviceProxy = new Device11Proxy(realDevice);
     DDILog("WrapD3D11DeviceAndContext: realDevice=%p -> wiz3d::Device11Proxy=%p\n",
            realDevice, deviceProxy);

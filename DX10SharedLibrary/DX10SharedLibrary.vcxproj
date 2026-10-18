@@ -256,6 +256,7 @@
     <ClCompile Include="..\S3DWrapper10\Texture1D11Proxy.cpp" />
     <ClCompile Include="..\S3DWrapper10\Texture3D11Proxy.cpp" />
     <ClCompile Include="..\S3DWrapper10\ShaderAnalyzer11.cpp" />
+    <ClCompile Include="..\S3DWrapper10\ShaderModifier11.cpp" />
     <ClCompile Include="..\S3DWrapper10\Device10Proxy.cpp" />
     <ClCompile Include="..\S3DWrapper10\Texture2D10Proxy.cpp" />
     <ClCompile Include="..\S3DWrapper10\RTV10Proxy.cpp" />

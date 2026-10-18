@@ -50,6 +50,7 @@ bool KeyboardHook::IsKeyWorkInMono(EventId id)
 	case TOGGLE_STEREO:
 	case TOGGLE_FPS:
 	case TOGGLE_HOTKEY:
+	case TOGGLE_SHOW_OSD:
 	case INCREASE_PRESENTER_SLEEP_TIME:
 	case DECREASE_PRESENTER_SLEEP_TIME:
 #ifndef FINAL_RELEASE
@@ -227,6 +228,18 @@ void KeyboardHook::KeyboardProcedure()
 					break;
 				case TOGGLE_HOTKEY:
 					gInfo.Input.ShowHotKeyOSD = !gInfo.Input.ShowHotKeyOSD;
+					break;
+				case TOGGLE_SHOW_OSD:
+					// Flip between popup-only (1) and always-on (2). Mode 0
+					// ("fully off; no popup either") is an explicit config
+					// choice and isn't visited by the hotkey -- a user who
+					// wants popups when stereo settings change (the "symbols
+					// show up on mode change" affordance) keeps getting them
+					// whichever side of the flip they're on. FPS tracks the
+					// strip in sync so Ctrl+F1 is a single on-everything /
+					// off-everything master.
+					gInfo.ShowOSD = (gInfo.ShowOSD >= 2) ? 1 : 2;
+					gInfo.Input.ShowFPS = (gInfo.ShowOSD >= 2) ? 1 : 0;
 					break;
 #ifndef FINAL_RELEASE
 				case INCREASE_ZNEAR:

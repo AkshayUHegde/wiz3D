@@ -79,5 +79,6 @@ foreach ($r in $rows) {
         [void]$cpp.AppendLine("extern `"C`" int $undec(void) { return 0; }")
     }
 }
-[System.IO.File]::WriteAllText((Join-Path $OutDir "eos_stubs.generated.cpp"), $cpp.ToString())
-Write-Host "Wrote $defName and eos_stubs.generated.cpp to $OutDir"
+$cppName = if ($isX86) { "eos_stubs_x86.generated.cpp" } else { "eos_stubs_x64.generated.cpp" }
+[System.IO.File]::WriteAllText((Join-Path $OutDir $cppName), $cpp.ToString())
+Write-Host "Wrote $defName and $cppName to $OutDir"

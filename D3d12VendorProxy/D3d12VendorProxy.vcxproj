@@ -262,13 +262,15 @@
       <SubSystem>Windows</SubSystem>
     </Link>
   </ItemDefinitionGroup>
-  <!-- Final Release|x64 -->
+  <!-- Final Release|x64 — HD3D build (shipping config, matches D3d11VendorProxy
+       pattern: BLOCK_NVAPI_STEREO on Final Release so build_and_deploy.ps1's
+       Final Release pass produces the HD3D d3d12.dll in the shared bin folder). -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Final Release|x64'">
     <Midl>
       <TargetEnvironment>X64</TargetEnvironment>
     </Midl>
     <ClCompile>
-      <PreprocessorDefinitions>WIN64;NDEBUG;_WINDOWS;_USRDLL;FINAL_RELEASE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN64;NDEBUG;_WINDOWS;_USRDLL;FINAL_RELEASE;BLOCK_NVAPI_STEREO;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <Link>

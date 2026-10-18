@@ -30,6 +30,11 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")   // Reg*ExW for NativeProfile registry mirror
 #include "..\..\Shared\version.h"
+// d3d9.h is included for the Spoof_D3D9_StretchRectEx fallback hook; the
+// function takes IDirect3DDevice9/IDirect3DResource9 pointers from the
+// game and may forward to IDirect3DDevice9::StretchRect when no reverse-
+// blit SBS composition is available.
+#include <d3d9.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +58,8 @@ typedef void*              NvDisplayHandle;
 #define NVAPI_ERROR                 -1
 #define NVAPI_END_ENUMERATION       -7
 #define NVAPI_NOT_SUPPORTED       -104
+#define NVAPI_INVALID_ARGUMENT      -5
+#define NVAPI_D3D_DEVICE_INVALID   -10
 
 #define NVAPI_SHORT_STRING_MAX     64
 #define NVAPI_MAX_PHYSICAL_GPUS    64
@@ -407,6 +414,13 @@ struct Wiz3DBridge
     void  (__cdecl* StepSeparation)(int);
     void  (__cdecl* StepConvergence)(int);
     int   (__cdecl* HasProfileEntry)();
+    // Reverse-blit SBS: when NvAPI_Stereo_ReverseStereoBlitControl is ON, the
+    // DX9 wrapper exposes its stereo pair to NvApiProxy's Spoof_D3D9_StretchRectEx
+    // so the game's 2W x H dst gets left+right packed side-by-side. Returns
+    // S_OK if the composition landed (src was a known wrapped stereo surface),
+    // or an HRESULT < 0 to say "fall back to a normal single-stretch".
+    HRESULT (__cdecl* StretchRectExSBS)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*,
+                                        IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE);
 };
 static Wiz3DBridge g_Wiz3D = {};
 static HMODULE     g_Wiz3DModule = nullptr;
@@ -420,6 +434,32 @@ static HMODULE     g_Wiz3DModule = nullptr;
 static bool g_gameHasReadSeparation = false;
 static bool g_gameHasReadConvergence = false;
 static bool g_gameHasReadActive = false;
+
+// 3D Vision Automatic readback toggle. When on, a subsequent
+// NvAPI_D3D9_StretchRectEx(stereoSrc -> dst) packs BOTH eyes into dst as a
+// 2W x H side-by-side blit (left half = left eye, right half = right eye)
+// instead of just copying the left eye. Used by EGO engine (DIRT / GRID /
+// Dirt Rally / F1), Oil Rush and a handful of other 3D Vision-era titles
+// that read the right eye back for a post-processing or mirror effect.
+// Without honouring the toggle those games see garbage/left-copy in the
+// right-eye half, which collapses their stereo compositing to a flat
+// double-image regardless of what wiz3D itself produces downstream.
+// Set/cleared by Spoof_Stereo_ReverseStereoBlitControl; read by
+// Spoof_D3D9_StretchRectEx. Declared here (above both consumers) so the
+// StretchRectEx body compiles even though it precedes the ReverseStereoBlit
+// setter in source order.
+static volatile LONG s_reverseStereoBlit = 0;   // 0 = off, non-zero = on.
+
+// 3D Vision Automatic-mode hint. Flips to 1 the first time a game toggles
+// Stereo_ReverseStereoBlitControl in either direction -- the toggle only
+// exists in Automatic mode (Direct-mode games render both eyes themselves
+// and have no need for the driver's readback hack). Also lifts on the
+// first NvAPI_D3D9_StretchRectEx call. The DX9/DX11 wrappers can read this
+// via Wiz3D_NvApi_GetAutoModeHint() to disambiguate "which 3D Vision mode
+// is this game using?" at diagnostic time -- useful for the stereo_scanner
+// tool (task #25) and for the OSD to say "Automatic mode game detected"
+// so the user knows wiz3D isn't the one rendering both eyes.
+static volatile LONG s_autoModeHint = 0;
 
 // Decide whether to apply this Set to wiz3D state. Logic:
 //   has_profile && !user_engaged → ignore (profile wins)
@@ -475,6 +515,9 @@ static bool ResolveWiz3DBridge()
         g_Wiz3D.StepSeparation       = (void  (__cdecl*)(int))GetProcAddress(m, "Wiz3D_StepSeparation");
         g_Wiz3D.StepConvergence      = (void  (__cdecl*)(int))GetProcAddress(m, "Wiz3D_StepConvergence");
         g_Wiz3D.HasProfileEntry      = (int   (__cdecl*)())   GetProcAddress(m, "Wiz3D_HasProfileEntry");
+        g_Wiz3D.StretchRectExSBS     = (HRESULT (__cdecl*)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*,
+                                                           IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE))
+                                       GetProcAddress(m, "Wiz3D_StretchRectExSBS");
         g_Wiz3DModule = m;
     }
     return g_Wiz3D.GetSeparationPercent != nullptr;
@@ -738,6 +781,101 @@ NVAPI_INTERFACE Spoof_D3D11_SetDepthBoundsTest(void* /*pDevice*/, NvU32 /*bEnabl
 {
     NVAPI_TRACE_FIRST("D3D11_SetDepthBoundsTest");
     return NVAPI_OK;
+}
+
+// NvAPI_D3D9_StretchRectEx: NVAPI's extended StretchRect, originally added
+// to let 3D-Vision-Automatic games read the right-eye half of a stereo
+// surface. The behaviour is modulated by Stereo_ReverseStereoBlitControl:
+//   OFF: single-eye stretch (left eye only), same as a plain
+//        IDirect3DDevice9::StretchRect would do.
+//   ON:  the destination is 2W x H and the driver packs both eyes side-by-side.
+//
+// On non-NVIDIA systems (or modern NVIDIA drivers post-3D-Vision), the real
+// function is missing. The default dispatch used to answer with
+// Spoof_OkNoOp, which "succeeded" without touching the destination -- so
+// games (EGO engine: DIRT / GRID / Dirt Rally / F1, Oil Rush) that rely on
+// this blit to feed their stereo post-processing saw garbage/stale pixels
+// on the right-eye half and their output looked flat.
+//
+// This spoof:
+//  * ALWAYS at minimum forwards to the real IDirect3DDevice9::StretchRect
+//    so the dst gets at least the left-eye content (no stale read).
+//  * When reverse-blit is ON AND the wiz3D DX9 wrapper is loaded AND the
+//    source surface is a known wiz3D-wrapped stereo back buffer, calls the
+//    Wiz3D_StretchRectExSBS bridge to compose the full 2W x H SBS result.
+//    If the bridge isn't available (wrapper not loaded or source surface
+//    not stereo-tracked), the single-eye stretch is still applied.
+//
+// Resource -> Surface conversion: NvAPI's signature takes IDirect3DResource9
+// (surfaces, textures, cube faces all qualify). Textures expose QI to
+// IDirect3DTexture9 then GetSurfaceLevel(0, ...). For 3D Vision-era back
+// buffer reads the resources are already surfaces, so the fast path handles
+// that; textures take a slower branch.
+static HRESULT ResolveToSurface(IDirect3DResource9* res, IDirect3DSurface9** out)
+{
+    if (!res || !out) return E_POINTER;
+    *out = nullptr;
+    // Direct surface case (most common for back-buffer reads).
+    IDirect3DSurface9* surf = nullptr;
+    if (SUCCEEDED(res->QueryInterface(__uuidof(IDirect3DSurface9), (void**)&surf)) && surf)
+    {
+        *out = surf;  // caller releases
+        return S_OK;
+    }
+    // Texture case: level 0 is the surface the stretch targets.
+    IDirect3DTexture9* tex = nullptr;
+    if (SUCCEEDED(res->QueryInterface(__uuidof(IDirect3DTexture9), (void**)&tex)) && tex)
+    {
+        HRESULT hr = tex->GetSurfaceLevel(0, out);
+        tex->Release();
+        return hr;
+    }
+    return E_NOINTERFACE;
+}
+
+NVAPI_INTERFACE Spoof_D3D9_StretchRectEx(IDirect3DDevice9*   pDevice,
+                                         IDirect3DResource9* pSrcResource,
+                                         const RECT*         pSrcRect,
+                                         IDirect3DResource9* pDstResource,
+                                         const RECT*         pDstRect,
+                                         D3DTEXTUREFILTERTYPE Filter)
+{
+    InterlockedExchange(&s_autoModeHint, 1);   // StretchRectEx is Automatic-mode territory
+    NVAPI_TRACE_FIRST_N("D3D9_StretchRectEx", 8, "reverseBlit=%d",
+                        (int)InterlockedCompareExchange(&s_reverseStereoBlit, 0, 0));
+    if (!pDevice || !pSrcResource || !pDstResource) return NVAPI_INVALID_ARGUMENT;
+
+    IDirect3DSurface9* srcSurf = nullptr;
+    IDirect3DSurface9* dstSurf = nullptr;
+    HRESULT hr = ResolveToSurface(pSrcResource, &srcSurf);
+    if (SUCCEEDED(hr)) hr = ResolveToSurface(pDstResource, &dstSurf);
+    if (FAILED(hr))
+    {
+        if (srcSurf) srcSurf->Release();
+        if (dstSurf) dstSurf->Release();
+        return NVAPI_INVALID_ARGUMENT;
+    }
+
+    const bool reverseOn = InterlockedCompareExchange(&s_reverseStereoBlit, 0, 0) != 0;
+    HRESULT blitHr = E_FAIL;
+    if (reverseOn && ResolveWiz3DBridge() && g_Wiz3D.StretchRectExSBS)
+    {
+        // Preferred path: the DX9 wrapper composes left+right into the dst
+        // 2W x H surface from its own stereo pair. Returns < 0 to say
+        // "src wasn't a tracked stereo surface, do the single-eye fallback".
+        blitHr = g_Wiz3D.StretchRectExSBS(pDevice, srcSurf, pSrcRect, dstSurf, pDstRect, Filter);
+    }
+    if (FAILED(blitHr))
+    {
+        // Fallback: plain single-eye stretch. Not stereo-correct for the
+        // reverseOn case, but guaranteed to not leave the dst unmodified
+        // (which was the previous Spoof_OkNoOp failure mode).
+        blitHr = pDevice->StretchRect(srcSurf, pSrcRect, dstSurf, pDstRect, Filter);
+    }
+
+    srcSurf->Release();
+    dstSurf->Release();
+    return SUCCEEDED(blitHr) ? NVAPI_OK : NVAPI_D3D_DEVICE_INVALID;
 }
 
 // --- stereo -----------------------------------------------------------------
@@ -1163,15 +1301,11 @@ NVAPI_INTERFACE Spoof_Stereo_InitActivation(StereoHandle, NvU8 /*enable*/)      
 NVAPI_INTERFACE Spoof_Stereo_Trigger_Activation(StereoHandle)                     { NVAPI_TRACE_FIRST("Stereo_Trigger_Activation");    return NVAPI_OK; }
 NVAPI_INTERFACE Spoof_Stereo_ReverseStereoBlitControl(StereoHandle, NvU8 on)
 {
-    // Log EVERY call with value — this NvAPI + NvAPI_D3D9_StretchRectEx is
-    // the classic "reverse blit" pattern for extracting the right-eye half
-    // of a stereo surface. If Oil Rush toggles this on-off around a
-    // StretchRect, we've found its per-eye mechanism.
+    InterlockedExchange(&s_reverseStereoBlit, on ? 1 : 0);
+    InterlockedExchange(&s_autoModeHint, 1);   // only Automatic-mode games call this
     NVAPI_TRACE_FIRST_N("Stereo_ReverseStereoBlitControl", 32, "on=%d", (int)on);
-    // Also value-log under TraceStereoValues so the toggle pattern surfaces
-    // in the DIRT / GRID / F1 investigation trace.
     NVAPI_TRACE_VALUE_FIRST_N("Stereo_ReverseStereoBlitControl", 32,
-        "on=%d (READ semantic: when on, StretchRect(stereo→dest) produces 2W×H SBS)",
+        "on=%d (READ semantic: when on, StretchRect(stereo->dest) produces 2WxH SBS)",
         (int)on);
     return NVAPI_OK;
 }
@@ -1320,6 +1454,7 @@ static bool IsStereoFunctionId(NvU32 id)
     case 0xC7177702: // Stereo_InitActivation
     case 0x0D6C6CD2: // Stereo_Trigger_Activation
     case 0x3CD58F89: // Stereo_ReverseStereoBlitControl
+    case 0x22DE03AA: // D3D9_StretchRectEx (companion to ReverseStereoBlitControl)
     case 0x6B9B409E: // Stereo_SetNotificationMessage
     case 0x96EEA9F8: // Stereo_SetActiveEye
     case 0x5E8F0BEC: // Stereo_SetDriverMode
@@ -1404,6 +1539,7 @@ static const NvApiIdName g_idNames[] = {
     { 0x2DDFB66E, "NvAPI_GPU_GetPCIIdentifiers" },
     { 0xC7026A87, "NvAPI_GPU_GetGpuCoreCount" },
     { 0x7AAF7A04, "NvAPI_D3D11_SetDepthBoundsTest" },
+    { 0x22DE03AA, "NvAPI_D3D9_StretchRectEx" },
     // stereo — public
     { 0x239C4545, "NvAPI_Stereo_Enable" },
     { 0x2EC50C2B, "NvAPI_Stereo_Disable" },
@@ -1619,6 +1755,15 @@ extern "C" __declspec(dllexport) void* __cdecl nvapi_QueryInterface(NvU32 id)
         case 0x2DDFB66E: return (void*)&Spoof_GPU_GetPCIIdentifiers;
         case 0xC7026A87: return (void*)&Spoof_GPU_GetGpuCoreCount;       // MP3, EGO games, Hitman
         case 0x7AAF7A04: return (void*)&Spoof_D3D11_SetDepthBoundsTest;  // TR 2013, Hitman
+        // NvAPI_D3D9_StretchRectEx: 3D Vision Automatic readback. Canonical ID
+        // 0x22DE03AA (NVAPI SDK r340-r425); may differ in game-shipped headers.
+        // The default dispatch would otherwise return Spoof_OkNoOp here, which
+        // succeeded without touching the destination -- EGO engine (DIRT /
+        // GRID / Dirt Rally / F1) and Oil Rush rely on this blit so their
+        // stereo post-processing goes flat without the hook. See
+        // Spoof_D3D9_StretchRectEx body for the Stereo_ReverseStereoBlitControl
+        // interaction and the single-eye fallback.
+        case 0x22DE03AA: return (void*)&Spoof_D3D9_StretchRectEx;        // DIRT / GRID / Dirt Rally / F1 / Oil Rush
 
         // stereo
         case 0x239C4545: return (void*)&Spoof_Stereo_Enable;
@@ -1673,9 +1818,20 @@ extern "C" __declspec(dllexport) void* __cdecl nvapi_QueryInterface(NvU32 id)
             // zero), which can cause subtle issues if the game depends on
             // populated outputs. Tradeoff worth taking — better to ship and
             // identify specific blockers than ship-block on every unknown.
-            char buf[80];
+            // Flag unknown IDs looked up WHILE reverse-blit is on. Those are
+            // our prime candidate for a shipped-header NvAPI_D3D9_StretchRectEx
+            // whose hex ID differs from the canonical 0x22DE03AA we dispatch
+            // for -- if the user runs an EGO engine game (DIRT / GRID / F1 /
+            // Dirt Rally) and sees a "unknown id=0xNNNNNNNN called while
+            // reverseBlit=ON" line, that hex is the ID to add to this
+            // dispatch so Spoof_D3D9_StretchRectEx takes over for it.
+            const bool reverseOn = InterlockedCompareExchange(&s_reverseStereoBlit, 0, 0) != 0;
+            char buf[128];
             _snprintf_s(buf, sizeof(buf), _TRUNCATE,
-                        "[NvApiProxy] unknown id=0x%08X -> OK (default)\n", id);
+                        reverseOn
+                            ? "[NvApiProxy] unknown id=0x%08X -> OK (default) [called while reverseBlit=ON -- likely StretchRectEx]\n"
+                            : "[NvApiProxy] unknown id=0x%08X -> OK (default)\n",
+                        id);
             WriteLog(buf);
             return (void*)&Spoof_OkNoOp;
         }
@@ -1705,6 +1861,27 @@ extern "C" __declspec(dllexport) void* __cdecl NvAPI_QueryInterface(NvU32 id)
 extern "C" __declspec(dllexport) int __cdecl Wiz3D_GetActiveEye()
 {
     return (int)g_Stereo.activeEye;
+}
+
+// ReverseStereoBlit toggle (NvAPI_Stereo_ReverseStereoBlitControl state).
+// Non-zero means a StretchRectEx is expected to pack SBS; 0 means plain
+// single-eye. Consumed by S3DWrapperD3D9's Wiz3D_StretchRectExSBS bridge
+// if someone later teaches it to peek this directly, but the primary
+// consumer today is Spoof_D3D9_StretchRectEx inside this DLL.
+extern "C" __declspec(dllexport) int __cdecl Wiz3D_NvApi_GetReverseStereoBlit()
+{
+    return (int)InterlockedCompareExchange(&s_reverseStereoBlit, 0, 0);
+}
+
+// Auto-mode hint: 1 once the game has shown a signature of 3D Vision
+// Automatic use (toggled ReverseStereoBlitControl, or called
+// NvAPI_D3D9_StretchRectEx). Sticky -- never clears. Useful for the OSD
+// to say "Automatic-mode game detected" and for diagnostic tools (the
+// stereo_scanner.py in task #25) to distinguish Automatic from Direct
+// without the game having to explicitly tell us which mode it is.
+extern "C" __declspec(dllexport) int __cdecl Wiz3D_NvApi_GetAutoModeHint()
+{
+    return (int)InterlockedCompareExchange(&s_autoModeHint, 0, 0);
 }
 
 // ============================================================

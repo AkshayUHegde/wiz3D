@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include <d3d9.h>
+
 extern "C"
 {
 	// Lifetime: called by CBaseStereoRenderer ctor / dtor so the bridge knows
@@ -49,4 +51,15 @@ extern "C"
 	// profile exists → ignore until user-initiated, detected via "did the
 	// game call Get first?").
 	__declspec(dllexport) int   __cdecl Wiz3D_HasProfileEntry();
+
+	// NvAPI_D3D9_StretchRectEx reverse-blit bridge. Called by NvApiProxy's
+	// Spoof_D3D9_StretchRectEx when the game toggled ReverseStereoBlitControl
+	// ON; the wrapper is expected to pack both eyes into dst as SBS. Returns
+	// E_NOTIMPL (0x80004001) to say "fall back to single-eye stretch" if the
+	// full composition isn't wired yet, otherwise the HRESULT of the compose.
+	__declspec(dllexport) HRESULT __cdecl Wiz3D_StretchRectExSBS(
+		IDirect3DDevice9* pDevice,
+		IDirect3DSurface9* pSrc, const RECT* pSrcRect,
+		IDirect3DSurface9* pDst, const RECT* pDstRect,
+		D3DTEXTUREFILTERTYPE filter);
 }

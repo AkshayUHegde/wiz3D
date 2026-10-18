@@ -146,6 +146,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="S3DWrapperD3D12.cpp" />
+    <ClCompile Include="Dx12StereoChain.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Dx12StereoChain.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="S3DWrapperD3D12.def" />

@@ -110,7 +110,15 @@ IDR_FILE2               FILE                    "SegoiUI.fnt"
 #endif    // English resources
 /////////////////////////////////////////////////////////////////////////////
 
-
+/////////////////////////////////////////////////////////////////////////////
+//
+// Inter font TTFs (SIL Open Font License 1.1). Embedded as RT_RCDATA so
+// OSDRenderer9 can register them via AddFontMemResourceEx without a Fonts/
+// folder on disk. See S3DWrapper10/app.rc for the sibling DX11 copy.
+INTER_REGULAR   RCDATA  "..\\Shared\\Fonts\\Inter-Regular.ttf"
+INTER_SEMIBOLD  RCDATA  "..\\Shared\\Fonts\\Inter-SemiBold.ttf"
+INTER_BOLD      RCDATA  "..\\Shared\\Fonts\\Inter-Bold.ttf"
+INTER_OFL       RCDATA  "..\\Shared\\Fonts\\OFL.txt"
 
 #ifndef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////

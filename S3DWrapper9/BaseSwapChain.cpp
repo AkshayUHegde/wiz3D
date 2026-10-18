@@ -757,13 +757,17 @@ void CBaseSwapChain::SendImageToPresenter()
 	// get the surfaces and copy the data
 	// TODO: change shared Textures to shared Surfaces
 	CComPtr<IDirect3DSurface9>	pSurfaceLeft;
-	NSCALL(m_pSharedTexture[ IndexLeft  ]->GetSurfaceLevel( 0, &pSurfaceLeft  ));	
-	NSCALL(GetD3D9Device().StretchRect( GetLeftBackBufferRT(),  GetLeftBackBufferRect(), 
+	NSCALL(m_pSharedTexture[ IndexLeft  ]->GetSurfaceLevel( 0, &pSurfaceLeft  ));
+	// Literal: shared-texture pre-copy is internal data movement, not user output.
+	// Applying IsSwapEyes here would cancel against the swap-aware accessor the
+	// output method also uses, so SwapEyes toggled visibly nothing (SR) and
+	// crashed WideSwapChain (SBS). project_dx9_swapeyes.md.
+	NSCALL(GetD3D9Device().StretchRect( GetLeftBackBufferRT_Literal(),  GetLeftBackBufferRect_Literal(),
 		pSurfaceLeft,  NULL, D3DTEXF_NONE ));
 
 	CComPtr<IDirect3DSurface9>	pSurfaceRight;
 	NSCALL(m_pSharedTexture[ IndexRight ]->GetSurfaceLevel( 0, &pSurfaceRight ));
-	NSCALL(GetD3D9Device().StretchRect( GetRightBackBufferRT(), GetRightBackBufferRect(), 
+	NSCALL(GetD3D9Device().StretchRect( GetRightBackBufferRT_Literal(), GetRightBackBufferRect_Literal(),
 		pSurfaceRight, NULL, D3DTEXF_NONE ));
 
 	if (USE_MULTI_DEVICE_PRESENTER)
@@ -1468,7 +1472,9 @@ HRESULT CBaseSwapChain::PresentData( )
 	}
 	if (GetBaseDevice()->m_bDrawMonoImageOnSecondMonitor)
 	{
-		NSCALL(GetD3D9Device().StretchRect(GetLeftBackBufferRT(), GetLeftBackBufferRect(), 
+		// Literal: the mono-image mirror to the secondary monitor is internal
+		// data movement, same reasoning as the shared-texture pre-copy above.
+		NSCALL(GetD3D9Device().StretchRect(GetLeftBackBufferRT_Literal(), GetLeftBackBufferRect_Literal(),
 			m_pSecondaryBackBuffer, 0, D3DTEXF_NONE));
 	}
 #ifndef FINAL_RELEASE

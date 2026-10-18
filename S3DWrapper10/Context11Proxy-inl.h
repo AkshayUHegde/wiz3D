@@ -132,6 +132,13 @@ extern wiz3d::StereoMatrixState s_mat;
 void  ClearBlockTargets();   // the per-frame union of ring block targets (SyncBoundConstants)
 DWORD BoundShaderCRC(Device11Proxy* parent, void* shader);
 float ProfileShaderMultiplier(Device11Proxy* parent, void* vs);
+// Per-shader ConvergenceShift from the active profile (<VertexShader CRC=... ConvergenceShift="...">).
+// Returns 0 when no profile entry applies, matching DX9's m_CurrentConvergenceShift reset default.
+float ProfileShaderConvergenceShift(Device11Proxy* parent, void* vs);
+// Effective per-shader convergence in world units. Mirrors DX9's inline matrix shift
+// (BaseStereoRenderer-inl.h:47 / 109 / 165): new_conv = 1 / (1/ZPS + shift). Returns the global
+// StereoConvergence() when shift==0.
+float ResolveShaderConvergence(Device11Proxy* parent, void* vs);
 float EyeShiftB(float eyeShift);
 float StereoConvergence();
 float EyeOffsetM41(float eyeShift);
@@ -139,6 +146,7 @@ bool  ZRowOf(const float* f, bool transposed, float& m22, float& m23);
 bool  CameraFamily(const float* f, bool transposed);
 void  ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
                                 float eyeShift,
+                                float conv,
                                 const std::vector<EyeShiftMatrix>& matrices,
                                 bool fullColumn,
                                 unsigned* outShifted = nullptr,

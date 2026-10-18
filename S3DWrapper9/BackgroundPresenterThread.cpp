@@ -109,13 +109,21 @@ void BackgroundPresenterThreadSCData::RenderBackground()
 	PH_AfterSleep();
 
 	bool bLeft	= (m_FrameCount & 0x01) == 0;
-	NSCALL(GetBackgroundPresenter()->m_pDev9Ex->StretchRect( m_pSharedSurface[ 2 * m_PresentedPairIndex + (bLeft ? 0 : 1) ],  NULL, 
-		m_pBaseSwapChain->GetViewRT(bLeft),  NULL, D3DTEXF_NONE ));
+	// Literal view RT: the presenter copies left-eye content to the physical
+	// left back buffer and right to the physical right, regardless of SwapEyes.
+	// The output method applies the user's SwapEyes toggle on its own read via
+	// the swap-aware accessors -- see project_dx9_swapeyes.md for the double-
+	// apply fix that landed in 0.4.0.
+	IDirect3DSurface9* pLiteralViewRT = bLeft
+		? m_pBaseSwapChain->GetLeftBackBufferRT_Literal()
+		: m_pBaseSwapChain->GetRightBackBufferRT_Literal();
+	NSCALL(GetBackgroundPresenter()->m_pDev9Ex->StretchRect( m_pSharedSurface[ 2 * m_PresentedPairIndex + (bLeft ? 0 : 1) ],  NULL,
+		pLiteralViewRT,  NULL, D3DTEXF_NONE ));
 
 	NSCALL(pStereoRenderer->m_pOutputMethod->Output(bLeft, m_pBaseSwapChain, NULL));
 
 	RECT rect = { 0, 0, 16, 16 };
-	NSCALL(GetBackgroundPresenter()->m_pDev9Ex->StretchRect( m_pBaseSwapChain->GetViewRT(bLeft),  &rect, 
+	NSCALL(GetBackgroundPresenter()->m_pDev9Ex->StretchRect( pLiteralViewRT,  &rect,
 		m_pStagingSurface,  &rect, D3DTEXF_NONE ));
 
 	// Attempt to lock the staging surface to see if the rendering

@@ -231,30 +231,12 @@ static void LoadConfig()
         }
     }
 
-    // Some games crash if the SR runtime DLLs are loaded into their process
-    // (e.g. Tomb Raider 2013 dies during init when SimulatedRealityCore loads).
-    // For those, force the fallback to OM_SBS_HALF here at config time, before
-    // any SR code paths run. New entries can be added as more games are tested.
-    if (g_OutputMode == OM_SR_WEAVE)
-    {
-        wchar_t exePath[MAX_PATH] = {};
-        if (GetModuleFileNameW(nullptr, exePath, MAX_PATH))
-        {
-            for (wchar_t* p = exePath; *p; ++p) *p = towlower(*p);
-            const wchar_t* srBlacklist[] = {
-                L"tombraider.exe",   // TR2013: SR DllMain side-effects crash the game
-            };
-            for (size_t i = 0; i < _countof(srBlacklist); ++i)
-            {
-                if (wcsstr(exePath, srBlacklist[i]))
-                {
-                    WriteLog("[AmdQbProxy] SR-incompatible exe detected; forcing OM_SBS_HALF\n");
-                    g_OutputMode = OM_SBS_HALF;
-                    break;
-                }
-            }
-        }
-    }
+    // SR-incompatible exe blacklist was retired in 0.4.0: TR2013's "SR DllMain
+    // side-effects crash the game" turned out to be an Epic Online Services
+    // overlay loader order problem, solved by the EOSStub (see
+    // AmdQbProxy/HD3D_Troubleshooting_Notes.md and the TR2013 SR entry).
+    // SR Weave now boots cleanly for TR2013 with the stub in place; the
+    // user-reported empty blacklist means we don't need to force fallback.
     // For SR-eligible games, SR DLLs are loaded lazily on first stereo present
     // via the delay-load mechanism — so non-SR systems (Linux/Proton, no Leia
     // runtime) won't load SR DLLs at all if the game never reaches a stereo
@@ -824,6 +806,45 @@ static bool EnsureStagingTexture(UINT W, UINT H, DXGI_FORMAT Fmt)
 static int  g_nStereoMode   = 0;       // 0=unknown, 1=full-height, 2=half-height
 static float g_fUvScl        = 0.5f;   // UV scale (0.5=full, 0.25=half)
 static ID3D11Texture2D* g_pReadbackTex = nullptr;  // 1x1 STAGING for detection
+
+// ============================================================
+// SEH-guarded device swap for AmdDxExtCreate11. Game-side device churn
+// (DXHR / DXHRDC HD3D, 0.4.0 user report 2026-10-18, crash dump at
+// AmdQbProxy.cpp:2755) can leave our raw g_pDevice11 pointer with a freed
+// vtable, so Release/AddRef on the swap path AVs. Extracted into its own
+// helper because __try / __except can't coexist with C++ object unwinding
+// (error C2712); the _Impl body has no local C++ objects, and the SEH
+// wrapper is a plain return. Both at file scope -- outside extern "C" --
+// so __try is legal in the wrapper.
+// ============================================================
+static bool SwapDeviceSafely_Impl(ID3D11Device* pDevice)
+{
+    ReleaseCompositorResources();
+    if (g_pReadbackTex) { g_pReadbackTex->Release(); g_pReadbackTex = nullptr; }
+    g_nStereoMode = 0; g_fUvScl = 0.5f;
+    if (g_pContext)  { g_pContext->Release();  g_pContext  = nullptr; }
+    if (g_pDevice11) { g_pDevice11->Release(); g_pDevice11 = nullptr; }
+    g_pDevice11 = pDevice;
+    g_pDevice11->AddRef();
+    g_pDevice11->GetImmediateContext(&g_pContext);
+    return true;
+}
+
+static bool SwapDeviceSafely(ID3D11Device* pDevice)
+{
+    __try
+    {
+        return SwapDeviceSafely_Impl(pDevice);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        g_pReadbackTex = nullptr;
+        g_pContext     = nullptr;
+        g_pDevice11    = nullptr;
+        return false;
+    }
+}
+
 // Per-game overrides: some game executables deliberately render stereo in a
 // non-standard way that confuses our auto-detection.  Allow forcing full-height
 // mode for known titles (Sniper Elite series) to avoid regressions.
@@ -2764,15 +2785,10 @@ extern "C"
         else if (g_pDevice11 != pDevice)
         {
             WriteLog("[AmdQbProxy]   new device, releasing old\n");
-            ReleaseCompositorResources();
-            if (g_pReadbackTex) { g_pReadbackTex->Release(); g_pReadbackTex = nullptr; }
-            g_nStereoMode = 0; g_fUvScl = 0.5f;
-            if (g_pContext)  { g_pContext->Release();  g_pContext  = nullptr; }
-            if (g_pDevice11) { g_pDevice11->Release(); g_pDevice11 = nullptr; }
-            g_pDevice11 = pDevice;
-            g_pDevice11->AddRef();
-            g_pDevice11->GetImmediateContext(&g_pContext);
-            WriteLog("[AmdQbProxy]   device stored OK\n");
+            if (!SwapDeviceSafely(pDevice))
+                WriteLog("[AmdQbProxy]   SEH-caught AV during device swap -- game-side churn left a stale pointer\n");
+            else
+                WriteLog("[AmdQbProxy]   device stored OK\n");
         }
 
         *ppExt = new (std::nothrow) FakeAmdDxExt();

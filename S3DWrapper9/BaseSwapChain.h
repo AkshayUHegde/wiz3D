@@ -179,6 +179,13 @@ public:
 	IDirect3DTexture9* GetRightDepthStencilTex();
 	RECT* GetRightBackBufferRect();
 
+	// Literal variants that ignore IsSwapEyes, for wrapper-internal data movement.
+	// See BaseSwapChain-inl.h / project_dx9_swapeyes.md for the double-apply fix rationale.
+	IDirect3DSurface9* GetLeftBackBufferRT_Literal();
+	IDirect3DSurface9* GetRightBackBufferRT_Literal();
+	RECT* GetLeftBackBufferRect_Literal();
+	RECT* GetRightBackBufferRect_Literal();
+
 	IDirect3DSurface9*	GetViewRT(bool bLeft);
 	RECT*				GetViewRect(bool bLeft);
 	IDirect3DSurface9*	GetPresenterBackBuffer();

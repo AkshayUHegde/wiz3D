@@ -91,7 +91,9 @@ private:
     GDIFont m_fontHelp;
     GDIFont m_fontHelpBody;
     const wchar_t* m_fontFace = L"Arial";
-    wchar_t m_interPaths[3][MAX_PATH] = {};
+    // 0.4.0+: Inter TTFs embedded as RT_RCDATA in S3DWrapperD3D9.dll;
+    // AddFontMemResourceEx returns opaque handles for RemoveFontMemResourceEx.
+    HANDLE  m_interMemHandles[3] = {};
     int     m_interLoadedCount = 0;
 
     TexSlot m_slots[(int)Slot::_Count];

@@ -68,6 +68,23 @@ static Device11Proxy* FindDeviceByReal(ID3D11Device* real)
     return it == s_realToDevice.end() ? nullptr : it->second;
 }
 
+// FC3 (Dunia 2) calls D3D11CreateDevice 4x during level load and gets the same
+// real ID3D11Device each time (+1 ref each call). Each wrap under the old path
+// created a fresh Device11Proxy with its own shader-fingerprint / overlay / RTV
+// state, so a shader created through proxy A then used through proxy B's
+// context fingerprint-missed. Return the cached proxy with +1 AddRef and drop
+// the duplicate real-device ref; the lock keeps a concurrent dtor from
+// erasing the entry mid-lookup.
+Device11Proxy* FindAndAddRefDeviceByReal(ID3D11Device* real)
+{
+    std::lock_guard<std::mutex> g(s_realDevLock);
+    auto it = s_realToDevice.find(real);
+    if (it == s_realToDevice.end()) return nullptr;
+    Device11Proxy* p = it->second;
+    p->AddRef();
+    return p;
+}
+
 typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext)(ID3D11Device*, ID3D11DeviceContext**);
 typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext1)(ID3D11Device1*, ID3D11DeviceContext1**);
 typedef void (STDMETHODCALLTYPE* PFN_GetImmediateContext2)(ID3D11Device2*, ID3D11DeviceContext2**);
@@ -176,6 +193,7 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
     InitializeCriticalSection(&m_rtvSetLock);
     InitializeCriticalSection(&m_dxgiCacheLock);
     InitializeCriticalSection(&m_shaderProjLock);
+    InitializeCriticalSection(&m_modifiedVSLock);
     InitializeCriticalSection(&m_realToProxyLock);
     InitializeCriticalSection(&m_recycleLock);
     // Cache Device1/2/3 upgrades. QI failures leave the pointer null; we
@@ -245,13 +263,35 @@ Device11Proxy::~Device11Proxy()
         m_dxgiDeviceProxy->Release();
         m_dxgiDeviceProxy = nullptr;
     }
-    if (m_ctxProxy) { Context11Proxy* c = m_ctxProxy; m_ctxProxy = nullptr; c->Release(); }
+    if (m_ctxProxy)
+    {
+        Context11Proxy* c = m_ctxProxy;
+        m_ctxProxy = nullptr;
+        // Clear the context's back-pointer BEFORE Release, so if this
+        // Release doesn't drop the last ref (game still holds one, over-ref
+        // scenario), the eventual ~Context11Proxy won't dereference our
+        // freed memory in OnContextProxyDestroyed. See the symmetric
+        // over-release fix below.
+        c->DetachFromParent();
+        c->Release();
+    }
     if (m_real3) { m_real3->Release(); m_real3 = nullptr; }
     if (m_real2) { m_real2->Release(); m_real2 = nullptr; }
     if (m_real1) { m_real1->Release(); m_real1 = nullptr; }
+    // Release the modified-VS siblings we created in Phase 1. Game's own
+    // VSs lifetime is managed by the game via Release on the original
+    // handles; our modified siblings are our own refs.
+    {
+        EnterCriticalSection(&m_modifiedVSLock);
+        for (auto& kv : m_modifiedVS)
+            if (kv.second.vs) kv.second.vs->Release();
+        m_modifiedVS.clear();
+        LeaveCriticalSection(&m_modifiedVSLock);
+    }
     DeleteCriticalSection(&m_rtvSetLock);
     DeleteCriticalSection(&m_dxgiCacheLock);
     DeleteCriticalSection(&m_shaderProjLock);
+    DeleteCriticalSection(&m_modifiedVSLock);
     DeleteCriticalSection(&m_realToProxyLock);
     for (const RecycledRight& r : m_rightRecycle) r.tex->Release();
     m_rightRecycle.clear();
@@ -370,6 +410,30 @@ const ShaderAnalysis11Result* Device11Proxy::LookupShaderProjection(void* shader
     return p;
 }
 
+void Device11Proxy::StoreModifiedVS(ID3D11VertexShader* orig, const wiz3d::ModifiedVS11& mod)
+{
+    if (!orig || !mod.vs) return;
+    EnterCriticalSection(&m_modifiedVSLock);
+    // Overwriting an existing entry would leak the previous modified sibling;
+    // Release it first. Shader-pointer reuse by the game is rare but legal.
+    auto existing = m_modifiedVS.find(orig);
+    if (existing != m_modifiedVS.end() && existing->second.vs)
+        existing->second.vs->Release();
+    m_modifiedVS[orig] = mod;
+    LeaveCriticalSection(&m_modifiedVSLock);
+}
+
+const wiz3d::ModifiedVS11* Device11Proxy::LookupModifiedVS(ID3D11VertexShader* orig) const
+{
+    if (!orig) return nullptr;
+    auto* self = const_cast<Device11Proxy*>(this);
+    EnterCriticalSection(&self->m_modifiedVSLock);
+    auto it = m_modifiedVS.find(orig);
+    const wiz3d::ModifiedVS11* p = (it == m_modifiedVS.end()) ? nullptr : &it->second;
+    LeaveCriticalSection(&self->m_modifiedVSLock);
+    return p;
+}
+
 namespace {
 
 template<typename TShader, typename CreateFn>
@@ -425,6 +489,71 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
     // too (pixel and compute shaders), as BaseProfile.xml and the features still match them by CRC and name.
     if (analyzed || info.crc32)
         self->StoreShaderProjection(*ppShader, info);
+
+    // TryBuildModifiedVS DX11 Phase 1: when a profile sets AlwaysModifyShaders=1 (or
+    // a per-shader <VertexShader CRC Modify="1"> entry matches this VS's CRC), try to
+    // produce a modified-bytecode sibling via ShaderAnalysis::ModifyShader and store
+    // the resulting ID3D11VertexShader* alongside the analysis. Phase 2 will swap it
+    // in on right-eye draws. For the default case (no opt-in profile), this short-
+    // circuits before touching the shader so there is zero rendering-behaviour
+    // change -- the only side effect is one DDI log line per attempted shader.
+    if (!strcmp(tag, "Vertex") && analyzed && info.parsed && info.crc32)
+    {
+        // Four gates OR together, lowest to highest precedence (any triggers):
+        //   - gInfo.AlwaysModifyShaders    (per-profile <AlwaysModifyShaders Value=1>)
+        //   - gInfo.TryModifyAllShaders    (user-level wiz3D_Config.xml opt-in; 0.4.0+)
+        //   - gInfo.ModifyIncorrectProjectionShaders + any CB-matrix flagged
+        //     incorrectProjection (0.4.0+ parity with the legacy DX10 DDI path)
+        //   - profile->m_bModifyShader     (per-shader <VertexShader CRC Modify=1>, below)
+        bool wantModify = gInfo.AlwaysModifyShaders || gInfo.TryModifyAllShaders;
+        if (!wantModify && gInfo.ModifyIncorrectProjectionShaders)
+        {
+            for (const auto& cb : info.projection.matrixData.cb)
+            {
+                for (const auto& md : cb.second)
+                    if (md.incorrectProjection) { wantModify = true; break; }
+                if (wantModify) break;
+            }
+        }
+        float profileMultiplier = 1.f, profileConvergenceShift = 0.f, profileZNear = 1.f;
+        bool  addZNearCheck = false;
+        if (!g_ProfileData.VSCRCData.empty())
+        {
+            auto pit = g_ProfileData.VSCRCData.find(info.crc32);
+            if (pit != g_ProfileData.VSCRCData.end())
+            {
+                if (pit->second.m_bModifyShader) wantModify = true;
+                profileMultiplier       = pit->second.m_Multiplier;
+                profileConvergenceShift = pit->second.m_ConvergenceShift;
+                profileZNear            = pit->second.m_ZNear;
+                addZNearCheck           = pit->second.m_bAddZNearCheck;
+            }
+        }
+        if (wantModify)
+        {
+            wiz3d::ModifiedVS11 mod;
+            const bool ok = wiz3d::TryBuildModifiedVS11(
+                self->GetReal(), pBytecode, byteLength, info,
+                profileMultiplier, profileConvergenceShift, profileZNear,
+                addZNearCheck, mod);
+            if (ok)
+            {
+                self->StoreModifiedVS(reinterpret_cast<ID3D11VertexShader*>(*ppShader), mod);
+                NVDM_TRACE_FIRST_N(16,
+                    "  Device11Proxy::CreateVertexShader: ModifyShader OK CRC=0x%08lX "
+                    "cbIndex=%u dp4Reg=%u zNearReg=%u mult=%.3f convShift=%.3f\n",
+                    info.crc32, mod.cbIndex, mod.dp4Reg, mod.zNearReg,
+                    profileMultiplier, profileConvergenceShift);
+            }
+            else
+            {
+                NVDM_TRACE_FIRST_N(16,
+                    "  Device11Proxy::CreateVertexShader: ModifyShader FAILED CRC=0x%08lX "
+                    "(no SV_Position / parse / modify / create)\n",
+                    info.crc32);
+            }
+        }
+    }
     return hr;
 }
 
@@ -602,6 +731,16 @@ void Device11Proxy::SetImmediateContextProxy(Context11Proxy* ctxProxy)
     if (ctxProxy)   ctxProxy->AddRef();
     if (m_ctxProxy) m_ctxProxy->Release();
     m_ctxProxy = ctxProxy;
+}
+
+void Device11Proxy::OnContextProxyDestroyed(Context11Proxy* ctxProxy)
+{
+    // Game over-released our Context11Proxy and destroyed it before the
+    // device destructor ran. Clear our stale pointer so ~Device11Proxy
+    // doesn't dereference freed memory. Our "strong ref" is lost here --
+    // that's a prior leak of a game-side AddRef we never got to balance,
+    // which has already happened by the time we're called.
+    if (m_ctxProxy == ctxProxy) m_ctxProxy = nullptr;
 }
 
 HRESULT STDMETHODCALLTYPE Device11Proxy::QueryInterface(REFIID riid, void** ppvObj)

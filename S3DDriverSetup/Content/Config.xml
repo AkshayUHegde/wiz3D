@@ -137,6 +137,7 @@
 		<AlternativeSetFullscreenStateOrder Value="0"/>
 
 		<ShowFPS Value="0"/>
+		<!-- OSD modes: 0 = off, 1 = popup only on setting change (default), 2 = always-on strip. Shift+F1 (ToggleOSD) cycles 0 <-> 2. -->
 		<ShowOSD Value="1"/>
 		<!-- 0 = symmetric, 1 = right shift, 2 = left shift -->
 		<SeparationMode Value="0"/>
@@ -172,10 +173,64 @@
 		<MonoDepthStencilTextures Value="0" />
 		<MonoDepthStencilSurfaces Value="0" />
 		<AlwaysModifyShaders Value="0"/>
+		<!--
+		  TryModifyAllShaders (0.4.0+, DX11 StereoInjector)
+		  ================================================
+		  User-opt-in global equivalent of a per-game <AlwaysModifyShaders=1>.
+		  Flip to "1" if you're seeing a flat / mono-looking shader element
+		  in a DX11 game that doesn't have a profile entry: crosshair at
+		  screen depth, HUD doubled, UI widgets not separating. wiz3D will
+		  then attempt automatic bytecode-level stereo-fix on every vertex
+		  shader the game creates (same mechanism iZ3D used for the six
+		  historical opt-in titles: HAWX, AoC, BFBC2, MoH 2010, NFS Shift 2,
+		  Lost Planet 2).
+
+		  Downsides when enabled (why default is 0):
+		  - Post-process full-screen quads may separate (tone-map, bloom,
+		    SSAO, DOF): visible as a doubled/displaced overlay
+		  - Depth-reconstruction / screen-space-reflection shaders can shift
+		  - Shadow-map passes may distort between eyes
+		  - Load-time increase: every modifiable VS compiles twice
+		  Try per-game first; use this as the troubleshooting escape hatch.
+		-->
+		<TryModifyAllShaders Value="0"/>
 		<VSSeparationUpdateMode Value="0"/>
 		<VertexShaderModificationMethod Value="0"/>
+		<!--
+		  ModifyIncorrectProjectionShaders (0.4.0+ for all three wrappers)
+		  ================================================================
+		  Companion to TryModifyAllShaders. Where TryModifyAllShaders asks
+		  "modify every vertex shader", this says "modify only vertex shaders
+		  whose projection matrix the analyser flagged as incorrect" (first
+		  column not {1,0,0,0}, w-row not pass-through -- typical of
+		  right-handed inverted frustums, custom tiled matrices, UI
+		  projections). Narrower scope, lower risk of post-process doubling,
+		  still a useful second-tier escape hatch after TryModifyAllShaders
+		  if the latter breaks too much. Fires in DX9, legacy DX10 DDI, and
+		  the new DX11 StereoInjector. Default 0.
+		-->
 		<ModifyIncorrectProjectionShaders Value="0"/>
+		<!--
+		  AlwaysUseDefaultProjectionMatrixForVS (DX9 only; iZ3D-era compat)
+		  ================================================================
+		  When wiz3D's DX9 shader analyser can't produce a clean perspective
+		  matrix from a shader, substitute a hardcoded default projection and
+		  continue. Rare, specifically for games whose VS matrix layout
+		  defeats detection. No equivalent in the new DX11 wrapper (which
+		  uses a different, in-line projection-detection approach). Default 0.
+		-->
 		<AlwaysUseDefaultProjectionMatrixForVS Value="0"/>
+		<!--
+		  PatchConstantsAtDraw (DX11 only; 0.4.0+)
+		  ========================================
+		  Switches Context11Proxy between per-write and per-draw CB-matrix
+		  patch models. Per-write (0, default) catches most games cleanly;
+		  per-draw (1) can catch late-bound matrices in engines that fill a
+		  CB long before the shader bound at write time matches the shader
+		  bound at draw time (GTA V's pattern). Flip to 1 if a game's stereo
+		  works at the start of a scene then drifts out as camera moves.
+		-->
+		<PatchConstantsAtDraw Value="0"/>
 		<CreateOneComponentRTInMono Value="0"/>
 		<CreateSquareRTInMono Value="0"/>
 		<CreateRTThatLessThanBBInMono Value="0"/>

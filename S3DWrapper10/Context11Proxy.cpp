@@ -125,6 +125,7 @@ Context11Proxy::~Context11Proxy()
     if (m_clipSpaceCB) m_clipSpaceCB->Release();
     for (auto& kv : m_twins) if (kv.second.shader) kv.second.shader->Release();
     if (m_twinCB) m_twinCB->Release();
+    if (m_eyeInfoCB) { m_eyeInfoCB->Release(); m_eyeInfoCB = nullptr; }
     ResetEyeTracking();
     if (m_recorder) { m_recorder->Release(); m_recorder = nullptr; }
     delete m_gpuTimer;
@@ -132,6 +133,20 @@ Context11Proxy::~Context11Proxy()
     if (m_real3) { m_real3->Release(); m_real3 = nullptr; }
     if (m_real2) { m_real2->Release(); m_real2 = nullptr; }
     if (m_real1) { m_real1->Release(); m_real1 = nullptr; }
+    // Over-release recovery: tell our parent device our storage is gone so
+    // its own destructor doesn't later Release a stale m_ctxProxy pointer
+    // (RAGE engine over-releases the immediate context during shutdown --
+    // Max Payne 3 crash dump pinned to ~Device11Proxy line 249). m_parent
+    // may be nullptr if the device destructed first and called
+    // DetachFromParent() on us -- in that case the device is already gone
+    // and dereferencing it would be a UAF (Edith Finch dump showed this
+    // on 2026-10-18 with the back-notify before DetachFromParent landed).
+    if (m_parent) m_parent->OnContextProxyDestroyed(this);
+}
+
+void Context11Proxy::DetachFromParent()
+{
+    m_parent = nullptr;
 }
 
 void Context11Proxy::ClearFrameCommands()
@@ -339,6 +354,95 @@ float Context11Proxy::CameraP00() const
 {
     for (const auto& f : m_features) if (f->CameraP00() > 0.f) return f->CameraP00();
     return 0.f;
+}
+
+// -------------------------------------------------------------------------
+// TryBuildModifiedVS DX11 Phase 2: per-eye binding of modified vertex
+// shaders. Called from each Draw/DrawIndexed/Draw*Instanced* closure as the
+// first and last steps of the right-eye replay. See the design notes on
+// ShaderModifier11.h and Context11Proxy.h.
+// -------------------------------------------------------------------------
+
+// Lazy-create the 16-byte dynamic eye-info CB, then Map(DISCARD)/write/Unmap
+// the per-eye values the modified shader expects to read: method 2 layout
+// from ConstantBufferWrapper.cpp:395-414 -- [sep, convSq, 0, StereoZNear].
+// Right eye uses +sep; left eye never comes through here (modified VS is
+// only bound in the right-eye replay).
+void Context11Proxy::UpdateEyeInfoCB(const wiz3d::ModifiedVS11& mod)
+{
+    if (!m_parent) return;
+    ID3D11Device* dev = m_parent->GetReal();
+    if (!dev) return;
+
+    if (!m_eyeInfoCB)
+    {
+        D3D11_BUFFER_DESC bd = {};
+        bd.ByteWidth      = 16;   // one float4 register
+        bd.Usage          = D3D11_USAGE_DYNAMIC;
+        bd.BindFlags      = D3D11_BIND_CONSTANT_BUFFER;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        if (FAILED(dev->CreateBuffer(&bd, nullptr, &m_eyeInfoCB)) || !m_eyeInfoCB)
+            return;
+    }
+
+    const CameraPreset* preset = gInfo.Input.GetActivePreset();
+    const float oneDivZPS = preset ? preset->One_div_ZPS : 0.f;
+    const float stereoBase = preset ? preset->StereoBase : 0.f;
+    // Right-eye sep is +stereoBase * multiplier * sign, where sign is the
+    // feature-stacked EyeShiftSign() -- MirroredTarget / reflection passes
+    // flip it to -1 so the modified shader's eye offset lands the correct
+    // way for that pass. Same convention the matrix-patch path uses in
+    // Context11Proxy_Main.cpp:1178 (PatchBoundCBsForDraw).
+    const float sep        = stereoBase * mod.storedMultiplier * EyeShiftSign();
+    const float convTerm   = -(oneDivZPS + mod.storedConvergenceShift);
+    const float convSq     = convTerm * convTerm;
+    const float zNear      = mod.storedZNear;
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    if (SUCCEEDED(m_real->Map(m_eyeInfoCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)) && mapped.pData)
+    {
+        float* f = reinterpret_cast<float*>(mapped.pData);
+        f[0] = sep; f[1] = convSq; f[2] = 0.f; f[3] = zNear;
+        m_real->Unmap(m_eyeInfoCB, 0);
+    }
+}
+
+// Called at the top of every right-eye Draw-closure replay. If the shader
+// bound at the game's draw site has a modified sibling, swap it in on the
+// real device and bind the eye-info CB. Returns true + fills outOrig / outSlot
+// so EndRightEyeShaderSwap can restore the original VS. False when swap not
+// needed -- any of: not right-eye, stereo off, no modified sibling, no VS.
+bool Context11Proxy::BeginRightEyeShaderSwap(ID3D11VertexShader* vsAtDraw,
+                                             ID3D11VertexShader*& outOrig, UINT& outSlot)
+{
+    outOrig = nullptr;
+    outSlot = 0;
+    if (m_activeEye != Eye::Right) return false;
+    if (!gInfo.Input.StereoActive) return false;
+    if (!vsAtDraw || !m_parent) return false;
+    const wiz3d::ModifiedVS11* mod = m_parent->LookupModifiedVS(vsAtDraw);
+    if (!mod || !mod->vs) return false;
+
+    UpdateEyeInfoCB(*mod);
+    if (!m_eyeInfoCB) return false;    // CB creation failed; leave original VS alone
+
+    outOrig = vsAtDraw;
+    outSlot = mod->cbIndex;
+    m_real->VSSetShader(mod->vs, nullptr, 0);
+    m_real->VSSetConstantBuffers(mod->cbIndex, 1, &m_eyeInfoCB);
+    return true;
+}
+
+void Context11Proxy::EndRightEyeShaderSwap(ID3D11VertexShader* orig)
+{
+    if (!orig) return;
+    // Restore the game's shader so subsequent closures see consistent state.
+    // Leaving the eye-info CB bound at mod->cbIndex is harmless: the ORIGINAL
+    // shader doesn't read that slot (ShaderAnalysis::FindFreeRegisters picked
+    // it precisely because it's free from the original's perspective), and the
+    // next VSSetConstantBuffers closure (if any) will overwrite it with the
+    // game's own bytes.
+    m_real->VSSetShader(orig, nullptr, 0);
 }
 
 bool Context11Proxy::LightViewPass() const

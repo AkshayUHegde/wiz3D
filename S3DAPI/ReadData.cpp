@@ -568,13 +568,13 @@ void ReadProfilesRouterType()
 		_stprintf_s<MAX_PATH>(szProfilesFileName, _T("%s\\BaseProfile.xml"), szPath);
 		DEBUG_MESSAGE(_T("Base profile:\n"));
 		ReadProfileRouterType(szApplicationFileName, szProfilesFileName, g_docSystemProfiles, g_nodeSystemProfile, false, 0 /*Base*/);
-
-		if (g_nodeSystemProfile == NULL)
-		{
-			_stprintf_s<MAX_PATH>(szProfilesFileName, _T("%s\\CommunityProfile.xml"), szPath);
-			DEBUG_MESSAGE(_T("Community profile:\n"));
-			ReadProfileRouterType(szApplicationFileName, szProfilesFileName, g_docCommunityProfiles, g_nodeCommunityProfile, false, 1 /*Community*/);
-		}
+		// CommunityProfile.xml was retired in 0.4.0: Akshay commits DX11
+		// profile fixes straight into BaseProfile.xml, which eliminated the
+		// need for a separate community tier. UserProfile.xml below is the
+		// only user-side override channel we still read. The loader call is
+		// kept out intentionally -- the file was never shipped by any wiz3D
+		// deploy, and the empty fallback it provided only ran if BaseProfile
+		// failed to parse (which would be a bigger problem anyway).
 	}
 
 	if (iz3d::resources::GetCurrentUserDirectory( szPath ))
@@ -819,7 +819,7 @@ void ReadProfilePart2Data(TiXmlNode* node)
 	static XmlValue pValItems[] = 
 	{
 		DECLARE_BVALUE(ShowFPS),
-		DECLARE_BVALUE(ShowOSD),
+		DECLARE_IVALUE(ShowOSD),
 		DECLARE_IVALUE(SeparationMode),
 		DECLARE_IVALUE(FrustumAdjustMode),
 		DECLARE_FVALUE(BlackAreaWidth),
@@ -845,6 +845,7 @@ void ReadProfilePart2Data(TiXmlNode* node)
 		DECLARE_BVALUE(MonoDepthStencilTextures),
 		DECLARE_BVALUE(MonoDepthStencilSurfaces),
 		DECLARE_BVALUE(AlwaysModifyShaders),
+		DECLARE_BVALUE(TryModifyAllShaders),
 		DECLARE_IVALUE(VSSeparationUpdateMode),
 		DECLARE_IVALUE(VertexShaderModificationMethod),
 		DECLARE_BVALUE(ModifyIncorrectProjectionShaders),
@@ -966,7 +967,7 @@ void ReadProfilePart2Data(TiXmlNode* node)
 	}
 	if (gInfo.DeviceMode == DEVICE_MODE_RESERVED)
 		gInfo.DeviceMode = DEVICE_MODE_AUTO;
-	if (gInfo.VertexShaderModificationMethod == 2 && gInfo.AlwaysModifyShaders)
+	if (gInfo.VertexShaderModificationMethod == 2 && (gInfo.AlwaysModifyShaders || gInfo.TryModifyAllShaders))
 		gInfo.UseSimpleStereoProjectionMethod = true;
 	ReadInputData(node);
 }
