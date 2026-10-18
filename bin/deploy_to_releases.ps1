@@ -294,36 +294,22 @@ foreach ($archName in $archs) {
     }
     Copy-Files -SrcDir $binDir -DstDir $hd3dDst -Files $hd3dFiles -Tag "HD3D/$archAlias"
 
-    # --- DX12 (Stereo-Injector family; wiz3D's own DX12 swap-chain wrapper) ---
-    # Un-shelved from commit 527f7bcf (2026-05-12). The DX12 leaf was originally
-    # bundled under HD3D (the DXGI-based HD3D path covers DX12 signalling), but
-    # DX12 stereo-output needs its own swap-chain wrapper, now in
-    # S3DWrapperD3D12. Moved to Stereo-Injector/ in 0.4.0 since it IS a software
-    # compositor, not a vendor passthrough. x64 only — DX12 games are 64-bit.
-    # Targets: Shadow of the Tomb Raider DX12, Sniper Elite 4 DX12, Rise of the
-    # Tomb Raider DX12.
-    if ($archAlias -eq '64-bit') {
-        $siDx12Dst = Join-Path $repoRoot "releases\wiz3D\Stereo-Injector\DX12\64-bit"
-        # atidxx64/atiadlxx/dxgi/d3d12 all land in the shared Final Release bin
-        # like the DX11 leaf. D3d12VendorProxy's Final Release|x64 now has
-        # BLOCK_NVAPI_STEREO defined (matching D3d11VendorProxy pattern) so its
-        # output is the HD3D variant.
-        Copy-Files -SrcDir $binDir -DstDir $siDx12Dst -Files @('atidxx64.dll','atiadlxx.dll','dxgi.dll','d3d12.dll') -Tag "DX12/x64 vendor"
-        # S3DWrapperD3D12.dll ships from its own project tree, built standalone.
-        $s3dw12Src = Join-Path $repoRoot "S3DWrapper12\bin\Release\Win64"
-        if (Test-Path $s3dw12Src) {
-            Copy-Files -SrcDir $s3dw12Src -DstDir $siDx12Dst -Files @('S3DWrapperD3D12.dll') -Tag "DX12/x64 wrapper"
-        }
-        # Opt-in EOSStub x64. Generated from Rise of the Tomb Raider's actual
-        # EOSSDK-Win64-Shipping.dll (574 exports). Deposited in an EOSStub\
-        # subfolder — user manually copies over the game's real DLL if they
-        # need Epic Online Services disabled (e.g. for SR Weave cohabitation).
-        $eosX64Src = Join-Path $repoRoot "wiz3D-proxy\bin\Release\Win64"
-        if (Test-Path (Join-Path $eosX64Src 'EOSSDK-Win64-Shipping.dll')) {
-            $eosDst = Join-Path $siDx12Dst 'EOSStub'
-            Copy-Files -SrcDir $eosX64Src -DstDir $eosDst -Files @('EOSSDK-Win64-Shipping.dll') -Tag "DX12/x64 EOSStub"
-        }
-    }
+    # --- DX12 (Stereo-Injector family) ---
+    # Shelved for 0.4.0 — wrapper isn't production-ready. Code preserved in-tree;
+    # re-enable the block below when S3DWrapperD3D12 is ready to ship.
+    # if ($archAlias -eq '64-bit') {
+    #     $siDx12Dst = Join-Path $repoRoot "releases\wiz3D\Stereo-Injector\DX12\64-bit"
+    #     Copy-Files -SrcDir $binDir -DstDir $siDx12Dst -Files @('atidxx64.dll','atiadlxx.dll','dxgi.dll','d3d12.dll') -Tag "DX12/x64 vendor"
+    #     $s3dw12Src = Join-Path $repoRoot "S3DWrapper12\bin\Release\Win64"
+    #     if (Test-Path $s3dw12Src) {
+    #         Copy-Files -SrcDir $s3dw12Src -DstDir $siDx12Dst -Files @('S3DWrapperD3D12.dll') -Tag "DX12/x64 wrapper"
+    #     }
+    #     $eosX64Src = Join-Path $repoRoot "wiz3D-proxy\bin\Release\Win64"
+    #     if (Test-Path (Join-Path $eosX64Src 'EOSSDK-Win64-Shipping.dll')) {
+    #         $eosDst = Join-Path $siDx12Dst 'EOSStub'
+    #         Copy-Files -SrcDir $eosX64Src -DstDir $eosDst -Files @('EOSSDK-Win64-Shipping.dll') -Tag "DX12/x64 EOSStub"
+    #     }
+    # }
 }
 
 # --- Spread nvapi[64].dll across all api subfolders that need it ---
@@ -362,10 +348,10 @@ $profileTargets = @(
     "$relRoot\Stereo-Injector\DX10-11\32-bit",
     "$relRoot\Stereo-Injector\DX10-11\64-bit"
 )
-# BaseProfile.xml also goes next to the DX12 leaf when the 64-bit arch is built this round.
-if ($archs -contains 'x64') {
-    $profileTargets += "$relRoot\Stereo-Injector\DX12\64-bit"
-}
+# DX12 leaf shelved for 0.4.0; BaseProfile fan-out skips it.
+# if ($archs -contains 'x64') {
+#     $profileTargets += "$relRoot\Stereo-Injector\DX12\64-bit"
+# }
 Spread-File -SrcPath $baseProfileSrc -DstDirs $profileTargets -Tag 'BaseProfile.xml'
 
 # --- wiz3D_Config.xml into every Stereo-Injector leaf ---
