@@ -61,7 +61,7 @@ Games that render stereoscopic 3D themselves and display that via 3D Vision's 'D
 
 | Game | Install Path | Testing | Notes |
 |------|--------------|---------|-------|
-| Hard Reset | `3D-Vision-Direct/DX9/32-bit` | ✅ Working | DX9 proxy revived in 0.4.0. |
+| Hard Reset | `3D-Vision-Direct/DX9/32-bit` | ✅ Working | Game must be set to 120Hz. |
 | Hitman: Absolution | `3D-Vision-Direct/DX11/32-bit` | ✅ Working | Game supports 3D Vision Direct Mode and HD3D. |
 | Oil Rush | `3D-Vision-Direct/DX11/32-bit` | ✅ Working | DX11 output only. |
 | Tomb Raider (2013) | `3D-Vision-Direct/DX11/32-bit` | ✅ Mostly Working | Game supports 3D Vision Direct Mode and HD3D. Use the `EOSStub` subfolder if you need Epic Online Services disabled for SR Weave cohabitation. |
