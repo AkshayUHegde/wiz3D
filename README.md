@@ -21,7 +21,7 @@ This project modernises that source code, replaces kernel-level hooks with a pro
 wiz3D stands on the shoulders of some incredible people and projects. Huge thanks to:
 - **Vadim and the original iZ3D development team**, for building the groundbreaking stereoscopic 3D wrapper that this project modernises, and for releasing it to the community.
 - **[bo3b](https://github.com/bo3b)**, for hosting the iZ3D source archive at [bo3b/iZ3D](https://github.com/bo3b/iZ3D) under an MIT license, and for laying the groundwork for people to contribute.
-- **[@akshaybabloo](https://github.com/akshaybabloo)**, for PR #31, which lands the full DX11 Stereo-Injector pipeline in 0.4.0 (COM-wrap, DXBC analyser, 14 per-game profiles).
+- **[@AkshayUHegde](https://github.com/AkshayUHegde)**, for PR #31, which lands the full DX11 Stereo-Injector pipeline in 0.4.0 (COM-wrap, DXBC analyser, 14 per-game profiles).
 - Every contributor who has filed issues, PRs or game-test results. The compatibility tables below exist because of you.
 
 ## Current Status
