@@ -79,6 +79,20 @@
 		     (see S3DWrapper10/Feature*.cpp). DX10/11 only — no effect on DX9. -->
 		<CollectDebugInformation Value="0"/>
 
+		<!-- ShaderHunter: interactive OSD mode for identifying which shader
+		     draws a specific visually-wrong effect. When this is "1":
+		       Ctrl+F2       enter / exit hunt mode (OSD line appears)
+		       F2            hide previous CRC drawn this frame
+		       Shift+F2      hide next CRC drawn this frame
+		       F3            capture current CRC's bytecode + CB layout to
+		                     wiz3D_Logs\<Game>\Shaders\Hunter\<CRC>_<ts>.txt
+		     The report includes a suggested ShaderPatch skeleton you can
+		     drop into BaseProfile.xml. See docs/SHADER_HUNTER_DESIGN.md.
+		     Zero cost when "0" — the hunt-check branch in Context11Proxy
+		     short-circuits on this flag. DX10/11 only in 0.5.0; DX9 to
+		     follow in 0.5.x. -->
+		<EnableShaderHunter Value="0"/>
+
 		<!-- Dump every shader the game creates to a single concatenated file
 		     per stage, with D3DDisassemble output + iZ3D shader tree + CRC32.
 		     DumpVS covers VS/HS/DS/GS, DumpPS covers PS/CS. On DX10/11 the

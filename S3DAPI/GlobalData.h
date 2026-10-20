@@ -212,6 +212,13 @@ enum EventId
 	TOGGLE_FPS,
 	TOGGLE_HOTKEY,
 	TOGGLE_SHOW_OSD,
+	// 0.5.0 ShaderHunter — new events in order of use. Guarded at runtime
+	// by gInfo.EnableShaderHunter; the enum entries themselves exist in
+	// every build so KeyboardHook's switch stays single-table.
+	TOGGLE_SHADER_HUNT,
+	HUNT_PREV_SHADER,
+	HUNT_NEXT_SHADER,
+	HUNT_CAPTURE_SHADER,
 	INCREASE_PRESENTER_SLEEP_TIME,
 	DECREASE_PRESENTER_SLEEP_TIME,
 	INCREASE_PRESENTER_FLUSH_TIME,
@@ -372,7 +379,12 @@ public:
 	// Zero (default) means "use profile-driven shift via wiz3D_GetEffectiveEyeShift".
 	float		COMWrapEyeShift;
 	bool		CollectDebugInformation;
-	DWORD       ScreenshotType;	
+	// 0.5.0 ShaderHunter: gates the hunt-mode OSD + per-draw CRC-skip
+	// path in Context11Proxy. Off by default; flipping to true enables
+	// Ctrl+F2 toggle and the F2/Shift+F2/F3 cycle+capture hotkeys. See
+	// docs/SHADER_HUNTER_DESIGN.md for the full flow. Zero cost when off.
+	bool		EnableShaderHunter;
+	DWORD       ScreenshotType;
 	bool		FixVistaSP1ResetBug;
 	bool		DisableGammaApplying;
 	TCHAR       Language[40];
@@ -543,6 +555,11 @@ public:
 			{ "ToggleFPS", TOGGLE_FPS,                                      0 },	//---           			---
 			{ "ToggleHotkeysOSD", TOGGLE_HOTKEY,						    368 },	//--- Shift + F1 (iZ3D legacy hotkey-help)	---
 			{ "ToggleOSD", TOGGLE_SHOW_OSD,                                 624 },	//--- Ctrl + F1 (status strip + FPS)	---
+			// 0.5.0 ShaderHunter — all four gated at runtime on gInfo.EnableShaderHunter.
+			{ "ToggleShaderHunt",  TOGGLE_SHADER_HUNT,                      625 },	//--- Ctrl + F2 (enter/exit hunt mode)	---
+			{ "HuntPrevShader",    HUNT_PREV_SHADER,                        113 },	//--- F2 (hide previous CRC)	---
+			{ "HuntNextShader",    HUNT_NEXT_SHADER,                        369 },	//--- Shift + F2 (hide next CRC)	---
+			{ "HuntCaptureShader", HUNT_CAPTURE_SHADER,                     114 },	//--- F3 (capture current CRC)	---
 			{ "PresenterSleepTimeIncrease", INCREASE_PRESENTER_SLEEP_TIME,  221 },  //--- ]				        ---
 			{ "PresenterSleepTimeDecrease", DECREASE_PRESENTER_SLEEP_TIME,  219 },  //--- [				        ---
 			{ "PresenterFlushTimeIncrease", INCREASE_PRESENTER_FLUSH_TIME,	186 },  //--- ;				        ---
