@@ -337,7 +337,7 @@ DirectX 11 titles use the full 0.4.0 Stereo-Injector COM-wrap pipeline. DirectX 
 | Ninja Blade | `Stereo-Injector/DX9/32-bit` | ✓ | ❌ Not Working | Black screen on AMD. |
 | Oddworld: New 'n' Tasty! | `Stereo-Injector/DX9/32-bit` | ✕ | ⚠️ Partial | Heavy artifacts, needs shader fix. |
 | Operation Flashpoint: Dragon Rising | `Stereo-Injector/DX9/32-bit` | ✓ | Untested |  |
-| OutRun 2006: Coast 2 Coast | `Stereo-Injector/DX9/32-bit` | ✓ | Untested |  |
+| OutRun 2006: Coast 2 Coast | `Stereo-Injector/DX9/32-bit` | ✓ | ✅ Working |  |
 | Overlord | `Stereo-Injector/DX9/32-bit` | ✓ | Untested |  |
 | Overlord II | `Stereo-Injector/DX9/32-bit` | ✓ | Untested |  |
 | Painkiller | `Stereo-Injector/DX9/32-bit` | ✓ | Untested |  |
