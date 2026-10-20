@@ -102,6 +102,12 @@ struct ShaderAnalysis11Result
 bool AnalyzeShader11(const void* pBytecode, SIZE_T byteLength,
                      ShaderAnalysis11Result& outResult);
 
+// CRC32 over the raw bytecode. Matches ShaderAnalysis11Result::crc32
+// (same algorithm). Used by 0.4.1 ShaderOverride to look up a profile
+// entry by CRC before creating the game-side shader, so an overridden
+// shader can substitute its bytecode before the real D3D11 create call.
+DWORD ShaderBytecodeCRC32(const void* pBytecode, SIZE_T byteLength);
+
 // A DXBC chunk's data (after its tag and size) and size, by four-character tag; null when the blob has none.
 const BYTE* FindDxbcChunk(const void* blob, SIZE_T blobLen, DWORD tag, DWORD& outSize);
 

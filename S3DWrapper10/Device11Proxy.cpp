@@ -22,8 +22,10 @@
 #include <dxgi1_2.h>
 #include <dxgi1_3.h>
 #include <madCHook.h>
+#include <d3dcompiler.h>       // D3DCompile for inline ShaderOverride HLSL
 #include <intrin.h>            // _ReturnAddress
 #include <mutex>
+#pragma comment(lib, "d3dcompiler.lib")
 #include <unordered_map>
 #include <atomic>
 
@@ -437,13 +439,81 @@ const wiz3d::ModifiedVS11* Device11Proxy::LookupModifiedVS(ID3D11VertexShader* o
 
 namespace {
 
+// 0.4.1 inline ShaderOverride: lazily compile the HLSL text held on a
+// matched ShaderProfileData entry. On success the compiled bytecode is
+// cached in the profile so subsequent CreateVertexShader / PS hits for
+// the same CRC skip the compile. On failure, logs to wiz3D_proxy.log
+// and returns false; the caller then falls back to the game's own
+// bytecode (so a broken fix doesn't brick the game).
+bool TryCompileOverrideHLSL(ShaderProfileData& profile, const char* tag, DWORD crc)
+{
+    if (!profile.m_overrideBytecode.empty()) return true;   // cached
+    if (profile.m_overrideHLSL.empty())      return false;
+
+    const char* target = nullptr;
+    if      (!strcmp(tag, "Vertex")) target = "vs_5_0";
+    else if (!strcmp(tag, "Pixel"))  target = "ps_5_0";
+    else                              return false;        // GS / CS: deferred
+
+    CComPtr<ID3DBlob> pCode, pErr;
+    HRESULT hr = D3DCompile(
+        profile.m_overrideHLSL.c_str(), profile.m_overrideHLSL.size(),
+        "wiz3D_override", /*defines*/ nullptr, /*include*/ nullptr,
+        "main", target, /*flags1*/ 0, /*flags2*/ 0,
+        &pCode, &pErr);
+    if (FAILED(hr))
+    {
+        const char* errText = pErr ? (const char*)pErr->GetBufferPointer() : "(no error blob)";
+        DDILog("[override] HLSL compile FAILED for %s CRC=0x%08X target=%s hr=0x%08X\n"
+               "%s\n", tag, (unsigned)crc, target, (unsigned)hr, errText);
+        return false;
+    }
+    profile.m_overrideBytecode.assign(
+        (const BYTE*)pCode->GetBufferPointer(),
+        (const BYTE*)pCode->GetBufferPointer() + pCode->GetBufferSize());
+    DDILog("[override] HLSL compiled OK for %s CRC=0x%08X target=%s (%u bytes)\n",
+           tag, (unsigned)crc, target, (unsigned)profile.m_overrideBytecode.size());
+    return true;
+}
+
 template<typename TShader, typename CreateFn>
 HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createReal,
                          const void* pBytecode, SIZE_T byteLength,
                          ID3D11ClassLinkage* pClassLinkage, TShader** ppShader)
 {
-    HRESULT hr = createReal(pBytecode, byteLength, pClassLinkage, ppShader);
+    // 0.4.1 inline ShaderOverride: compute the game bytecode's CRC first,
+    // check for an inline <ShaderOverride> profile entry, and substitute
+    // its compiled bytecode before the real CreateVertexShader / PS call.
+    // The rest of the pipeline (analysis, feature OnShaderCreated, modified-
+    // VS build) then runs against the override, which is what we want: a
+    // replacement shader participates in the feature engine the same way a
+    // game's own shader would.
+    const DWORD gameCrc = ShaderBytecodeCRC32(pBytecode, byteLength);
+    const void* finalBytecode = pBytecode;
+    SIZE_T      finalLength   = byteLength;
+    if (gameCrc)
+    {
+        auto& profileMap = (!strcmp(tag, "Vertex")) ? g_ProfileData.VSCRCData
+                        : (!strcmp(tag, "Pixel"))   ? g_ProfileData.PSCRCData
+                        :                              g_ProfileData.GSCRCData;
+        auto pit = profileMap.find(gameCrc);
+        if (pit != profileMap.end() && !pit->second.m_overrideHLSL.empty())
+        {
+            if (TryCompileOverrideHLSL(pit->second, tag, gameCrc))
+            {
+                finalBytecode = pit->second.m_overrideBytecode.data();
+                finalLength   = pit->second.m_overrideBytecode.size();
+            }
+        }
+    }
+
+    HRESULT hr = createReal(finalBytecode, finalLength, pClassLinkage, ppShader);
     if (FAILED(hr) || !ppShader || !*ppShader) return hr;
+    // The analyser and feature pipeline below reference the final bytecode,
+    // whether it's the game's own or the override. Rebind pBytecode / byteLength
+    // locally to the substituted blob so the existing code below "just works".
+    pBytecode  = finalBytecode;
+    byteLength = finalLength;
 
     ShaderAnalysis11Result info;
     const bool analyzed = AnalyzeShader11(pBytecode, byteLength, info);
