@@ -15,7 +15,7 @@ struct DataInput;
 #define PROFILES_VERSION 1
 bool ReadConfigRouterType();
 void ReadProfilesRouterType();
-void FreeProfiles();
+void S3DAPI_API FreeProfiles();
 
 void S3DAPI_API ReadCurrentProfile( DWORD Vendor );
 void S3DAPI_API WriteInputData(DataInput* overrideInput);

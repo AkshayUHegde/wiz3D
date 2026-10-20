@@ -8,7 +8,10 @@
 #include "..\S3DAPI\Logging.h"
 #include "..\S3DAPI\GlobalData.h"
 #include "..\S3DAPI\ReadData.h"
+#include "..\S3DAPI\ShaderProfileData.h"    // g_ProfileData (reload clears + repopulates)
 #include "../S3DAPI/ShutterAPI.h"
+#include "AdapterFunctions.h"               // DDILog for profile-reload traces
+#include <atomic>
 #include "DXGIFactoryWrapper.h"
 #include "ShaderHunter.h"           // 0.5.0 hunt-mode plumbing
 #include <madchook.h>
@@ -64,7 +67,7 @@ public :
 CDX10Module _AtlModule;
 
 
-// 0.5.0 ShaderHunter: register the DX10/11 wrapper's handlers with the
+// 0.4.1 ShaderHunter: register the DX10/11 wrapper's handlers with the
 // S3DAPI hotkey dispatcher. KeyboardHook calls these if the slot is set;
 // one of them being null is harmless (hotkey becomes a silent no-op).
 // Called once from InitDirectories so it runs before any hotkey processing.
@@ -76,9 +79,56 @@ static void RegisterShaderHunterHandlers()
 	gInfo.HuntCaptureHandler = &wiz3d::ShaderHunter::OnCapture;
 }
 
+// 0.4.1 runtime profile reload. Ctrl+F5 sets a between-frames flag; the
+// actual re-parse happens from SwapChain11Proxy::OnPresentBoundaryPost
+// after the frame's replay is done, so no draw is reading g_ProfileData
+// while the maps rebuild. The flag is a std::atomic<bool>; writes come
+// from the KeyboardHook thread, reads come from the game thread's Post
+// callback, so no further synchronisation is needed.
+static std::atomic<bool> g_profileReloadPending{ false };
+
+static void RequestProfileReload()
+{
+	g_profileReloadPending.store(true, std::memory_order_release);
+	DDILog("[reload] Ctrl+F5 pressed — BaseProfile.xml reload queued for next Present boundary\n");
+}
+
+namespace wiz3d {
+
+// Called from SwapChain11Proxy::OnPresentBoundaryPost. Returns quickly
+// when no reload is queued (one relaxed load, no lock). On reload: frees
+// the current profile docs, re-parses BaseProfile.xml / UserProfile.xml /
+// Config.xml via ReadCurrentProfile(). Known limitation: feature registry
+// is static (CreateProfileFeatures runs once), so a newly added <RightCamera>
+// tag won't take effect until the game restarts. ShaderPatch primitives
+// keyed on CRC do take effect immediately on the next draw.
+void MaybeReloadProfileBetweenFrames()
+{
+	if (!g_profileReloadPending.exchange(false, std::memory_order_acq_rel))
+		return;
+	DDILog("[reload] re-parsing BaseProfile.xml ...\n");
+	// FreeProfiles clears the TiXmlDocument objects; the CRC maps on
+	// g_ProfileData get repopulated by ReadCurrentProfile. Old entries
+	// linger until the matching new entry overwrites them, but <SkipStereo/>
+	// on a CRC that's removed from the new XML won't naturally clear —
+	// clear the maps explicitly so the new state is authoritative.
+	g_ProfileData.VSCRCData.clear();
+	g_ProfileData.PSCRCData.clear();
+	g_ProfileData.GSCRCData.clear();
+	FreeProfiles();
+	ReadCurrentProfile(gData.VendorId);
+	DDILog("[reload] reload done, VS=%u PS=%u GS=%u entries\n",
+	       (unsigned)g_ProfileData.VSCRCData.size(),
+	       (unsigned)g_ProfileData.PSCRCData.size(),
+	       (unsigned)g_ProfileData.GSCRCData.size());
+}
+
+}  // namespace wiz3d
+
 void InitDirectories( )
 {
 	RegisterShaderHunterHandlers();
+	gInfo.ProfileReloadHandler = &RequestProfileReload;
 #ifdef ZLOG_ALLOW_TRACING
 	InitializeLogging();
 

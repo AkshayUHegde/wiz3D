@@ -775,11 +775,13 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
             L"Shift + F1",           L"Toggle this hotkey list",
             L"Ctrl + F1",            L"Toggle OSD strip + FPS",
             L"Shift + Numpad *",     L"Open the wizard overlay",
-            // 0.5.0 ShaderHunter: these only act when
-            // EnableShaderHunter=1 in wiz3D_Config.xml.
+            // 0.4.1 ShaderHunter + runtime profile reload. The hunter
+            // hotkeys only cycle shaders while hunt mode is on; Ctrl+F5
+            // re-parses BaseProfile.xml at the next frame boundary.
             L"Ctrl + F2",            L"ShaderHunter: enter / exit hunt mode",
             L"F2  /  Shift + F2",    L"ShaderHunter: cycle hidden shader",
             L"F3",                   L"ShaderHunter: capture current CRC",
+            L"Ctrl + F5",            L"Reload BaseProfile.xml (live)",
         };
         int row = 72;
         const int rowH = 32;

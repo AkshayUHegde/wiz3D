@@ -212,13 +212,20 @@ enum EventId
 	TOGGLE_FPS,
 	TOGGLE_HOTKEY,
 	TOGGLE_SHOW_OSD,
-	// 0.5.0 ShaderHunter — new events in order of use. Guarded at runtime
-	// by gInfo.EnableShaderHunter; the enum entries themselves exist in
-	// every build so KeyboardHook's switch stays single-table.
+	// 0.4.1 ShaderHunter — hotkey is itself the entry (no config gate).
+	// IDs always compiled in; the KeyboardHook switch dispatches to
+	// wrapper-registered function pointers (null-safe no-op if no wrapper
+	// registered a handler).
 	TOGGLE_SHADER_HUNT,
 	HUNT_PREV_SHADER,
 	HUNT_NEXT_SHADER,
 	HUNT_CAPTURE_SHADER,
+	// 0.4.1 runtime reload: re-reads BaseProfile.xml / UserProfile.xml
+	// between frames so authors can iterate on ShaderPatch entries without
+	// restarting the game. Feature-tag changes don't fully propagate (the
+	// Feature registry is a static set up at CreateDevice time); CRC-keyed
+	// data in g_ProfileData DOES. See docs/SHADER_FIXES.md.
+	RELOAD_BASE_PROFILE,
 	INCREASE_PRESENTER_SLEEP_TIME,
 	DECREASE_PRESENTER_SLEEP_TIME,
 	INCREASE_PRESENTER_FLUSH_TIME,
@@ -379,7 +386,7 @@ public:
 	// Zero (default) means "use profile-driven shift via wiz3D_GetEffectiveEyeShift".
 	float		COMWrapEyeShift;
 	bool		CollectDebugInformation;
-	// 0.5.0 ShaderHunter: wrapper-side hotkey handlers. S3DAPI's
+	// 0.4.1 ShaderHunter: wrapper-side hotkey handlers. S3DAPI's
 	// KeyboardHook dispatches to these if non-null; otherwise the hotkey
 	// is a silent no-op (the wrapper that would handle it isn't loaded).
 	// S3DWrapperD3D10 sets these from InitDirectories; other wrappers
@@ -390,6 +397,10 @@ public:
 	void      (*HuntPrevHandler)();
 	void      (*HuntNextHandler)();
 	void      (*HuntCaptureHandler)();
+	// 0.4.1 runtime profile reload: Ctrl+F5 triggers this. The wrapper's
+	// handler sets a between-frames flag; the actual re-parse happens in
+	// SwapChain11Proxy::OnPresentBoundaryPost once no draws are inflight.
+	void      (*ProfileReloadHandler)();
 	DWORD       ScreenshotType;
 	bool		FixVistaSP1ResetBug;
 	bool		DisableGammaApplying;
@@ -561,11 +572,14 @@ public:
 			{ "ToggleFPS", TOGGLE_FPS,                                      0 },	//---           			---
 			{ "ToggleHotkeysOSD", TOGGLE_HOTKEY,						    368 },	//--- Shift + F1 (iZ3D legacy hotkey-help)	---
 			{ "ToggleOSD", TOGGLE_SHOW_OSD,                                 624 },	//--- Ctrl + F1 (status strip + FPS)	---
-			// 0.5.0 ShaderHunter — all four gated at runtime on gInfo.EnableShaderHunter.
+			// 0.4.1 ShaderHunter — hotkey is itself the opt-in. Ctrl+F2 toggles
+			// hunt mode; the cycle/capture keys only act while hunt mode is on.
 			{ "ToggleShaderHunt",  TOGGLE_SHADER_HUNT,                      625 },	//--- Ctrl + F2 (enter/exit hunt mode)	---
 			{ "HuntPrevShader",    HUNT_PREV_SHADER,                        113 },	//--- F2 (hide previous CRC)	---
 			{ "HuntNextShader",    HUNT_NEXT_SHADER,                        369 },	//--- Shift + F2 (hide next CRC)	---
 			{ "HuntCaptureShader", HUNT_CAPTURE_SHADER,                     114 },	//--- F3 (capture current CRC)	---
+			// 0.4.1 runtime profile reload: re-parse BaseProfile.xml live.
+			{ "ReloadBaseProfile", RELOAD_BASE_PROFILE,                     628 },	//--- Ctrl + F5 (re-read BaseProfile.xml)	---
 			{ "PresenterSleepTimeIncrease", INCREASE_PRESENTER_SLEEP_TIME,  221 },  //--- ]				        ---
 			{ "PresenterSleepTimeDecrease", DECREASE_PRESENTER_SLEEP_TIME,  219 },  //--- [				        ---
 			{ "PresenterFlushTimeIncrease", INCREASE_PRESENTER_FLUSH_TIME,	186 },  //--- ;				        ---

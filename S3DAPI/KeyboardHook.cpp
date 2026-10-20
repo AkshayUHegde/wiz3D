@@ -259,6 +259,9 @@ void KeyboardHook::KeyboardProcedure()
 				case HUNT_CAPTURE_SHADER:
 					if (gInfo.HuntCaptureHandler) gInfo.HuntCaptureHandler();
 					break;
+				case RELOAD_BASE_PROFILE:
+					if (gInfo.ProfileReloadHandler) gInfo.ProfileReloadHandler();
+					break;
 #ifndef FINAL_RELEASE
 				case INCREASE_ZNEAR:
 					gInfo.Input.ZNear += OFFSET(gInfo.Input.ZNear, STEP_MULTIPLIER);

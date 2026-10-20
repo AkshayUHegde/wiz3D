@@ -14,7 +14,12 @@
 #include "ProductNames.h"
 #include "OSDRenderer.h"              // on-screen display overlay
 #include "LaserSightRenderer.h"       // crosshair at convergence
-#include "ShaderHunter.h"             // 0.5.0 hunt-mode frame boundary
+#include "ShaderHunter.h"             // 0.4.1 hunt-mode frame boundary
+// 0.4.1 runtime profile reload — defined in S3DWrapperD3D10.cpp. Forward-
+// declared here rather than through a header because it's a single
+// internal between-frames entry point and S3DWrapperD3D10.cpp doesn't
+// otherwise expose any header to this translation unit.
+namespace wiz3d { void MaybeReloadProfileBetweenFrames(); }
 #include <Shlobj.h>
 #include <d3dcompiler.h>
 #include "SR.hpp"                    // Simulated Reality weave (delay-loaded runtime)
@@ -1254,10 +1259,15 @@ void SwapChain11Proxy::OnPresentBoundaryPost()
     ctx->EndFrame();
     ctx->ClearFrameCommands();
     ctx->SetPresentHookActive(true);
-    // 0.5.0 ShaderHunter: FrameEnd rebuilds the cycle from CRCs drawn this
+    // 0.4.1 ShaderHunter: FrameEnd rebuilds the cycle from CRCs drawn this
     // frame, preserves the cycle position across frames, resets per-frame
     // counters. No-op when hunt mode is off.
     wiz3d::ShaderHunter::FrameEnd();
+    // 0.4.1 runtime profile reload: if Ctrl+F5 was pressed, re-parse
+    // BaseProfile.xml now. Called from the end-of-frame boundary so no
+    // draw is reading g_ProfileData concurrently. No-op when nothing was
+    // queued (one relaxed atomic exchange).
+    wiz3d::MaybeReloadProfileBetweenFrames();
 }
 
 // GetDesc / GetDesc1: when the real BB has been resized away from the game's
