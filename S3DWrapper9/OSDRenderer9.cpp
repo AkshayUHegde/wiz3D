@@ -3,6 +3,7 @@
 */
 #include "stdafx.h"
 #include "OSDRenderer9.h"
+#include "ShaderHunter9.h"               // 0.4.1 hunt-mode OSD slot
 #include "..\S3DAPI\GlobalData.h"
 
 #include <stdio.h>
@@ -299,6 +300,9 @@ bool OSDRenderer9::Init(IDirect3DDevice9* device)
     if (!m_slots[(int)Slot::Status].Create(device, 720, 48))      { ReleaseAll(); m_initFailed = true; return false; }
     if (!m_slots[(int)Slot::Fps].Create(device, 180, 36))         { ReleaseAll(); m_initFailed = true; return false; }
     if (!m_slots[(int)Slot::HotkeyHelp].Create(device, 720, 520)) { ReleaseAll(); m_initFailed = true; return false; }
+    // 0.4.1 ShaderHunter DX9: two-line bottom-centre strip. Same 820x72
+    // footprint as the DX11 slot so the OSD looks the same across APIs.
+    if (!m_slots[(int)Slot::Hunter].Create(device, 820, 72))      { ReleaseAll(); m_initFailed = true; return false; }
 
     m_initDone = true;
     return true;
@@ -392,6 +396,35 @@ bool OSDRenderer9::WantHotkeyHelp() const
     return gInfo.Input.ShowHotKeyOSD != 0;
 }
 
+bool OSDRenderer9::WantHunter() const
+{
+    return wiz3d::dx9::HunterIsActive();
+}
+
+// Two-line hunter status, rendered bottom-centre while hunt mode is active.
+// Mirror of OSDRenderer::BuildHunterText on DX11.
+void OSDRenderer9::BuildHunterText(wchar_t* line1, size_t cap1,
+                                   wchar_t* line2, size_t cap2) const
+{
+    const wiz3d::dx9::HunterState s = wiz3d::dx9::HunterGetState();
+    if (!s.active) { line1[0] = L'\0'; line2[0] = L'\0'; return; }
+    if (s.hiddenCRC == 0)
+    {
+        _snwprintf_s(line1, cap1, _TRUNCATE,
+                     L"HUNT  no shader hidden  (%zu CRCs drawn last frame)",
+                     s.cycleSize);
+    }
+    else
+    {
+        _snwprintf_s(line1, cap1, _TRUNCATE,
+                     L"HUNT  %hs:0x%08X  draws:%u  cycle %zu/%zu",
+                     (s.hiddenStage == wiz3d::dx9::HuntStage::VS ? "VS" : "PS"),
+                     s.hiddenCRC, s.drawsForHidden, s.cycleIdx, s.cycleSize);
+    }
+    _snwprintf_s(line2, cap2, _TRUNCATE,
+                 L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
+}
+
 void OSDRenderer9::BuildStatusText(wchar_t* out, size_t cap) const
 {
     const CameraPreset* p = gInfo.Input.GetActivePreset();
@@ -460,7 +493,8 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
     const bool wantStatus = WantStatus();
     const bool wantFps    = WantFps();
     const bool wantHelp   = WantHotkeyHelp();
-    if (!wantStatus && !wantFps && !wantHelp) return;
+    const bool wantHunter = WantHunter();
+    if (!wantStatus && !wantFps && !wantHelp && !wantHunter) return;
 
     if (wantStatus) {
         wchar_t text[128];
@@ -506,6 +540,11 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
             L"Shift + F1",           L"Toggle this hotkey list",
             L"Ctrl + F1",            L"Toggle OSD strip + FPS",
             L"Shift + Numpad *",     L"Open the wizard overlay",
+            // 0.4.1 ShaderHunter + runtime reload hotkeys.
+            L"Ctrl + F2",            L"ShaderHunter: enter / exit hunt mode",
+            L"F2  /  Shift + F2",    L"ShaderHunter: cycle hidden shader",
+            L"F3",                   L"ShaderHunter: capture current CRC",
+            L"Ctrl + F5",            L"Reload BaseProfile.xml (live)",
         };
         int row = 72;
         const int rowH = 32;
@@ -523,9 +562,30 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
     }
     if (!wantHelp && m_helpTextRendered) m_helpTextRendered = false;
 
+    // 0.4.1 ShaderHunter DX9: two-line DIB. Re-rendered only when either
+    // line changed (cycle move or draw-count tick).
+    if (wantHunter) {
+        wchar_t line1[96];
+        wchar_t line2[128];
+        BuildHunterText(line1, _countof(line1), line2, _countof(line2));
+        if (wcscmp(line1, m_lastHunter1) != 0 || wcscmp(line2, m_lastHunter2) != 0) {
+            TexSlot& s = m_slots[(int)Slot::Hunter];
+            s.Clear();
+            RECT line1Rect = { 12, 4,  s.w - 12, 36 };
+            RECT line2Rect = { 12, 38, s.w - 12, 68 };
+            s.DrawTextLine(line1, line1Rect, m_fontStatus.font, RGB(255, 255, 255),
+                           DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            s.DrawTextLine(line2, line2Rect, m_fontFps.font,    RGB(200, 200, 200),
+                           DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            wcscpy_s(m_lastHunter1, line1);
+            wcscpy_s(m_lastHunter2, line2);
+        }
+    }
+
     if (wantStatus) m_slots[(int)Slot::Status].Upload();
     if (wantFps)    m_slots[(int)Slot::Fps].Upload();
     if (wantHelp)   m_slots[(int)Slot::HotkeyHelp].Upload();
+    if (wantHunter) m_slots[(int)Slot::Hunter].Upload();
 
     // Save state via a state block so we can restore the game's render state.
     IDirect3DStateBlock9* sb = nullptr;
@@ -566,6 +626,14 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
     if (wantFps) {
         TexSlot& s = m_slots[(int)Slot::Fps];
         DrawQuad(device, s.tex, (float)bbW - 20.f - (float)s.w, 20.f, (float)s.w, (float)s.h);
+    }
+    if (wantHunter) {
+        TexSlot& s = m_slots[(int)Slot::Hunter];
+        float dw = (float)(std::min<UINT>)(bbW > 40 ? bbW - 40 : (UINT)s.w, (UINT)s.w);
+        float dx = ((float)bbW - dw) * 0.5f;
+        float dy = (float)bbH - (float)s.h - 20.f;
+        if (dy < 0) dy = 0;
+        DrawQuad(device, s.tex, dx, dy, dw, (float)s.h);
     }
 
     sb->Apply();
