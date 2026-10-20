@@ -502,8 +502,8 @@ Games that used 3D Vision "Automatic Mode" driver stereo injection, but communic
 | Devil May Cry 4 Special Edition | `Stereo-Injector/DX9/32-bit` | ✓ | Untested | `Stereo=ON` in `config.ini`. |
 | Dragon's Dogma: Dark Arisen | `Stereo-Injector/DX9/32-bit` | ✕ | Untested | `Stereo=ON` in `config.ini`. |
 | Duke Nukem Forever | `Stereo-Injector/DX9/32-bit` | ✕ | Untested |  |
-| Grand Theft Auto IV | `Stereo-Injector/DX9/32-bit` | ✓ | ✅ Mostly Working | `-stereo` command line argument.<br>Needs shadows shader fix. |
-| Grand Theft Auto V (Legacy) | `Stereo-Injector/DX10-11/64-bit` | ✕ | ✅ Working | Story mode only, with BattlEye turned off. Needs `d3d9.dll` from the deploy folder present beside the game exe (0.4.0 d3d9 early-loader). |
+| Grand Theft Auto IV (GTA 4) | `Stereo-Injector/DX9/32-bit` | ✓ | ✅ Mostly Working | `-stereo` command line argument.<br>Needs shadows shader fix. |
+| Grand Theft Auto V (Legacy) | `Stereo-Injector/DX10-11/64-bit` | ✕ | ✅ Working | GTA 5 Story mode only, with BattlEye turned off. PCSS shadows. |
 | GT Legends | `Stereo-Injector/DX9/32-bit` | ✕ | Untested |  |
 | Inversion | `Stereo-Injector/DX9/32-bit` | ✕ | ⚠️ Partial | Might need to implement more 3D Vision features or shader fix. |
 | Just Cause 2 | `Stereo-Injector/DX10-11/32-bit` | ✓ | Untested |  |
