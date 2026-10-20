@@ -505,6 +505,7 @@
     <ClCompile Include="..\S3DWrapper10\ShaderResourceViewWrapper.cpp" />
     <ClCompile Include="..\S3DWrapper10\ShaderHunter.cpp" />
     <ClCompile Include="..\S3DWrapper10\ShaderWrapper.cpp" />
+    <ClCompile Include="..\S3DWrapper10\StereoParams11.cpp" />
     <ClCompile Include="..\S3DWrapper10\StereoResourceWrapper.cpp" />
     <ClCompile Include="..\S3DWrapper10\UMHandleWrapper.cpp" />
     <ClCompile Include="..\S3DWrapper10\UnorderedAccessViewWrapper.cpp" />
@@ -754,6 +755,7 @@
     <ClInclude Include="..\S3DWrapper10\ShaderHunter.h" />
     <ClInclude Include="..\S3DWrapper10\ShaderResourceViewWrapper.h" />
     <ClInclude Include="..\S3DWrapper10\ShaderWrapper.h" />
+    <ClInclude Include="..\S3DWrapper10\StereoParams11.h" />
     <ClInclude Include="..\S3DWrapper10\StereoResourceWrapper.h" />
     <ClInclude Include="..\S3DWrapper10\UMHandleWrapper.h" />
     <ClInclude Include="..\S3DWrapper10\UnorderedAccessViewWrapper.h" />

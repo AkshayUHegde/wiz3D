@@ -8,6 +8,7 @@
 
 #include "StdAfx.h"
 #include "Context11Proxy-inl.h"
+#include "StereoParams11.h"            // 0.4.1 inline ShaderOverride params
 
 namespace wiz3d
 {
@@ -609,6 +610,18 @@ void Context11Proxy::BindStageCBs(StageIdx stage, bool right)
 
 void Context11Proxy::BindEye(bool right)
 {
+    // 0.4.1 inline ShaderOverride: ensure the per-device stereo-params
+    // texture + SRV exist, update per-eye bytes, bind at t125 on every
+    // programmable stage. See docs/SHADER_FIXES.md for the convention.
+    // Lazy init: Ensure on first eye switch (hashmap hit after that).
+    if (ID3D11Device* dev = m_parent ? m_parent->GetReal() : nullptr)
+    {
+        wiz3d::EnsureStereoParams(dev);
+        const float sep  = wiz3D_GetEffectiveEyeShift();
+        const float conv = stereo::Convergence();
+        wiz3d::BindStereoParamsForEye(m_real, dev, right, sep, conv);
+    }
+
     // The duplicated draw and this rebind both call m_real directly, so they
     // bypass the proxy methods that carry FrameTrace. Log them here instead.
     if (FrameTraceActive())

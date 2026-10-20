@@ -12,7 +12,8 @@
 #include "Texture1D11Proxy.h"
 #include "Texture3D11Proxy.h"
 #include "StereoHeuristic.h"
-#include "ShaderHunter.h"                   // 0.5.0 hunt-mode plumbing
+#include "ShaderHunter.h"                   // 0.4.1 hunt-mode plumbing
+#include "StereoParams11.h"                 // 0.4.1 inline ShaderOverride params
 #include "..\S3DAPI\ReadData.h"            // ReadCurrentProfile
 #include "..\S3DAPI\ShaderProfileData.h"   // g_ProfileData
 #include "proxy_factory.h"     // for IID_wiz3D_Device11Proxy
@@ -250,6 +251,10 @@ Device11Proxy::Device11Proxy(ID3D11Device* real)
 Device11Proxy::~Device11Proxy()
 {
     Wiz3D_UnregisterActiveRenderer(this);
+    // 0.4.1 inline ShaderOverride: free the per-device stereo-params
+    // texture + SRV if one was allocated. No-op when no override ever
+    // caused Ensure() to run on this device.
+    if (m_real) wiz3d::ReleaseStereoParams(m_real);
     {
         // Release() has already dropped m_real, so the entry is found by its proxy; a stale one sends a new device at the same
         // address into this freed object.
@@ -525,6 +530,17 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
     static const ProfileFeatures s_shaderFeatures = CreateProfileFeatures();
     const RdefView rdef(pBytecode, byteLength);
     for (const auto& f : s_shaderFeatures) f->OnShaderCreated(rdef, info);
+    // 0.4.1 inline ShaderOverride: flag replacement shaders that read the
+    // stereo-params SRV at t125 so EditRightCBs skips the CB-feature pass
+    // for them. Avoids double-shift when the override is applying its own
+    // eye offset via the stereo-params texture (HelixMod / 3DMigoto model).
+    if (rdef.Present() && rdef.UsesSrvAtSlot(wiz3d::kStereoParamsSlot))
+    {
+        info.usesStereoParams = true;
+        DDILog("  Device11Proxy::Create%sShader: CRC=0x%08X reads stereo-params at t%u "
+               "— CB feature edits will be skipped for this shader\n",
+               tag, info.crc32, (unsigned)wiz3d::kStereoParamsSlot);
+    }
     // Vertex stage too: a second camera matrix outside the position chain (last frame's, for per-object velocity).
     if (!strcmp(tag, "Pixel") || !strcmp(tag, "Compute") || !strcmp(tag, "Vertex")) info.readMatrices = rdef.UsedMatrices();
     // CodeMatrices, reflection stripped: a vertex shader's matrices from the code that builds its outputs, a pixel or
