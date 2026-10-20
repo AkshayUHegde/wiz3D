@@ -208,10 +208,9 @@ void ShaderHunter::FrameEnd()
 
 void ShaderHunter::OnToggleHunt()
 {
-    // Toggle respects gInfo.EnableShaderHunter — flipping Ctrl+F2 without the
-    // config knob on is a no-op, so a user who hasn't opted in doesn't ever
-    // get into hunt mode by accident.
-    if (!gInfo.EnableShaderHunter) return;
+    // The hunter is always wired. Ctrl+F2 is itself the opt-in; no config
+    // knob gates this. Zero overhead while hunt mode is off: NoteDraw /
+    // ShouldSkipDraw early-return on the atomic g_active flag.
     std::lock_guard<std::mutex> g(s_lock);
     const bool next = !g_active.load(std::memory_order_relaxed);
     g_active.store(next, std::memory_order_release);

@@ -312,7 +312,6 @@ bool ReadConfigRouterType()
 			DECLARE_FVALUE(COMWrapEyeShift),
 			DECLARE_BVALUE(DuplicateDraws),
 			DECLARE_BVALUE(CollectDebugInformation),
-			DECLARE_BVALUE(EnableShaderHunter),
 			DECLARE_IVALUE(ScreenshotType),
 			DECLARE_BVALUE(FixVistaSP1ResetBug),
 			DECLARE_BVALUE(DisableGammaApplying),

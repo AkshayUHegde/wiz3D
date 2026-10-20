@@ -14,17 +14,9 @@ wiz3D needs the same thing to make the planned ShaderPatch / inline ShaderOverri
 
 ## Design — three touch points
 
-### 1. New config knob (`wiz3D_Config.xml`, `GlobalSettings`)
+### 1. No config knob — hotkey is the entry
 
-```xml
-<!-- Enable the ShaderHunter OSD mode. When active, Ctrl+F2 toggles
-     hunt mode, F2/Shift+F2 cycle the hidden shader CRC through those
-     actually drawn this frame, F3 captures the current shader to a
-     Hunter/<CRC>_<ts>.txt report. Zero cost when off. -->
-<EnableShaderHunter Value="0"/>
-```
-
-Default off. Gates the whole system, including the Context11Proxy per-draw CRC check. Shipping with it off means normal play has zero overhead; authors flip to `1` when they want to hunt.
+Earlier revisions of this doc proposed a `<EnableShaderHunter>` config field. Dropped in review: the Ctrl+F2 hotkey is itself the opt-in. Pressing it enters hunt mode, pressing again exits. All hunter machinery is always compiled in and wired up; `IsActive()` returns false until Ctrl+F2 is pressed, which short-circuits every hot-path call (`NoteDraw`, `ShouldSkipDraw`) at a relaxed atomic load. Zero overhead when not hunting; one less knob users have to find in XML.
 
 ### 2. Hotkey additions (`S3DAPI/GlobalData.h` + `KeyboardHook.cpp`)
 

@@ -379,16 +379,13 @@ public:
 	// Zero (default) means "use profile-driven shift via wiz3D_GetEffectiveEyeShift".
 	float		COMWrapEyeShift;
 	bool		CollectDebugInformation;
-	// 0.5.0 ShaderHunter: gates the hunt-mode OSD + per-draw CRC-skip
-	// path in Context11Proxy. Off by default; flipping to true enables
-	// Ctrl+F2 toggle and the F2/Shift+F2/F3 cycle+capture hotkeys. See
-	// docs/SHADER_HUNTER_DESIGN.md for the full flow. Zero cost when off.
-	bool		EnableShaderHunter;
 	// 0.5.0 ShaderHunter: wrapper-side hotkey handlers. S3DAPI's
 	// KeyboardHook dispatches to these if non-null; otherwise the hotkey
 	// is a silent no-op (the wrapper that would handle it isn't loaded).
 	// S3DWrapperD3D10 sets these from InitDirectories; other wrappers
 	// may set equivalents when their own ShaderHunter port lands.
+	// The system is always wired — Ctrl+F2 enters hunt mode on demand,
+	// no config knob gating; zero cost when IsActive() is false.
 	void      (*HuntToggleHandler)();
 	void      (*HuntPrevHandler)();
 	void      (*HuntNextHandler)();
