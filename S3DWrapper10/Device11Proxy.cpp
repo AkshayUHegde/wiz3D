@@ -12,6 +12,7 @@
 #include "Texture1D11Proxy.h"
 #include "Texture3D11Proxy.h"
 #include "StereoHeuristic.h"
+#include "ShaderHunter.h"                   // 0.5.0 hunt-mode plumbing
 #include "..\S3DAPI\ReadData.h"            // ReadCurrentProfile
 #include "..\S3DAPI\ShaderProfileData.h"   // g_ProfileData
 #include "proxy_factory.h"     // for IID_wiz3D_Device11Proxy
@@ -489,6 +490,20 @@ HRESULT AnalyzeAndCreate(const char* tag, Device11Proxy* self, CreateFn createRe
     // too (pixel and compute shaders), as BaseProfile.xml and the features still match them by CRC and name.
     if (analyzed || info.crc32)
         self->StoreShaderProjection(*ppShader, info);
+
+    // 0.5.0 ShaderHunter: record this shader with the hunter so hunt mode can
+    // cycle through it. The analyser result is captured by value (small POD
+    // + shared_ptr bytecode). Compute shaders aren't huntable (not bound to a
+    // draw in the same sense) so we skip them. Vertex / Pixel only. Cost when
+    // the hunter config knob is off is still one lock-and-insert here — tiny,
+    // and only hit at shader-create time, not per-draw.
+    if (info.crc32 && (!strcmp(tag, "Vertex") || !strcmp(tag, "Pixel")))
+    {
+        const wiz3d::HuntStage huntStage = (tag[0] == 'V')
+            ? wiz3d::HuntStage::VS
+            : wiz3d::HuntStage::PS;
+        wiz3d::ShaderHunter::NoteCreated(info.crc32, huntStage, info);
+    }
 
     // TryBuildModifiedVS DX11 Phase 1: when a profile sets AlwaysModifyShaders=1 (or
     // a per-shader <VertexShader CRC Modify="1"> entry matches this VS's CRC), try to

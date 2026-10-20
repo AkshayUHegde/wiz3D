@@ -14,6 +14,7 @@
 #include "ProductNames.h"
 #include "OSDRenderer.h"              // on-screen display overlay
 #include "LaserSightRenderer.h"       // crosshair at convergence
+#include "ShaderHunter.h"             // 0.5.0 hunt-mode frame boundary
 #include <Shlobj.h>
 #include <d3dcompiler.h>
 #include "SR.hpp"                    // Simulated Reality weave (delay-loaded runtime)
@@ -1253,6 +1254,10 @@ void SwapChain11Proxy::OnPresentBoundaryPost()
     ctx->EndFrame();
     ctx->ClearFrameCommands();
     ctx->SetPresentHookActive(true);
+    // 0.5.0 ShaderHunter: FrameEnd rebuilds the cycle from CRCs drawn this
+    // frame, preserves the cycle position across frames, resets per-frame
+    // counters. No-op when hunt mode is off.
+    wiz3d::ShaderHunter::FrameEnd();
 }
 
 // GetDesc / GetDesc1: when the real BB has been resized away from the game's

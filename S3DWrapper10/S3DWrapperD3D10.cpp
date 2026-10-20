@@ -10,6 +10,7 @@
 #include "..\S3DAPI\ReadData.h"
 #include "../S3DAPI/ShutterAPI.h"
 #include "DXGIFactoryWrapper.h"
+#include "ShaderHunter.h"           // 0.5.0 hunt-mode plumbing
 #include <madchook.h>
 #include <IL/il.h>
 #include "../OutputMethods/OutputLib/OutputData.h"
@@ -63,8 +64,21 @@ public :
 CDX10Module _AtlModule;
 
 
+// 0.5.0 ShaderHunter: register the DX10/11 wrapper's handlers with the
+// S3DAPI hotkey dispatcher. KeyboardHook calls these if the slot is set;
+// one of them being null is harmless (hotkey becomes a silent no-op).
+// Called once from InitDirectories so it runs before any hotkey processing.
+static void RegisterShaderHunterHandlers()
+{
+	gInfo.HuntToggleHandler  = &wiz3d::ShaderHunter::OnToggleHunt;
+	gInfo.HuntPrevHandler    = &wiz3d::ShaderHunter::OnCyclePrev;
+	gInfo.HuntNextHandler    = &wiz3d::ShaderHunter::OnCycleNext;
+	gInfo.HuntCaptureHandler = &wiz3d::ShaderHunter::OnCapture;
+}
+
 void InitDirectories( )
 {
+	RegisterShaderHunterHandlers();
 #ifdef ZLOG_ALLOW_TRACING
 	InitializeLogging();
 

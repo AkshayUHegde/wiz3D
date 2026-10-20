@@ -241,6 +241,24 @@ void KeyboardHook::KeyboardProcedure()
 					gInfo.ShowOSD = (gInfo.ShowOSD >= 2) ? 1 : 2;
 					gInfo.Input.ShowFPS = (gInfo.ShowOSD >= 2) ? 1 : 0;
 					break;
+				// 0.5.0 ShaderHunter — dispatch to the wrapper-registered
+				// handler if one is present. KeyboardHook lives in S3DAPI,
+				// which can't link directly to S3DWrapper10's ShaderHunter;
+				// the function-pointer indirection keeps S3DAPI free of
+				// per-API dependencies. Each handler is a no-op when its
+				// slot is null (wrapper that would handle it isn't loaded).
+				case TOGGLE_SHADER_HUNT:
+					if (gInfo.HuntToggleHandler)  gInfo.HuntToggleHandler();
+					break;
+				case HUNT_PREV_SHADER:
+					if (gInfo.HuntPrevHandler)    gInfo.HuntPrevHandler();
+					break;
+				case HUNT_NEXT_SHADER:
+					if (gInfo.HuntNextHandler)    gInfo.HuntNextHandler();
+					break;
+				case HUNT_CAPTURE_SHADER:
+					if (gInfo.HuntCaptureHandler) gInfo.HuntCaptureHandler();
+					break;
 #ifndef FINAL_RELEASE
 				case INCREASE_ZNEAR:
 					gInfo.Input.ZNear += OFFSET(gInfo.Input.ZNear, STEP_MULTIPLIER);

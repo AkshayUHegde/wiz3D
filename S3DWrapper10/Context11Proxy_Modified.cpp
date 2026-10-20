@@ -8,6 +8,7 @@
 
 #include "StdAfx.h"
 #include "Context11Proxy-inl.h"
+#include "ShaderHunter.h"            // 0.5.0 hunt-mode plumbing
 
 // The right eye's indirect arguments: the args buffer's right sibling, which the right eye's dispatches write.
 static inline ID3D11Buffer* RightArgs(ID3D11Buffer* p)
@@ -539,12 +540,19 @@ void STDMETHODCALLTYPE Context11Proxy::PSSetShader(
 void STDMETHODCALLTYPE Context11Proxy::Draw(UINT VertexCount, UINT StartVertexLocation)
 {
     BeginDraw(VertexCount);
+    const DWORD _huntVS = BoundShaderCRC(m_parent, m_boundVS);
+    const DWORD _huntPS = BoundShaderCRC(m_parent, m_boundPS);
+    wiz3d::ShaderHunter::NoteDraw(_huntVS, _huntPS);
+    // 0.5.0 ShaderHunter: symmetric skip — if the bound VS or PS matches the
+    // currently hunted CRC, we drop the real left-eye draw AND skip the
+    // m_frameCommands.emplace_back below, so right-eye replay sees the same
+    // no-op. Keeps left/right in lockstep per the design doc risk #1.
+    if (wiz3d::ShaderHunter::ShouldSkipDraw(_huntVS, _huntPS)) return;
     if (FrameTraceActive())
         FrameTrace("    Draw eye=%c vcount=%u start=%u vs=0x%08lX ps=0x%08lX\n",
                    m_activeEye == Eye::Right ? 'R' : 'L',
                    VertexCount, StartVertexLocation,
-                   BoundShaderCRC(m_parent, m_boundVS),
-                   BoundShaderCRC(m_parent, m_boundPS));
+                   _huntVS, _huntPS);
     { ScopedTicks t_(m_time.gameCalls); m_real->Draw(VertexCount, StartVertexLocation); }
     DUPLICATE_DRAW(Draw(VertexCount, StartVertexLocation));
     if (!m_presentHookActive) return;
@@ -567,12 +575,15 @@ void STDMETHODCALLTYPE Context11Proxy::DrawIndexed(
     UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 {
     BeginDraw(IndexCount);
+    const DWORD _huntVS = BoundShaderCRC(m_parent, m_boundVS);
+    const DWORD _huntPS = BoundShaderCRC(m_parent, m_boundPS);
+    wiz3d::ShaderHunter::NoteDraw(_huntVS, _huntPS);
+    if (wiz3d::ShaderHunter::ShouldSkipDraw(_huntVS, _huntPS)) return;
     if (FrameTraceActive())
         FrameTrace("    DrawIndexed eye=%c icount=%u start=%u base=%d vs=0x%08lX ps=0x%08lX\n",
                    m_activeEye == Eye::Right ? 'R' : 'L',
                    IndexCount, StartIndexLocation, BaseVertexLocation,
-                   BoundShaderCRC(m_parent, m_boundVS),
-                   BoundShaderCRC(m_parent, m_boundPS));
+                   _huntVS, _huntPS);
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawIndexed(IndexCount, StartIndexLocation, BaseVertexLocation); }
     DUPLICATE_DRAW(DrawIndexed(IndexCount, StartIndexLocation, BaseVertexLocation));
     if (!m_presentHookActive) return;
@@ -596,6 +607,10 @@ void STDMETHODCALLTYPE Context11Proxy::DrawInstanced(
     UINT StartVertexLocation, UINT StartInstanceLocation)
 {
     BeginDraw(VertexCountPerInstance);
+    const DWORD _huntVS = BoundShaderCRC(m_parent, m_boundVS);
+    const DWORD _huntPS = BoundShaderCRC(m_parent, m_boundPS);
+    wiz3d::ShaderHunter::NoteDraw(_huntVS, _huntPS);
+    if (wiz3d::ShaderHunter::ShouldSkipDraw(_huntVS, _huntPS)) return;
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawInstanced(VertexCountPerInstance, InstanceCount,
                                                              StartVertexLocation, StartInstanceLocation); }
     DUPLICATE_DRAW(DrawInstanced(VertexCountPerInstance, InstanceCount,
@@ -619,6 +634,10 @@ void STDMETHODCALLTYPE Context11Proxy::DrawIndexedInstanced(
     INT BaseVertexLocation, UINT StartInstanceLocation)
 {
     BeginDraw(IndexCountPerInstance);
+    const DWORD _huntVS = BoundShaderCRC(m_parent, m_boundVS);
+    const DWORD _huntPS = BoundShaderCRC(m_parent, m_boundPS);
+    wiz3d::ShaderHunter::NoteDraw(_huntVS, _huntPS);
+    if (wiz3d::ShaderHunter::ShouldSkipDraw(_huntVS, _huntPS)) return;
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawIndexedInstanced(IndexCountPerInstance, InstanceCount,
                                                                     StartIndexLocation, BaseVertexLocation,
                                                                     StartInstanceLocation); }
@@ -643,6 +662,10 @@ void STDMETHODCALLTYPE Context11Proxy::DrawIndexedInstanced(
 void STDMETHODCALLTYPE Context11Proxy::DrawAuto()
 {
     BeginDraw(UINT_MAX);   // count unknown; assume geometry
+    const DWORD _huntVS = BoundShaderCRC(m_parent, m_boundVS);
+    const DWORD _huntPS = BoundShaderCRC(m_parent, m_boundPS);
+    wiz3d::ShaderHunter::NoteDraw(_huntVS, _huntPS);
+    if (wiz3d::ShaderHunter::ShouldSkipDraw(_huntVS, _huntPS)) return;
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawAuto(); }
     DUPLICATE_DRAW(DrawAuto());
     if (!m_presentHookActive) return;
@@ -660,6 +683,10 @@ void STDMETHODCALLTYPE Context11Proxy::DrawInstancedIndirect(
     ID3D11Buffer* pBufferForArgs, UINT AlignedByteOffsetForArgs)
 {
     BeginDraw(UINT_MAX);   // count unknown; assume geometry
+    const DWORD _huntVS = BoundShaderCRC(m_parent, m_boundVS);
+    const DWORD _huntPS = BoundShaderCRC(m_parent, m_boundPS);
+    wiz3d::ShaderHunter::NoteDraw(_huntVS, _huntPS);
+    if (wiz3d::ShaderHunter::ShouldSkipDraw(_huntVS, _huntPS)) return;
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawInstancedIndirect(UnwrapBuf(pBufferForArgs), AlignedByteOffsetForArgs); }
     DUPLICATE_DRAW(DrawInstancedIndirect(RightArgs(pBufferForArgs), AlignedByteOffsetForArgs));
     if (!m_presentHookActive) return;
@@ -680,6 +707,10 @@ void STDMETHODCALLTYPE Context11Proxy::DrawIndexedInstancedIndirect(
     ID3D11Buffer* pBufferForArgs, UINT AlignedByteOffsetForArgs)
 {
     BeginDraw(UINT_MAX);   // count unknown; assume geometry
+    const DWORD _huntVS = BoundShaderCRC(m_parent, m_boundVS);
+    const DWORD _huntPS = BoundShaderCRC(m_parent, m_boundPS);
+    wiz3d::ShaderHunter::NoteDraw(_huntVS, _huntPS);
+    if (wiz3d::ShaderHunter::ShouldSkipDraw(_huntVS, _huntPS)) return;
     { ScopedTicks t_(m_time.gameCalls); m_real->DrawIndexedInstancedIndirect(UnwrapBuf(pBufferForArgs), AlignedByteOffsetForArgs); }
     DUPLICATE_DRAW(DrawIndexedInstancedIndirect(RightArgs(pBufferForArgs), AlignedByteOffsetForArgs));
     if (!m_presentHookActive) return;

@@ -384,6 +384,15 @@ public:
 	// Ctrl+F2 toggle and the F2/Shift+F2/F3 cycle+capture hotkeys. See
 	// docs/SHADER_HUNTER_DESIGN.md for the full flow. Zero cost when off.
 	bool		EnableShaderHunter;
+	// 0.5.0 ShaderHunter: wrapper-side hotkey handlers. S3DAPI's
+	// KeyboardHook dispatches to these if non-null; otherwise the hotkey
+	// is a silent no-op (the wrapper that would handle it isn't loaded).
+	// S3DWrapperD3D10 sets these from InitDirectories; other wrappers
+	// may set equivalents when their own ShaderHunter port lands.
+	void      (*HuntToggleHandler)();
+	void      (*HuntPrevHandler)();
+	void      (*HuntNextHandler)();
+	void      (*HuntCaptureHandler)();
 	DWORD       ScreenshotType;
 	bool		FixVistaSP1ResetBug;
 	bool		DisableGammaApplying;
