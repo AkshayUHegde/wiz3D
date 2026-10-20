@@ -65,6 +65,7 @@ private:
         Status = 0,    // top-left status line
         Fps,           // top-right FPS counter
         HotkeyHelp,    // centred, full-screen dim behind
+        Hunter,        // 0.5.0 ShaderHunter: bottom-centre, two-line status
         _Count
     };
 
@@ -98,6 +99,8 @@ private:
     bool  EnsureShaders(ID3D11Device* dev);
     void  BuildStatusText(wchar_t* out, size_t cap) const;
     void  BuildFpsText(wchar_t* out, size_t cap) const;
+    void  BuildHunterText(wchar_t* line1, size_t cap1,
+                          wchar_t* line2, size_t cap2) const;
     void  DrawQuad(ID3D11DeviceContext* ctx,
                    ID3D11ShaderResourceView* srv,
                    float x, float y, float w, float h,
@@ -105,6 +108,7 @@ private:
     bool  WantStatus() const;
     bool  WantFps() const;
     bool  WantHotkeyHelp() const;
+    bool  WantHunter() const;
 
     // Shared D3D11 state. One VS, one PS, one blend, one sampler.
     ID3D11VertexShader*       m_vs      = nullptr;
@@ -155,6 +159,8 @@ private:
     // Cached rendered text — skip re-blitting the DIB if content unchanged.
     wchar_t   m_lastStatus[128] = {};
     wchar_t   m_lastFps[32]     = {};
+    wchar_t   m_lastHunter1[96] = {};
+    wchar_t   m_lastHunter2[128] = {};
     bool      m_helpTextRendered = false;
 
     bool      m_initDone   = false;
