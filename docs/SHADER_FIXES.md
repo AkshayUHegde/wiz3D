@@ -81,16 +81,35 @@ mov o0, r0
 
 Drop at `<game>/ShaderOverride/VertexShaders/0xA3B5F218.txt`, launch the game. Done.
 
-## DX10 / DX11 — roadmap
+## DX10 / DX11 — shipped and shipping
 
-Not shipped yet. Current state:
+**0.4.0 (shipped):**
+- **CB-math features** (Akshay's PR #31). 37 declarative tags in `BaseProfile.xml` cover most engine families (UE3, UE4, CryEngine, RAGE, Dunia).
 
-- **CB-math features** are shipped (Akshay's PR #31, 0.4.0). 37 declarative tags in `BaseProfile.xml` cover most engine families.
-- **Shader-level fixes** are planned for 0.5.0 as inline `<ShaderOverride CRC="..."><![CDATA[...]]></ShaderOverride>` entries in `BaseProfile.xml`, with the same three-layer architecture ported from DX9:
-  - Stereo-params SRV at a reserved slot (likely `t125`)
-  - `texldl`-equivalent scan on `sample` instructions against that slot → `usesStereoParams` flag on `ShaderAnalysis11Result`
-  - Loader keyed on CRC32, consuming HLSL text compiled via `D3DCompile`
-- **ShaderHunter** OSD mode (0.5.0): hotkey cycles the currently-drawn shaders, hides each in turn, captures the identified CRC + mini-report (disasm + CB layout + suggested ShaderPatch skeleton) to `wiz3D_Logs/<Game>/Shaders/Hunter/<CRC>_<timestamp>.txt`.
+**0.4.1 (this release):**
+- **ShaderHunter** — Ctrl+F2 enters hunt mode, F2 / Shift+F2 cycle through CRCs drawn this frame (symmetric left/right skip to keep replay in sync), F3 captures a mini-report with disasm + CB layout + suggested `<ShaderPatch>` skeleton to `wiz3D_Logs/<Game>/Shaders/Hunter/<CRC>_<stage>_<ts>.txt`. OSD strip bottom-centre while active. No config knob — the hotkey is itself the entry point.
+- **`<ShaderPatch>` shorthand** (CRC-keyed, declarative). First primitive: `<SkipStereo/>` — forces a draw mono-both-eyes by short-circuiting `Context11Proxy::EditRightCBs` for the right eye when the bound VS or PS matches. Covers HUD leaks, specific crosshairs, screen-space shaders that shouldn't shift.
+
+**Example:**
+```xml
+<Profile Name="Example Game">
+    <File Name="game.exe"/>
+    <!-- Broad engine coverage -->
+    <DetectInverseMatrix Value="1"/>
+    <RightCamera Buffer="ViewParams" View="r8" .../>
+    <!-- Per-shader fix: this HUD vertex shader leaks into stereo depth -->
+    <ShaderPatch CRC="0xA3B5F218" Stage="VS">
+        <SkipStereo/>
+    </ShaderPatch>
+</Profile>
+```
+
+The hunter's capture report pre-fills a `<ShaderPatch>` skeleton with sensible defaults for the shader it captured, so authoring is often one copy-paste from the Hunter/ output into BaseProfile.xml.
+
+**Still planned for 0.5.0:**
+- More `<ShaderPatch>` primitives: `<PatchCB>`, `<ScaleCB>`, `<OverrideFeature>`, `<ForceModifiedVS>`.
+- **Inline `<ShaderOverride>`** with CDATA + stereo-params SRV + texldl-equivalent scan. Full HLSL/DXBC replacement for the 10-20% of cases CB-math can't express.
+- **Runtime BaseProfile.xml reload** (0.4.1 if time permits) — hotkey to re-parse the profile without restarting the game, so dev iteration is one keypress not one process launch.
 
 Inline-only. No `wiz3D_Overrides/` folder, no sidecar `.txt` sprawl: every fix lands as a reviewed PR against `BaseProfile.xml`, inheriting LGPL-2.1 by construction.
 

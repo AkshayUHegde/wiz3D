@@ -551,6 +551,23 @@ void Context11Proxy::EditRightCBs(bool compute)
     if (Features().empty()) return;
     const ShaderAnalysis11Result* infos[2] = { m_boundInfo[compute ? 2 : 0], compute ? nullptr : m_boundInfo[1] };
     if (!(infos[0] && !infos[0]->rightCBs.empty()) && !(infos[1] && !infos[1]->rightCBs.empty())) return;
+    // 0.4.1 ShaderPatch <SkipStereo/>: a profile marked either bound shader
+    // as mono-both-eyes via BaseProfile.xml. Skip the whole right-eye CB edit
+    // pass so the right eye renders with the game's own (unshifted) CBs,
+    // identical to the left eye. See ShaderProfileData::m_bSkipStereo.
+    if (!compute)
+    {
+        if (infos[0])
+        {
+            auto it = g_ProfileData.VSCRCData.find(infos[0]->crc32);
+            if (it != g_ProfileData.VSCRCData.end() && it->second.m_bSkipStereo) return;
+        }
+        if (infos[1])
+        {
+            auto it = g_ProfileData.PSCRCData.find(infos[1]->crc32);
+            if (it != g_ProfileData.PSCRCData.end() && it->second.m_bSkipStereo) return;
+        }
+    }
     const StageIdx stages[2] = { compute ? ST_CS : ST_VS, ST_PS };
     const float eyeShift = wiz3D_GetEffectiveEyeShift() * EyeShiftSign(), conv = stereo::Convergence();
     int aspect = -1;   // the output's aspect, read once and only when an edit is due

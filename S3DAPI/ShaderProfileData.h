@@ -53,22 +53,32 @@ typedef std::pair<DWORD, ResourceCRCMultiplierMap>				ResourcesCRCMultiplierMapW
 class ShaderProfileData : public ResourceProfileData
 {
 public:
-	ShaderProfileData() : 
-		ResourceProfileData(), 
-		m_bModifyShader(false), 
-		m_bAddZNearCheck(false), 
-		m_ZNear(1.0f), 
+	ShaderProfileData() :
+		ResourceProfileData(),
+		m_bModifyShader(false),
+		m_bAddZNearCheck(false),
+		m_bSkipStereo(false),
+		m_ZNear(1.0f),
 		m_pMatrices(NULL),
 		m_PreTransformProjectionId(-1)
 	{}
 
 	~ShaderProfileData()
-	{	
+	{
 		delete m_pMatrices;
 	}
 
 	bool				m_bModifyShader;
 	bool				m_bAddZNearCheck;
+	// 0.4.1 ShaderPatch <SkipStereo/>: when true, Context11Proxy::EditRightCBs
+	// skips the right-eye CB feature-edit pass if this shader is bound. Both
+	// eyes end up rendering with the game's own (unshifted) CBs, so the
+	// shader draws mono-both-eyes. Set via <ShaderPatch CRC="..." Stage=
+	// "VS|PS"><SkipStereo/></ShaderPatch> in BaseProfile.xml. Complements the
+	// legacy <Mono><VertexShader CRC/></Mono> path (which sets m_Multiplier=0)
+	// by covering the CB-math feature engine added in PR #31 — the legacy
+	// path affected only the DX9-era bStereo gate in ShaderWrapper.
+	bool				m_bSkipStereo;
 	float				m_ZNear;
 	ShaderMatrices*		m_pMatrices;
 	int					m_PreTransformProjectionId;	// id of the matrix for shader modification in particular frame (for Bioshock2 shadows), -1 - not used

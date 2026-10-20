@@ -954,6 +954,34 @@ void ReadProfilePart2Data(TiXmlNode* node)
 			if (matName)
 				g_ProfileData.AdditionalMatrixName.push_back(std::string(matName));
 		}
+		else if ( strcmp( itemElement->Value(), "ShaderPatch" ) == 0 )
+		{
+			// 0.4.1 ShaderPatch shorthand. Format:
+			//   <ShaderPatch CRC="0xABC12345" Stage="VS|PS">
+			//     <SkipStereo/>
+			//   </ShaderPatch>
+			// Current primitives: SkipStereo. More (PatchCB, ScaleCB, ...)
+			// to follow when the shader-override pipeline lands in 0.5.0.
+			// Unknown child tags are silently ignored so a profile authored
+			// against a newer wiz3D still loads on an older build (the fix
+			// won't apply, but the game still runs).
+			const char* crcStr   = itemElement->Attribute("CRC");
+			const char* stageStr = itemElement->Attribute("Stage");
+			if (!crcStr || !stageStr) continue;
+			DWORD crc = 0;
+			sscanf_s(crcStr, "0x%x", &crc);
+			if (!crc) continue;
+			ShaderProfileData* pProfile = nullptr;
+			if      (!strcmp(stageStr, "VS")) pProfile = &g_ProfileData.VSCRCData[crc];
+			else if (!strcmp(stageStr, "PS")) pProfile = &g_ProfileData.PSCRCData[crc];
+			else if (!strcmp(stageStr, "GS")) pProfile = &g_ProfileData.GSCRCData[crc];
+			if (!pProfile) continue;
+			for ( TiXmlElement* op = itemElement->FirstChildElement(); op; op = op->NextSiblingElement() )
+			{
+				if (strcmp(op->Value(), "SkipStereo") == 0)
+					pProfile->m_bSkipStereo = true;
+			}
+		}
 		else if ( strcmp( itemElement->Value(), "Keys" ) == 0 )
 		{
 			for( TiXmlElement* itemElement2 = itemElement->FirstChildElement(); itemElement2; itemElement2 = itemElement2->NextSiblingElement() )
