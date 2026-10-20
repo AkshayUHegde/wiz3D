@@ -19,6 +19,7 @@
 #include "WDirect3DCreate9.h" 
 #include <IL/il.h>
 #include "BaseStereoRenderer.h"
+#include "ShaderHunter9.h"
 #include "../S3DAPI/ReadData.h"
 //#include <vld.h>
 
@@ -106,12 +107,26 @@ void FormatD9IID(REFIID riid, char* buf, size_t bufLen)
 // process at launch. NVIDIA's UMD happens not to take that path, masking the
 // bug for years. madCHook hook installation and DevIL init are similarly
 // loader-lock-sensitive.
+// 0.4.1 ShaderHunter DX9: register the DX9 wrapper's hotkey handlers with
+// the S3DAPI dispatcher. KeyboardHook calls these if non-null; one wrapper
+// per game, so no conflict with the DX10/11 handlers. See
+// docs/SHADER_HUNTER_DESIGN.md for the full flow.
+static void RegisterDX9ShaderHunterHandlers()
+{
+	gInfo.HuntToggleHandler  = &wiz3d::dx9::HunterOnToggle;
+	gInfo.HuntPrevHandler    = &wiz3d::dx9::HunterOnCyclePrev;
+	gInfo.HuntNextHandler    = &wiz3d::dx9::HunterOnCycleNext;
+	gInfo.HuntCaptureHandler = &wiz3d::dx9::HunterOnCapture;
+	gInfo.ProfileReloadHandler = &wiz3d::dx9::RequestProfileReload;
+}
+
 void EnsureWrapperInitialized()
 {
 	if (InterlockedCompareExchange(&g_bWrapperInitialized, 1, 0) != 0)
 		return;
 
 	InitDirectories();
+	RegisterDX9ShaderHunterHandlers();
 	DetectShutterMode();
 	InitializeMadCHook();
 

@@ -14,6 +14,7 @@
 #include <iomanip>
 #include "BaseStereoRenderer.h"
 #include "BaseSwapChain.h"
+#include "ShaderHunter9.h"
 #include "BackgroundPresenterThread.h"
 #include "PresenterMultiThread.h"
 #include "..\S3DAPI\ScalingAgent.h"
@@ -1739,6 +1740,15 @@ HRESULT STDMETHODCALLTYPE CBaseSwapChain::Present(CONST RECT* pSourceRect,CONST 
 
 	DEBUG_TRACE3(_T("--------- Frame %d complete ---------\n\n"), m_nPresentCounter);
 	m_nPresentCounter++;
+
+	// 0.4.1 ShaderHunter DX9: FrameEnd rebuilds the stable prev/next cycle
+	// from drawn CRCs and resets per-frame counters. No-op when hunt mode
+	// is off.
+	wiz3d::dx9::HunterFrameEnd();
+	// 0.4.1 runtime profile reload (DX9 half of task #52). The handler
+	// registered from the DX9 wrapper's init sets a between-frames flag;
+	// here on the Present boundary we consume it.
+	wiz3d::dx9::MaybeReloadProfileBetweenFrames();
 
 	CheckSecondWindowPosition();
 	GetBaseDevice()->CheckEngine();

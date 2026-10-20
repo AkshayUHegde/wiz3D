@@ -19,6 +19,7 @@
 #include "ProxyQuery.h"
 #include "CommandDumper.h"
 #include "ShaderOverrideLoader.h"
+#include "ShaderHunter9.h"
 
 STDMETHODIMP CBaseStereoRenderer::CreateVertexShader(CONST DWORD * pFunction, IDirect3DVertexShader9** ppShader)
 {
@@ -29,16 +30,21 @@ STDMETHODIMP CBaseStereoRenderer::CreateVertexShader(CONST DWORD * pFunction, ID
 	// original. The substituted shader flows through Convert() the same way,
 	// and Phase 1b's bytecode scan picks up the texldl pattern so wiz3D won't
 	// also apply matrix offset on top.
+	UINT  origSize = D3DXGetShaderSize(pFunction);
+	DWORD origCRC  = wiz3d::shader_override::ComputeShaderCRC32(pFunction, origSize);
 	CComPtr<ID3DXBuffer> pOverrideAsm;
 	{
-		UINT origSize = D3DXGetShaderSize(pFunction);
-		DWORD origCRC = wiz3d::shader_override::ComputeShaderCRC32(pFunction, origSize);
 		if (wiz3d::shader_override::TryLoadOverride(origCRC,
 		        wiz3d::shader_override::ShaderType::Vertex, pOverrideAsm))
 		{
 			pFunction = (CONST DWORD*)pOverrideAsm->GetBufferPointer();
 		}
 	}
+	// 0.4.1 ShaderHunter DX9: record the created shader (pre-conversion CRC
+	// so the author's capture reports match what SetVertexShader will set on
+	// m_CurrentShaderData.CRC32 at draw time).
+	wiz3d::dx9::HunterNoteCreated(origCRC, wiz3d::dx9::HuntStage::VS,
+	                              pFunction, origSize);
 
 	//NSCALL_TRACE2(m_pDirect3DDevice.CreateVertexShader(pFunction, ppShader),
 	//	DEBUG_MESSAGE("CreateVertexShader(pFunction = %p, *ppShader = %p)",
@@ -76,16 +82,19 @@ STDMETHODIMP CBaseStereoRenderer::CreatePixelShader(CONST DWORD* pFunction, IDir
 	HRESULT hResult;
 
 	// HelixMod-compatible override (PS): see CreateVertexShader for details.
+	UINT  origSize = D3DXGetShaderSize(pFunction);
+	DWORD origCRC  = wiz3d::shader_override::ComputeShaderCRC32(pFunction, origSize);
 	CComPtr<ID3DXBuffer> pOverrideAsm;
 	{
-		UINT origSize = D3DXGetShaderSize(pFunction);
-		DWORD origCRC = wiz3d::shader_override::ComputeShaderCRC32(pFunction, origSize);
 		if (wiz3d::shader_override::TryLoadOverride(origCRC,
 		        wiz3d::shader_override::ShaderType::Pixel, pOverrideAsm))
 		{
 			pFunction = (CONST DWORD*)pOverrideAsm->GetBufferPointer();
 		}
 	}
+	// 0.4.1 ShaderHunter DX9: record the created shader by pre-conversion CRC.
+	wiz3d::dx9::HunterNoteCreated(origCRC, wiz3d::dx9::HuntStage::PS,
+	                              pFunction, origSize);
 
 	//NSCALL_TRACE2(m_pDirect3DDevice.CreatePixelShader(pFunction, ppShader),
 	//	DEBUG_MESSAGE("CreatePixelShader(pFunction = %p, *ppShader = %p)",
@@ -121,10 +130,25 @@ STDMETHODIMP CBaseStereoRenderer::CreatePixelShader(CONST DWORD* pFunction, IDir
 
 #define DEBUG_TRACE_MODE() DEBUG_TRACE3(_T("\t%s - %s Pipeline\n"),GetModeString(), GetPipelineString(m_Pipeline));
 
-STDMETHODIMP CBaseStereoRenderer::DrawPrimitive( 
-	D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount) 
+// 0.4.1 ShaderHunter DX9: note the bound VS/PS CRCs for the frame's draw set,
+// then decide whether to skip this draw entirely. Symmetric skip (no left,
+// no right) so the broken effect vanishes cleanly for the hunting author.
+// Called at the top of every top-level Draw method; the Splitted internal
+// variants don't need this because they're reached only when the top-level
+// gate let the draw through.
+static inline bool HunterGateDX9(DWORD vsCRC, DWORD psCRC)
+{
+	wiz3d::dx9::HunterNoteDraw(vsCRC, psCRC);
+	return wiz3d::dx9::HunterShouldSkipDraw(vsCRC, psCRC);
+}
+
+STDMETHODIMP CBaseStereoRenderer::DrawPrimitive(
+	D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount)
 {
 	DUMP_CMD_DRAW(DrawPrimitive,PrimitiveType,StartVertex,PrimitiveCount);
+	if (HunterGateDX9(m_VSPipelineData.m_CurrentShaderData.CRC32,
+	                  m_PSPipelineData.m_CurrentShaderData.CRC32))
+		return S_OK;
 
 	if( CheckDrawPassSplitting( PrimitiveType, PrimitiveCount ) )
 		return DrawPrimitiveSplitted( PrimitiveType, StartVertex, PrimitiveCount);
@@ -272,12 +296,15 @@ HRESULT CBaseStereoRenderer::DrawPrimitiveSplitted(
 STDMETHODIMP CBaseStereoRenderer::DrawIndexedPrimitive(
 	D3DPRIMITIVETYPE PrimitiveType,
 	INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT StartIndex,
-	UINT PrimitiveCount) 
+	UINT PrimitiveCount)
 {
 	DUMP_CMD_DRAW(DrawIndexedPrimitive,PrimitiveType,BaseVertexIndex,MinVertexIndex,NumVertices,StartIndex,PrimitiveCount);
+	if (HunterGateDX9(m_VSPipelineData.m_CurrentShaderData.CRC32,
+	                  m_PSPipelineData.m_CurrentShaderData.CRC32))
+		return S_OK;
 
 	if( CheckDrawPassSplitting( PrimitiveType, PrimitiveCount ) )
-		return DrawIndexedPrimitiveSplitted( PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, StartIndex, PrimitiveCount ); 
+		return DrawIndexedPrimitiveSplitted( PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, StartIndex, PrimitiveCount );
 
 	HRESULT hResult = S_OK;
 	DEBUG_TRACE3(_T("DIP(PrimitiveType = %s, BaseVertexIndex = %d, ")
@@ -430,11 +457,14 @@ HRESULT CBaseStereoRenderer::DrawIndexedPrimitiveSplitted(
 }
 
 STDMETHODIMP CBaseStereoRenderer::DrawPrimitiveUP(
-	D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, 
-	CONST VOID * pVertexStreamZeroData, UINT VertexStreamZeroStride ) 
+	D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount,
+	CONST VOID * pVertexStreamZeroData, UINT VertexStreamZeroStride )
 {
 	JustData vertexStreamZeroData(pVertexStreamZeroData,VertexStreamZeroStride * GetVertexCount(PrimitiveType,PrimitiveCount));
 	DUMP_CMD_DRAW(DrawPrimitiveUP,PrimitiveType,PrimitiveCount,vertexStreamZeroData,VertexStreamZeroStride);
+	if (HunterGateDX9(m_VSPipelineData.m_CurrentShaderData.CRC32,
+	                  m_PSPipelineData.m_CurrentShaderData.CRC32))
+		return S_OK;
 
 	if( CheckDrawPassSplitting( PrimitiveType, PrimitiveCount ) )
 		return DrawPrimitiveUPSplitted( PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride );
@@ -603,8 +633,12 @@ STDMETHODIMP CBaseStereoRenderer::DrawIndexedPrimitiveUP(
 	}
 #endif // FINAL_RELEASE
 
+	if (HunterGateDX9(m_VSPipelineData.m_CurrentShaderData.CRC32,
+	                  m_PSPipelineData.m_CurrentShaderData.CRC32))
+		return S_OK;
+
 	if( CheckDrawPassSplitting( PrimitiveType, PrimitiveCount ) )
-		return DrawIndexedPrimitiveUPSplitted( PrimitiveType, MinIndex, NumVertices, PrimitiveCount, 
+		return DrawIndexedPrimitiveUPSplitted( PrimitiveType, MinIndex, NumVertices, PrimitiveCount,
 			pIndexData, IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride);
 
 	HRESULT hResult = S_OK;
