@@ -182,6 +182,7 @@ DirectX 11 titles use the full 0.4.0 Stereo-Injector COM-wrap pipeline. DirectX 
 | S.T.A.L.K.E.R.: Call of Pripyat | `Stereo-Injector/DX10-11/32-bit` or `64-bit` | ✓ | Untested |  |
 | Serious Sam HD: The First Encounter | `Stereo-Injector/DX10-11/32-bit` | ✓ | Untested |  |
 | Star Wars Jedi: Fallen Order | `Stereo-Injector/DX10-11/64-bit` | ✕ | ✅ Working | Launcher renders at 1440p when panel is sub-native. |
+| Tempest 4000 | `Stereo-Injector/DX10-11/32-bit` | ✕ | ✅ Working |  |
 | Tom Clancy's H.A.W.X | `Stereo-Injector/DX10-11/32-bit` | ✓ | Untested |  |
 | Tom Clancy's Splinter Cell: Blacklist | `Stereo-Injector/DX9/32-bit` | ✕ | ✅ Mostly Working | DX9 only. Needs shader fix. |
 | What Remains of Edith Finch | `Stereo-Injector/DX10-11/64-bit` | ✕ | ✅ Working |  |
