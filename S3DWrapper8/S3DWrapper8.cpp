@@ -99,7 +99,7 @@ bool ReadConfig()
 	{
 		itemElement = node->FirstChildElement("Trace");
 		if (itemElement)
-		{	
+		{
 			itemElement->QueryIntAttribute("Value", (int*)&gInfo.Trace);
 #ifdef ZLOG_ALLOW_TRACING
 			if (gInfo.Trace == 2 || gInfo.Trace == 3) {
@@ -112,6 +112,22 @@ bool ReadConfig()
 				zlog::SetupSeverity(zlog::SV_MESSAGE);
 			}
 #endif
+		}
+		// 0.5.0: DumpVS / DumpPS parity with DX9+. Writes bytes to
+		// wiz3D_Logs/<Game>/Shaders/Dump/DX8/{vs,ps}.txt via the dump
+		// sites in CreateVertexShader / CreatePixelShader. Both default
+		// false so release users don't pay the I/O cost.
+		itemElement = node->FirstChildElement("DumpVS");
+		if (itemElement) {
+			int v = 0;
+			itemElement->QueryIntAttribute("Value", &v);
+			gInfo.DumpVS = (v != 0);
+		}
+		itemElement = node->FirstChildElement("DumpPS");
+		if (itemElement) {
+			int v = 0;
+			itemElement->QueryIntAttribute("Value", &v);
+			gInfo.DumpPS = (v != 0);
 		}
 	}
 	node = rootNode->FirstChild("DefaultProfile");
@@ -301,6 +317,22 @@ void InitializeLogging()
 	if ( !zlog::IsLoggerOpened() ) {
 		zlog::ReopenLogger(gInfo.LogFileName, true);
 	}
+
+	// 0.5.0 shader-dump layout — mirrors DX9/DX10/11:
+	//   wiz3D_Logs/<Game>/Shaders/Dump/DX8/{vs,ps}.txt
+	// Gated on gInfo.DumpVS / gInfo.DumpPS at write time. Dir pre-created
+	// and cleared here so the per-shader write path has somewhere to go
+	// without each site doing its own CreateDirectory walk. DX8 keeps its
+	// dump dir on gInfo rather than gData — the slim DX8 globals struct
+	// predates S3DAPI's richer GlobalData and never adopted it.
+	_tcscpy(gInfo.DumpDirectory, gInfo.LogFileDirectory);
+	PathAppend(gInfo.DumpDirectory, _T("Shaders"));
+	CreateDirectory(gInfo.DumpDirectory, 0);
+	PathAppend(gInfo.DumpDirectory, _T("Dump"));
+	CreateDirectory(gInfo.DumpDirectory, 0);
+	PathAppend(gInfo.DumpDirectory, _T("DX8"));
+	CreateDirectory(gInfo.DumpDirectory, 0);
+	ClearDirectory(gInfo.DumpDirectory);
 #endif
 }
 

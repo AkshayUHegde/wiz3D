@@ -15,6 +15,11 @@ struct GlobalInfo
 	TCHAR		LogFileDirectory[MAX_PATH];
 	TCHAR		LogFileName[MAX_PATH];
 	TCHAR		DumpDirectory[MAX_PATH];
+	// 0.5.0: parity with DX9/DX10/11 — read from <GlobalSettings> in
+	// wiz3D_Config.xml. Gates the DX8 shader dump in CreateVertexShader /
+	// CreatePixelShader. Both default to false (ZeroMemory in ctor).
+	bool		DumpVS;
+	bool		DumpPS;
 
 	GlobalInfo()
 	{

@@ -671,17 +671,18 @@ HRESULT CompileVertexShader(IDirect3DVertexShader9** ppVS, LPSTR sstream, IDirec
 		}
 	}
 #ifndef FINAL_RELEASE
-	if(GINFO_DEBUG) 
+	// 0.5.0: respect the user's DumpVS toggle (previously unconditional on
+	// GINFO_DEBUG). vs.converted.txt holds the DX8-to-SM1.1 converted asm
+	// sstream, next to vs.txt (the original DX8 disasm written in
+	// Direct3DDevice8::CreateVertexShader). Same Shaders/Dump/DX8/ tree.
+	if(GINFO_DEBUG && gInfo.DumpVS)
 	{
 		TCHAR shader_file[ MAX_PATH ];
-		_tcscpy( shader_file, gInfo.LogFileName );
-		_tcscpy( &shader_file[ _tcslen( shader_file ) - 4 ], _T("_shaders.d3d9.txt") );
+		_tcscpy( shader_file, gInfo.DumpDirectory );
+		PathAppend( shader_file, _T("vs.converted.txt") );
 		WriteShaderTextToFile(shader_file, sstream, buffer);
 		if( FAILED(hr )){
 			DEBUG_MESSAGE("%s\n", (char*)pErrorMsgs->GetBufferPointer());
-			TCHAR shader_file[ MAX_PATH ];
-			_tcscpy( shader_file, gInfo.LogFileName );
-			_tcscpy( &shader_file[ _tcslen( shader_file ) - 4 ], _T("_shaders.d3d9.txt") );
 			WriteErrorTextToFile(shader_file, (char*)pErrorMsgs->GetBufferPointer());
 		}
 	}

@@ -1010,11 +1010,14 @@ STDMETHODIMP CDirect3DDevice8::CreateVertexShader( CONST DWORD* pDeclaration, CO
 			//DissasembleVS(pFunction, d);
 			hr = CompileVertexShader(&pVS9, sstream, m_pReal, buffer);
 #ifndef FINAL_RELEASE
-			if(GINFO_DEBUG) 
+			// 0.5.0: respect the user's DumpVS toggle (previously unconditional
+			// on GINFO_DEBUG) and write into the Shaders/Dump/DX8/ tree set up
+			// by InitializeLogging. One concatenated vs.txt per game.
+			if(GINFO_DEBUG && gInfo.DumpVS)
 			{
 				TCHAR shader_file[ MAX_PATH ];
-				_tcscpy( shader_file, gInfo.LogFileName );
-				_tcscpy( &shader_file[ _tcslen( shader_file ) - 4 ], _T("_shaders.d3d8.txt") );
+				_tcscpy( shader_file, gInfo.DumpDirectory );
+				PathAppend( shader_file, _T("vs.txt") );
 				WriteShaderTextToFile(shader_file, inputShaderText);
 			}
 #endif
@@ -1756,7 +1759,7 @@ STDMETHODIMP CDirect3DDevice8::GetIndices( IDirect3DIndexBuffer8** ppIndexData,U
 STDMETHODIMP CDirect3DDevice8::CreatePixelShader( CONST DWORD* pFunction,DWORD* pHandle)
 {
 	HRESULT hr = m_pReal->CreatePixelShader( pFunction,(IDirect3DPixelShader9**)pHandle);
-	DEBUG_TRACE2( "CDirect3DDevice8::CreatePixelShader(CONST DWORD* pFunction = % p, DWORD* *pHandle = % p) = % s;\n", 
+	DEBUG_TRACE2( "CDirect3DDevice8::CreatePixelShader(CONST DWORD* pFunction = % p, DWORD* *pHandle = % p) = % s;\n",
 		pFunction, pHandle ? *pHandle : 0, GetResultString( hr ) );
 	if (SUCCEEDED(hr))
 		m_PSHandle.push_back(*pHandle);
@@ -1766,6 +1769,23 @@ STDMETHODIMP CDirect3DDevice8::CreatePixelShader( CONST DWORD* pFunction,DWORD* 
 		DEBUG_FAILED(hr);
 		return S_OK; // HACK
 	}
+#ifndef FINAL_RELEASE
+	// 0.5.0: parity with VS dump — if DumpPS is on, disassemble the DX8 PS
+	// bytecode and append it to Shaders/Dump/DX8/ps.txt. Previously DX8 PS
+	// was never dumped at all. We hand D3DX9's disassembler the raw DX8
+	// tokens; it accepts ps_1_1 through ps_1_4 natively.
+	if(GINFO_DEBUG && gInfo.DumpPS && pFunction)
+	{
+		CComPtr<ID3DXBuffer> pDisassembledShader;
+		if (SUCCEEDED(D3DXDisassembleShader(pFunction, 0, 0, &pDisassembledShader)))
+		{
+			TCHAR shader_file[ MAX_PATH ];
+			_tcscpy( shader_file, gInfo.DumpDirectory );
+			PathAppend( shader_file, _T("ps.txt") );
+			WriteShaderTextToFile(shader_file, (char*)pDisassembledShader->GetBufferPointer());
+		}
+	}
+#endif
 	return hr;
 }
 
