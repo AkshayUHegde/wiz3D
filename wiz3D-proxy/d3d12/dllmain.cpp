@@ -27,7 +27,9 @@ static void LogOpen(void)
     GetModuleFileNameW(NULL, dir, MAX_PATH);
     WCHAR* pSlash = wcsrchr(dir, L'\\');
     if (pSlash) *(pSlash + 1) = L'\0';
-    lstrcatW(dir, L"wiz3D_proxy.log");
+    lstrcatW(dir, L"wiz3D_Logs");
+    CreateDirectoryW(dir, NULL);
+    lstrcatW(dir, L"\\wiz3D_proxy.log");
     // Append rather than truncate, so the d3d9 / d3d12 / vk proxies can
     // share a single log file when more than one is in the same game folder.
     g_logFile = _wfopen(dir, L"a");

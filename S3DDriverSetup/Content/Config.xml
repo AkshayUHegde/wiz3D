@@ -61,7 +61,44 @@
 		<ExtractDepthBuffer Value="0"/>
 		<DrawMonoImageOnSecondMonitor Value="0"/>
 		<UseMonoDeviceWrapper Value="0"/>
+		<!-- =================================================================
+		     Shader-fix authoring switches (DX10/11, DX9)
+		     =================================================================
+		     Flip these to "1" when you're writing a per-game stereo profile
+		     or investigating a stereo bug. Output lands under:
+		       <game_folder>\wiz3D_Logs\<GameName>\Shaders\Dump\DX{9,10}\
+		       <game_folder>\wiz3D_Logs\<GameName>\Shaders\Hunter\
+		     Leave at "0" during normal play — the dump files grow quickly on
+		     complex games and the extra I/O is wasted when you're not reading
+		     the logs. See docs/SHADER_FIXES.md for the full authoring flow. -->
+
+		<!-- Report what the DX10/11 feature engine detected in the game's
+		     shaders: CB names + byte offsets, matrix candidates, suggested
+		     ShaderPatch skeletons. Written into wiz3D_proxy.log via FeatureLog.
+		     This is the primary authoring aid for the DX10/11 CB-math features
+		     (see S3DWrapper10/Feature*.cpp). DX10/11 only — no effect on DX9. -->
 		<CollectDebugInformation Value="0"/>
+
+		<!-- Dump every shader the game creates to a single concatenated file
+		     per stage, with D3DDisassemble output + iZ3D shader tree + CRC32.
+		     DumpVS covers VS/HS/DS/GS, DumpPS covers PS/CS. On DX10/11 the
+		     dumps land in Shaders\Dump\DX10\{VS,PS,GS,HS,DS,CS}.txt; on DX9
+		     they split into {vs,ps}.{client,converted,modified}.txt.
+		     These dumps are HUGE on complex games — only enable them when you
+		     need to read specific shader bytecode (e.g. authoring a
+		     ShaderOverride entry for a hunted CRC). For profile authoring
+		     keyed by CB layout, CollectDebugInformation above is enough. -->
+		<DumpVS Value="0"/>
+		<DumpPS Value="0"/>
+
+		<!-- Per-frame trace: emits a draw-by-draw timeline into wiz3D_proxy.log
+		     for VerboseFrameTrace frames starting at FrameTraceStartFrame.
+		     Set VerboseFrameTrace to 60 and FrameTraceStartFrame to 0 for the
+		     first second after game launch; raise FrameTraceStartFrame to skip
+		     past loading screens. Expensive — only enable for a specific
+		     repro case. DX10/11 only. -->
+		<VerboseFrameTrace Value="0"/>
+		<FrameTraceStartFrame Value="0"/>
 		<!-- 0 == JPS -->
 		<!-- 1 == PNG -->
 		<!-- 2 == BMP -->

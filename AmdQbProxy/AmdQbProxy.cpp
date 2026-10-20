@@ -79,7 +79,9 @@ static void WriteLog(const char* msg)
 
     wchar_t path[MAX_PATH];
     wcscpy_s(path, dir);
-    wcscat_s(path, L"HD3D_atidxx.log");
+    wcscat_s(path, L"wiz3D_Logs");
+    CreateDirectoryW(path, NULL);
+    wcscat_s(path, L"\\HD3D_atidxx.log");
     HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
                            FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

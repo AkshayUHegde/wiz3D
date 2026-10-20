@@ -281,7 +281,10 @@ void InitializeLogging()
 {
 #ifdef ZLOG_ALLOW_TRACING
 	_tcscpy(gInfo.LogFileDirectory, gInfo.DriverDirectory);
-	PathAppend(gInfo.LogFileDirectory, _T("Logs"));
+	// 0.5.0 layout: wiz3D_Logs/<Game>/ — see S3DAPI/Logging.cpp for the
+	// matching master definition. DX8 has its own InitializeLogging because
+	// it predates the shared one; keep the paths in lockstep.
+	PathAppend(gInfo.LogFileDirectory, _T("wiz3D_Logs"));
 	CreateDirectory(gInfo.LogFileDirectory, 0);
 	PathAppend(gInfo.LogFileDirectory, gInfo.ApplicationName);
 	TCHAR* c = _tcsrchr(gInfo.LogFileDirectory, '.');

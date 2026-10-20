@@ -61,7 +61,13 @@
 		<ExtractDepthBuffer Value="0"/>
 		<DrawMonoImageOnSecondMonitor Value="0"/>
 		<UseMonoDeviceWrapper Value="0"/>
+		<!-- DX7 is fixed-function only (no programmable shaders), so the
+		     shader-fix authoring switches below are no-ops here. Kept for
+		     config-format uniformity across APIs. See docs/SHADER_FIXES.md
+		     for the full authoring flow on DX9+. -->
 		<CollectDebugInformation Value="0"/>
+		<DumpVS Value="0"/>
+		<DumpPS Value="0"/>
 		<!-- 0 == JPS -->
 		<!-- 1 == PNG -->
 		<!-- 2 == BMP -->

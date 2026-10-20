@@ -59,8 +59,10 @@ static void LogOpen(void)
     GetModuleFileNameW(NULL, dir, MAX_PATH);
     WCHAR* pSlash = wcsrchr(dir, L'\\');
     if (pSlash) *(pSlash + 1) = L'\0';
+    lstrcatW(dir, L"wiz3D_Logs");
+    CreateDirectoryW(dir, NULL);
     // Shared with the d3d11 proxy log — append mode so they don't clobber.
-    lstrcatW(dir, L"nvdirectmode_proxy.log");
+    lstrcatW(dir, L"\\nvdirectmode_proxy.log");
     g_logFile = _wfopen(dir, L"a");
 }
 

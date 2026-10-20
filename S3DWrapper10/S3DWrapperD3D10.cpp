@@ -68,7 +68,14 @@ void InitDirectories( )
 #ifdef ZLOG_ALLOW_TRACING
 	InitializeLogging();
 
+	// 0.5.0 layout: wiz3D_Logs/<Game>/Shaders/Dump/DX10/ for mass dumps
+	// (DumpVS/DumpPS/DumpMeshes). Hunter/ sibling folder is reserved for
+	// user-captured single-shader reports from the ShaderHunter OSD mode.
 	_tcscpy(gData.DumpDirectory, gInfo.LogFileDirectory);
+	PathAppend(gData.DumpDirectory, _T("Shaders"));
+	CreateDirectory(gData.DumpDirectory, 0);
+	PathAppend(gData.DumpDirectory, _T("Dump"));
+	CreateDirectory(gData.DumpDirectory, 0);
 	PathAppend(gData.DumpDirectory, _T("DX10"));
 	CreateDirectory(gData.DumpDirectory, 0);
 	ClearDirectory(gData.DumpDirectory);

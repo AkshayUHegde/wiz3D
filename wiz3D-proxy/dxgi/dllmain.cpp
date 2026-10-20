@@ -37,7 +37,9 @@ static void LogOpen(void)
     GetModuleFileNameW(NULL, dir, MAX_PATH);  // game exe path
     WCHAR* pSlash = wcsrchr(dir, L'\\');
     if (pSlash) *(pSlash + 1) = L'\0';
-    lstrcatW(dir, L"wiz3D_proxy.log");
+    lstrcatW(dir, L"wiz3D_Logs");
+    CreateDirectoryW(dir, NULL);
+    lstrcatW(dir, L"\\wiz3D_proxy.log");
     // Append rather than truncate — when multiple proxies (dxgi + d3d10 + d3d11)
     // are deployed in the same game folder they all share this log file. Anyone
     // using "w" would clobber lines from the others mid-write.

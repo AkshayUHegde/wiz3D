@@ -33,7 +33,9 @@ static void DiagLogV(const char* fmt, va_list ap)
         GetModuleFileNameA(NULL, path, MAX_PATH);
         char* p = strrchr(path, '\\');
         if (p) *(p + 1) = '\0';
-        strcat(path, "wiz3D_d3d8_proxy.log");
+        strcat(path, "wiz3D_Logs");
+        CreateDirectoryA(path, NULL);
+        strcat(path, "\\wiz3D_d3d8_proxy.log");
         g_diagLog = fopen(path, "a");
         if (g_diagLog)
             fprintf(g_diagLog, "[wrap] === instrumented S3DWrapperD3D8 attached ===\n");

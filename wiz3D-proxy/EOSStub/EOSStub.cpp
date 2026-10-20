@@ -44,7 +44,16 @@ static void LogLoaded(HINSTANCE hSelf)
     wchar_t* slash = wcsrchr(path, L'\\');
     if (!slash) return;
     size_t room = MAX_PATH - (size_t)(slash + 1 - path);
-    if (wcscpy_s(slash + 1, room, L"EOSStub.log") != 0) return;
+    if (wcscpy_s(slash + 1, room, L"wiz3D_Logs\\EOSStub.log") != 0) return;
+    // Make sure wiz3D_Logs exists; temporarily lop off the filename and mkdir.
+    *slash = L'\0';
+    wchar_t dir[MAX_PATH];
+    if (wcscpy_s(dir, MAX_PATH, path) == 0)
+    {
+        wcscat_s(dir, MAX_PATH, L"\\wiz3D_Logs");
+        CreateDirectoryW(dir, NULL);
+    }
+    *slash = L'\\';
 
     FILE* f = _wfopen(path, L"a");
     if (!f) return;

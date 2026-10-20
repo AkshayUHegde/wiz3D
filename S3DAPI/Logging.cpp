@@ -8,7 +8,13 @@
 void InitializeLogging()
 {
 	_tcscpy(gInfo.LogFileDirectory, gInfo.DriverDirectory);
-	PathAppend(gInfo.LogFileDirectory, _T("Logs"));
+	// 0.5.0: centralised log root. All wiz3D-emitted logs (ZLOg master,
+	// proxy loader diagnostic logs, shader dumps, hunter captures) live
+	// under this folder next to the game exe. Previous "Logs/" folder
+	// name was generic enough to clash with game-written folders; the
+	// wiz3D_Logs/ prefix makes ownership obvious and lets us delete the
+	// whole subtree on uninstall without touching the game's own files.
+	PathAppend(gInfo.LogFileDirectory, _T("wiz3D_Logs"));
 	CreateDirectory(gInfo.LogFileDirectory, 0);
 	PathAppend(gInfo.LogFileDirectory, gInfo.ApplicationName);
 	TCHAR* c = _tcsrchr(gInfo.LogFileDirectory, '.');

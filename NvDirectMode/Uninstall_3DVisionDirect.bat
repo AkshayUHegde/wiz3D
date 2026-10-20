@@ -26,9 +26,16 @@ echo Removing NvDirectMode config files...
 if exist "3DVision_Config.xml" del /f /q "3DVision_Config.xml"
 
 echo Removing NvDirectMode runtime files...
-if exist "nvdirectmode_proxy.log" del /f /q "nvdirectmode_proxy.log"
 if exist "nvdirectmode_crash.dmp" del /f /q "nvdirectmode_crash.dmp"
+REM 0.5.0: all logs live under wiz3D_Logs\ (nvdirectmode_proxy.log,
+REM NvApiProxy.log, shader dumps, hunter captures). One rmdir cleans
+REM up every log/dump wiz3D produced for this game folder.
+if exist "wiz3D_Logs" rmdir /s /q "wiz3D_Logs"
+REM Legacy pre-0.5.0 paths — remove if a user is upgrading from an
+REM older build that still wrote these next to the exe.
+if exist "nvdirectmode_proxy.log" del /f /q "nvdirectmode_proxy.log"
 if exist "NvApiProxy.log"         del /f /q "NvApiProxy.log"
+if exist "Logs"                   rmdir /s /q "Logs"
 
 REM --- EOSStub handling (only ships in the 3d-vision-direct/dx11/x86 leaf;
 REM the 'if exist' guards make this a silent no-op in every other leaf) ---
@@ -49,7 +56,10 @@ REM    remove.
 REM  - Either way, point the user at their .bak backup / Steam-verify to
 REM    restore original EOS if they want it back.
 set _EOSSTUB_USED=0
-if exist "EOSStub.log" set _EOSSTUB_USED=1
+REM 0.5.0: EOSStub.log now lives under wiz3D_Logs\. Legacy path checked
+REM too in case the folder was already cleaned above.
+if exist "wiz3D_Logs\EOSStub.log" set _EOSSTUB_USED=1
+if exist "EOSStub.log"            set _EOSSTUB_USED=1
 
 if "%_EOSSTUB_USED%"=="1" (
     echo.
@@ -67,7 +77,9 @@ if "%_EOSSTUB_USED%"=="1" (
     )
 )
 
-REM Always clean up the log itself (safe either way).
+REM Always clean up the log itself (safe either way). The wiz3D_Logs
+REM path is already handled by the rmdir earlier; this cleans the
+REM legacy next-to-exe copy for backwards-compatible uninstalls.
 if exist "EOSStub.log" del /f /q "EOSStub.log"
 set _EOSSTUB_USED=
 

@@ -52,10 +52,12 @@ static void WriteLog(const char* msg)
 
     wchar_t path[MAX_PATH];
     wcscpy_s(path, dir);
+    wcscat_s(path, L"wiz3D_Logs");
+    CreateDirectoryW(path, NULL);
     #ifdef BLOCK_NVAPI_STEREO
-        wcscat_s(path, L"HD3D_dxgi.log");
+        wcscat_s(path, L"\\HD3D_dxgi.log");
     #else
-        wcscat_s(path, L"3DV_dxgi.log");
+        wcscat_s(path, L"\\3DV_dxgi.log");
     #endif
     HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
                            FILE_SHARE_READ | FILE_SHARE_WRITE,

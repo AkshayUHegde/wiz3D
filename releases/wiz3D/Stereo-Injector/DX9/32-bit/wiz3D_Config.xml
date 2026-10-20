@@ -61,7 +61,33 @@
 		<ExtractDepthBuffer Value="0"/>
 		<DrawMonoImageOnSecondMonitor Value="0"/>
 		<UseMonoDeviceWrapper Value="0"/>
+		<!-- =================================================================
+		     Shader-fix authoring switches (DX9)
+		     =================================================================
+		     Flip these to "1" when you're writing a per-game stereo profile
+		     or investigating a stereo bug. Output lands under:
+		       <game_folder>\wiz3D_Logs\<GameName>\Shaders\Dump\DX9\
+		       <game_folder>\wiz3D_Logs\<GameName>\Shaders\Hunter\
+		     Leave at "0" during normal play — the dump files grow quickly on
+		     complex games. See docs/SHADER_FIXES.md for the full authoring flow,
+		     including the ShaderOverride/ folder convention wiz3D already
+		     supports for Helix-format fix drop-ins. -->
+
+		<!-- No-op on DX9 (used by the DX10/11 CB-math feature engine).
+		     Kept here for config-format uniformity across APIs. -->
 		<CollectDebugInformation Value="0"/>
+
+		<!-- Dump every VS / PS created by the game to:
+		       Shaders\Dump\DX9\vs.{client,converted,modified}.txt
+		       Shaders\Dump\DX9\ps.{client,converted,modified}.txt
+		     DumpVS covers vertex shaders, DumpPS covers pixel shaders. The
+		     "client" variant is as-received from the game, "converted" is
+		     after iZ3D's SM3 shader-converter re-emit, "modified" is with
+		     the auto eye-shift injected. Useful when authoring a
+		     ShaderOverride entry for a specific CRC — the "converted" file
+		     is a good starting point for a Helix-style fix. -->
+		<DumpVS Value="0"/>
+		<DumpPS Value="0"/>
 		<!-- 0 == JPS -->
 		<!-- 1 == PNG -->
 		<!-- 2 == BMP -->

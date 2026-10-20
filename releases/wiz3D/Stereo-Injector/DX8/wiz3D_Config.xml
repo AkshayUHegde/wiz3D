@@ -61,7 +61,13 @@
 		<ExtractDepthBuffer Value="0"/>
 		<DrawMonoImageOnSecondMonitor Value="0"/>
 		<UseMonoDeviceWrapper Value="0"/>
+		<!-- DX8 shaders are SM1.0/1.1 (vertex and pixel assembly only). The
+		     ShaderOverride / ShaderPatch pipeline shipped for DX9+ is not
+		     yet ported to DX8; these switches are kept here for
+		     config-format uniformity across APIs. See docs/SHADER_FIXES.md. -->
 		<CollectDebugInformation Value="0"/>
+		<DumpVS Value="0"/>
+		<DumpPS Value="0"/>
 		<!-- 0 == JPS -->
 		<!-- 1 == PNG -->
 		<!-- 2 == BMP -->

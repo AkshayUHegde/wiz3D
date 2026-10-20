@@ -36,7 +36,9 @@ void DDILog(const char* fmt, ...)
 		GetModuleFileNameW(NULL, dir, MAX_PATH);
 		WCHAR* pSlash = wcsrchr(dir, L'\\');
 		if (pSlash) *(pSlash + 1) = L'\0';
-		lstrcatW(dir, L"wiz3D_proxy.log");
+		lstrcatW(dir, L"wiz3D_Logs");
+		CreateDirectoryW(dir, NULL);
+		lstrcatW(dir, L"\\wiz3D_proxy.log");
 		fp = _wfopen(dir, L"a");
 		if (fp) fputs("\n--- wrapper DDI hook fired ---\n", fp);
 	}

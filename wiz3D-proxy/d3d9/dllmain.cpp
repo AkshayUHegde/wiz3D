@@ -27,7 +27,9 @@ static void LogOpen(void)
     GetModuleFileNameW(NULL, dir, MAX_PATH);  // game exe path
     WCHAR* pSlash = wcsrchr(dir, L'\\');
     if (pSlash) *(pSlash + 1) = L'\0';
-    lstrcatW(dir, L"wiz3D_proxy.log");
+    lstrcatW(dir, L"wiz3D_Logs");
+    CreateDirectoryW(dir, NULL);
+    lstrcatW(dir, L"\\wiz3D_proxy.log");
     g_logFile = _wfopen(dir, L"a");  // append: shared with d3d10/d3d11/dxgi proxies
 }
 

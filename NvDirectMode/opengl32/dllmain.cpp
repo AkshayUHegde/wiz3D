@@ -51,7 +51,9 @@ static void LogOpen(void)
     GetModuleFileNameW(NULL, dir, MAX_PATH);
     WCHAR* pSlash = wcsrchr(dir, L'\\');
     if (pSlash) *(pSlash + 1) = L'\0';
-    lstrcatW(dir, L"nvdirectmode_proxy.log");
+    lstrcatW(dir, L"wiz3D_Logs");
+    CreateDirectoryW(dir, NULL);
+    lstrcatW(dir, L"\\nvdirectmode_proxy.log");
     g_logFile = _wfopen(dir, L"a");
 }
 

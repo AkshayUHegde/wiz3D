@@ -41,7 +41,9 @@ static void WriteLog(const char* fmt, ...)
 
     wchar_t path[MAX_PATH];
     wcscpy_s(path, dir);
-    wcscat_s(path, L"S3DWrapperD3D12.log");
+    wcscat_s(path, L"wiz3D_Logs");
+    CreateDirectoryW(path, NULL);
+    wcscat_s(path, L"\\S3DWrapperD3D12.log");
     HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
                            FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
