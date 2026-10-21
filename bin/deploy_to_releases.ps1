@@ -375,9 +375,23 @@ foreach ($t in $wiz3dConfigTargets) {
         Copy-Item -Path $wiz3dConfigSrc -Destination $dst -Force
     }
 }
-# DX10-11 has no shutter output to emulate fullscreen for; the forced window made Metro 2033 Redux rebuild its swap
-# chain every second frame (issue #34).
-foreach ($t in "$relRoot\Stereo-Injector\DX10-11\32-bit", "$relRoot\Stereo-Injector\DX10-11\64-bit") {
+# DisableFullscreenModeEmulation=1 across every modern Stereo-Injector path.
+# iZ3D set this to 0 originally because its shutter output needed games
+# windowed so the shutter driver could blit over the window surface.
+# Nobody runs that hardware in 2026, and the forced window costs: Metro 2033
+# Redux rebuilt its DX11 swap chain every second frame (issue #34), and
+# plenty of DX9 games have historically misbehaved with forced-windowed too.
+# The DX9 wrapper still has shutter output code (SHUTTER_MODE_ATIQB,
+# g_KMShutter) that force-sets this flag to FALSE at runtime when a shutter
+# mode is actually selected, so flipping the default to 1 is safe: anyone
+# who deliberately turns on OutputMethodDll="ATIQBOutput" or similar gets
+# the windowed behaviour at launch anyway.
+foreach ($t in "$relRoot\Stereo-Injector\DX7",
+               "$relRoot\Stereo-Injector\DX8",
+               "$relRoot\Stereo-Injector\DX9\32-bit",
+               "$relRoot\Stereo-Injector\DX9\64-bit",
+               "$relRoot\Stereo-Injector\DX10-11\32-bit",
+               "$relRoot\Stereo-Injector\DX10-11\64-bit") {
     $dst = Join-Path $t 'wiz3D_Config.xml'
     if (Test-Path $dst) {
         $xml = [IO.File]::ReadAllText($dst) -replace '<DisableFullscreenModeEmulation Value="0"/>', '<DisableFullscreenModeEmulation Value="1"/>'

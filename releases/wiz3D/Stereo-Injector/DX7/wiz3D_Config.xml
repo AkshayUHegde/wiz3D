@@ -159,7 +159,7 @@
 		<!-- 0 = auto, 1 = fullscreen, 2 = windowed -->
 		<MultiWindowsMode Value="0"/>
 		<ModeObtainingDepthBuffer Value="0"/>
-		<DisableFullscreenModeEmulation Value="0"/>
+		<DisableFullscreenModeEmulation Value="1"/>
 		<ForceVSyncOff Value="0"/>
 		<EnableAA Value="1"/>
 		<WideRenderTarget Value="0" Vendor="ATI"/>
