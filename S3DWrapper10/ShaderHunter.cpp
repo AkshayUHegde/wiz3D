@@ -235,9 +235,14 @@ void ShaderHunter::OnToggleHunt()
 
 void ShaderHunter::OnCyclePrev()
 {
-    if (!PathIsOn()) return;
+    // Always log the outcome so a user who sees "nothing happens" when
+    // pressing F2 can tell whether (a) hunt mode was off, (b) the key
+    // never reached our hook, or (c) the cycle was transiently empty
+    // between Present-POST frames. Pre-0.4.1 these early-returns were
+    // silent and made the "F2 does nothing" complaint undiagnosable.
+    if (!PathIsOn()) { DDILog("[hunt] prev: hunt mode is off (Ctrl+F2 to enter)\n"); return; }
     std::lock_guard<std::mutex> g(s_lock);
-    if (s_cycle.empty()) return;
+    if (s_cycle.empty()) { DDILog("[hunt] prev: cycle empty (no draws observed this frame yet)\n"); return; }
     if (s_cycleIdx == 0) s_cycleIdx = s_cycle.size() - 1;
     else                 s_cycleIdx--;
     s_hidden = s_cycle[s_cycleIdx];
@@ -249,9 +254,9 @@ void ShaderHunter::OnCyclePrev()
 
 void ShaderHunter::OnCycleNext()
 {
-    if (!PathIsOn()) return;
+    if (!PathIsOn()) { DDILog("[hunt] next: hunt mode is off (Ctrl+F2 to enter)\n"); return; }
     std::lock_guard<std::mutex> g(s_lock);
-    if (s_cycle.empty()) return;
+    if (s_cycle.empty()) { DDILog("[hunt] next: cycle empty (no draws observed this frame yet)\n"); return; }
     s_cycleIdx = (s_cycleIdx + 1) % s_cycle.size();
     s_hidden = s_cycle[s_cycleIdx];
     DDILog("[hunt] next -> CRC=0x%08X stage=%s (%zu/%zu)\n",

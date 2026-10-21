@@ -188,9 +188,11 @@ void HunterOnToggle()
 
 void HunterOnCyclePrev()
 {
-    if (!PathIsOn()) return;
+    // Always log the outcome so a "nothing happens" complaint has a
+    // diagnostic trail. Mirror of the DX11 ShaderHunter.
+    if (!PathIsOn()) { HLog("[hunt-dx9] prev: hunt mode is off (Ctrl+F2 to enter)\n"); return; }
     std::lock_guard<std::mutex> g(s_lock);
-    if (s_cycle.empty()) return;
+    if (s_cycle.empty()) { HLog("[hunt-dx9] prev: cycle empty (no draws observed this frame yet)\n"); return; }
     if (s_cycleIdx == 0) s_cycleIdx = s_cycle.size() - 1;
     else                 s_cycleIdx--;
     s_hidden = s_cycle[s_cycleIdx];
@@ -202,9 +204,9 @@ void HunterOnCyclePrev()
 
 void HunterOnCycleNext()
 {
-    if (!PathIsOn()) return;
+    if (!PathIsOn()) { HLog("[hunt-dx9] next: hunt mode is off (Ctrl+F2 to enter)\n"); return; }
     std::lock_guard<std::mutex> g(s_lock);
-    if (s_cycle.empty()) return;
+    if (s_cycle.empty()) { HLog("[hunt-dx9] next: cycle empty (no draws observed this frame yet)\n"); return; }
     s_cycleIdx = (s_cycleIdx + 1) % s_cycle.size();
     s_hidden = s_cycle[s_cycleIdx];
     HLog("[hunt-dx9] next -> CRC=0x%08X stage=%s (%zu/%zu)\n",
