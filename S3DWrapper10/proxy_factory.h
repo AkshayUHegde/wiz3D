@@ -148,6 +148,10 @@ wiz3D_WrapD3D11DeviceAndContext(void** ppDeviceInOut, void** ppContextInOut);
 extern "C" __declspec(dllexport) void
 wiz3D_WrapSwapChain(void** ppSwapChainInOut, void* pWrappedDevice);
 
+// The factory hooks created this chain windowed though the game asked for fullscreen: a SwapChain11Proxy then
+// reports fullscreen to the game. No-op for any other swap chain.
+void wiz3D_EmulateFullscreen(struct IDXGISwapChain* pSwapChain);
+
 // DX10 Option B: wraps the ID3D10Device returned from D3D10CreateDevice /
 // D3D10CreateDeviceAndSwapChain in our Device10Proxy. Pure passthrough at
 // Stage 1 of the DX10 port; later stages add per-eye routing + composite.

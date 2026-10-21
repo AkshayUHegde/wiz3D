@@ -219,6 +219,7 @@ STDMETHODIMP CreateSwapChain( IDXGIFactory* This, IUnknown *pDevice, DXGI_SWAP_C
 
 	WrapperLog("  Final SCDesc.Windowed=%d before Original_CreateSwapChain (Width=%u, Height=%u)\n",
 		SCDesc.Windowed, SCDesc.BufferDesc.Width, SCDesc.BufferDesc.Height);
+	const bool emulatedFullscreen = Fullscreen && SCDesc.Windowed;
 	NSCALL_TRACE1(Original_CreateSwapChain(This, pDevice, &SCDesc, ppSwapChain),
 		DEBUG_MESSAGE(_T("IDXGIFactory::CreateSwapChain(pDevice = %p, pDesc = (%s), ppSwapChain = %p)"),
 		pDevice, GetDXGISwapChainDescString(&SCDesc), ppSwapChain));
@@ -357,6 +358,8 @@ STDMETHODIMP CreateSwapChain( IDXGIFactory* This, IUnknown *pDevice, DXGI_SWAP_C
 				wiz3D_WrapSwapChain(&scOut, probe);
 				*ppSwapChain = static_cast<IDXGISwapChain*>(scOut);
 				WrapperLog("  Option B: wrapped *ppSwapChain=%p\n", *ppSwapChain);
+				if (emulatedFullscreen)
+					wiz3D_EmulateFullscreen(*ppSwapChain);
 			}
 			asD3D11->Release();
 		}
@@ -582,7 +585,8 @@ STDMETHODIMP CreateSwapChainForHwnd(IDXGIFactory2* This, IUnknown* pDevice, HWND
     // with Windowed=FALSE), pass NULL as pFullscreenDesc to force windowed.
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFSOverride = pFullscreenDesc;
     const bool wasFullscreen = pFullscreenDesc && !pFullscreenDesc->Windowed;
-    if (wasFullscreen && !gInfo.DisableFullscreenModeEmulation)
+    const bool forceWindowed = wasFullscreen && !gInfo.DisableFullscreenModeEmulation;
+    if (forceWindowed)
     {
         WrapperLog("  CreateSwapChainForHwnd: forcing windowed (DisableFullscreenModeEmulation=0)\n");
         pFSOverride = nullptr;
@@ -600,6 +604,8 @@ STDMETHODIMP CreateSwapChainForHwnd(IDXGIFactory2* This, IUnknown* pDevice, HWND
         // re-tag back to IDXGISwapChain1* on return.
         IDXGISwapChain* sc = static_cast<IDXGISwapChain*>(*ppSwapChain);
         TryWrapSwapChainOptionB("F2.Hwnd", pDevice, &sc);
+        if (forceWindowed)
+            wiz3D_EmulateFullscreen(sc);
         *ppSwapChain = static_cast<IDXGISwapChain1*>(sc);
     }
     return hr;

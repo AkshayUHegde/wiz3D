@@ -375,6 +375,15 @@ foreach ($t in $wiz3dConfigTargets) {
         Copy-Item -Path $wiz3dConfigSrc -Destination $dst -Force
     }
 }
+# DX10-11 has no shutter output to emulate fullscreen for; the forced window made Metro 2033 Redux rebuild its swap
+# chain every second frame (issue #34).
+foreach ($t in "$relRoot\Stereo-Injector\DX10-11\32-bit", "$relRoot\Stereo-Injector\DX10-11\64-bit") {
+    $dst = Join-Path $t 'wiz3D_Config.xml'
+    if (Test-Path $dst) {
+        $xml = [IO.File]::ReadAllText($dst) -replace '<DisableFullscreenModeEmulation Value="0"/>', '<DisableFullscreenModeEmulation Value="1"/>'
+        [IO.File]::WriteAllText($dst, $xml)
+    }
+}
 Write-Host ("  {0,-30}  spread to {1} dirs" -f 'wiz3D_Config.xml', $wiz3dConfigTargets.Count)
 
 # --- Root docs: license + notices + user quick-start ---

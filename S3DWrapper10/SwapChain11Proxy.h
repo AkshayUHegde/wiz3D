@@ -76,7 +76,7 @@ public:
     HRESULT STDMETHODCALLTYPE Present(UINT SyncInterval, UINT Flags) override;
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT Buffer, REFIID riid, void** ppSurface) override;
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL Fullscreen, IDXGIOutput* pTarget) override;
-    HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* pFullscreen, IDXGIOutput** ppTarget) override           { return m_real->GetFullscreenState(pFullscreen, ppTarget); }
+    HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* pFullscreen, IDXGIOutput** ppTarget) override;
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc) override;
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) override;
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* pNewTargetParameters) override                { return m_real->ResizeTarget(pNewTargetParameters); }
@@ -86,7 +86,7 @@ public:
 
     // IDXGISwapChain1
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* pDesc) override;
-    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pDesc) override               { return m_real1 ? m_real1->GetFullscreenDesc(pDesc) : E_NOINTERFACE; }
+    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pDesc) override;
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND* pHwnd) override                                                    { return m_real1 ? m_real1->GetHwnd(pHwnd) : E_NOINTERFACE; }
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID refiid, void** ppUnk) override                              { return m_real1 ? m_real1->GetCoreWindow(refiid, ppUnk) : E_NOINTERFACE; }
     HRESULT STDMETHODCALLTYPE Present1(UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS* pPresentParameters) override;
@@ -118,6 +118,8 @@ public:
     // wiz3D accessors
     IDXGISwapChain* GetReal()    const { return m_real;   }
     Device11Proxy*  GetParent()  const { return m_parent; }
+    // DisableFullscreenModeEmulation=0 created this chain windowed though the game asked for fullscreen.
+    void            EmulateFullscreen() { m_emulateFullscreen = true; m_gameFullscreen = TRUE; }
 
 private:
     // Stage 4b.8: Present / Present1 split into pre + post hooks. Pre runs
@@ -211,6 +213,10 @@ private:
     IDXGISwapChain4* m_real4;
     Device11Proxy*   m_parent;   // AddRef'd in ctor, released in dtor
     LONG             m_refs;
+    // The game reads back the fullscreen state it last set: shown a windowed chain, Metro 2033 Redux rebuilt it every
+    // second frame (issue #34).
+    bool             m_emulateFullscreen = false;
+    BOOL             m_gameFullscreen    = FALSE;
 
     // Stage 4d resources. All AddRef'd by us, released in dtor /
     // ReleaseStereoBackBuffer / ReleaseComposite. m_wrappedBB is the
