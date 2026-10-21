@@ -40,6 +40,23 @@
 		     (or AnaglyphOutput / S3DOutput / etc.). -->
 		<OutputMethodDll Value="SimulatedRealityWeaveOutput"/>
 		<!-- endif -->
+		<!-- OutputMode Values (used by the DX10-11 wrapper, OpenGL Quad-Buffer wrapper
+		     and NvDirectMode; mode numbering is shared so one XML works across them.
+		     The DX7/DX8/DX9 wrappers pick the output via OutputMethodDll instead and
+		     treat this field as a legacy iZ3D hardware selector). -->
+		<!-- 0 == iZ3D dual-panel (legacy hardware); modern wrappers fall back to Half SBS -->
+		<!-- 1 == Half Side-by-Side (the default modern pairing with a stereo panel) -->
+		<!-- 2 == Full Side-by-Side (game renders at half display width) -->
+		<!-- 3 == Half Top-and-Bottom -->
+		<!-- 4 == Full Top-and-Bottom (game renders at half display height) -->
+		<!-- 5 == Anaglyph Red/Cyan (Dubois) -->
+		<!-- 6 == Row interleaved (passive 3D TVs) -->
+		<!-- 7 == Column interleaved -->
+		<!-- 8 == Checkerboard (DLP-Link projectors) -->
+		<!-- 9 == Simulated Reality Weave (Leia / Samsung Odyssey 3D) -->
+		<!-- Note: the OutputMethodDll "SimulatedRealityWeaveOutput" above overrides to 9
+		     for backward compatibility with 0.3.x configs; set OutputMethodDll to
+		     "SideBySideOutput" (or any other legacy plugin) to force OutputMode here. -->
 		<OutputMode Value="0"/>
 		<OutputSpanMode Value="0"/>
 		<!-- DisplayScalingMode Values: -->
