@@ -549,9 +549,67 @@ In-game hotkeys for adjusting stereo on the fly. All bindings are remappable in 
 | `Ctrl+F8` | Swap left/right eyes (for inverted setups) |
 | `Shift+Numpad *` | Open the on-screen wizard overlay |
 | `Shift+F1` | Toggle on-screen hotkey hints |
+| `Ctrl+F1` | Toggle status strip + FPS counter |
 | `Ctrl+Numpad /` | Toggle laser sight (crosshair anchored at screen depth) |
+| `Ctrl+F2` | **ShaderHunter**: enter / exit hunt mode (DX9 + DX11) — see [Profile Building & Shader Fixes](#profile-building--shader-fixes) |
+| `F2` / `Shift+F2` | Hunt-mode only: cycle to previous / next drawn shader |
+| `F3` | Hunt-mode only: capture the currently hidden shader to `wiz3D_Logs\<Game>\Shaders\Hunter\` |
+| `Ctrl+F5` | Reload `BaseProfile.xml` live (apply profile edits without restarting the game) |
 | `PrintScreen` | Save a stereo screenshot to `My Pictures\wiz3D Screenshots\<Game>\` (default format `.png`; pick PNG/PNS/JPEG/JPS/BMP/DDS via `<ScreenshotType>` in `wiz3D_Config.xml`) |
 | `Ctrl+PrintScreen` | Save a stereo screenshot without applying the display's gamma ramp |
+
+---
+
+## Profile Building & Shader Fixes
+
+Most games just work with wiz3D's built-in per-engine profiles (`BaseProfile.xml` ships with coverage for UE3/UE4, CryEngine, RAGE, Dunia, Snowdrop, idTech 4/5, and 15+ others). When a game *mostly* works but a specific effect is wrong — HUD at the wrong depth, broken shadows, haloed decals, a reticle floating in space — you can fix just that effect without touching the rest of the game.
+
+The fix lives in your copy of `BaseProfile.xml` next to the game `.exe`, so it's game-local, text-editable, and reversible.
+
+### Quick workflow — DX11
+
+1. **Launch the game.** Get to the scene with the broken effect.
+2. **Press `Ctrl+F2`** to enter ShaderHunter mode. A `HUNT` strip appears at the bottom of the screen.
+3. **Press `F2` / `Shift+F2`** to cycle through the shaders used this frame. Each shader is *hidden* (its draws are skipped) one at a time — when the broken effect disappears, you've found the shader responsible.
+4. **Press `F3`** to capture that shader. A `Shader saved` toast appears bottom-right with the filename. The report lands at `wiz3D_Logs\<Game>\Shaders\Hunter\0x<CRC>_<stage>_<timestamp>.txt` and contains the shader disassembly, matrix-CB hints, and a suggested `<ShaderPatch>` skeleton you can paste into `BaseProfile.xml`.
+5. **Press `Ctrl+F2`** again to leave hunt mode.
+6. **Edit `BaseProfile.xml`** next to the game `.exe`. Drop the suggested skeleton inside the game's `<Profile>` block. The simplest fix is `<SkipStereo/>` — mono-force that shader so the broken effect stops shifting between eyes.
+7. **Press `Ctrl+F5`** in-game to reload the profile. No restart needed.
+8. **Iterate.** When happy, open a GitHub issue or PR with your profile addition so other players benefit.
+
+### Fix types, cheapest first
+
+**`<SkipStereo/>` — mono-force one shader.** The 90% case: a HUD element or 2D overlay that should sit at screen depth. One line inside a `<ShaderPatch CRC="0x...">` block.
+
+```xml
+<ShaderPatch CRC="0x1D9628E2" Stage="VS" Note="Minimap compass">
+    <SkipStereo/>
+</ShaderPatch>
+```
+
+**CB-math features — the big ones.** The engine's constant buffers already contain the view/projection matrices; wiz3D edits a few bytes before the right eye's draws so untouched game shaders naturally render per-eye. 37 declarative features cover shadow projection, deferred lights, screen-space rays, HUD depth, inverse-matrix cameras, UAV eye-duplication, etc. These are tagged in `BaseProfile.xml` under each `<Profile>` and documented inline in `S3DWrapper10/Feature*.cpp`.
+
+**Inline ShaderOverride — hand-write HLSL.** For the shader-level cases a CB edit can't reach (custom depth outputs, loose scalar transforms, HUDs that bypass CBs). Paste HLSL inside the profile as a `CDATA` block; wiz3D compiles it at startup and swaps the game's bytecode. Sample the stereo-params SRV at `t125` (HelixMod / 3DMigoto convention) to apply your own per-eye offset:
+
+```xml
+<ShaderOverride CRC="0x7BCB56E1" Stage="VS"><![CDATA[
+    // ...your HLSL...
+    Texture2D<float4> stereo : register(t125);
+    // ...sample at (0,0) for (separation, convergence, eye_sign, 0)...
+]]></ShaderOverride>
+```
+
+### DX9
+
+The DX9 wrapper has the same ShaderHunter + reload workflow (same hotkeys) and ships a HelixMod-compatible override path: drop `.txt` ASM files into `<game>\ShaderOverride\{Vertex,Pixel}Shaders\0x<CRC>.txt`, or use `<ShaderPatch>` entries in `BaseProfile.xml`. See `docs/SHADER_FIXES.md` for the full technical breakdown.
+
+### Mass-dump option
+
+If you want every shader the game creates (not just the ones you hunt), flip `<DumpVS Value="1"/>` and `<DumpPS Value="1"/>` in `wiz3D_Config.xml`. Dumps land in `wiz3D_Logs\<Game>\Shaders\Dump\`. Useful when you have a known-good HelixMod fix from another wrapper and want to CRC-match the shaders yourself.
+
+### Submitting fixes
+
+Open a GitHub issue or PR with the game name, your `<Profile>` XML block, and a short note on what it fixes. Profiles merged into `BaseProfile.xml` ship for every player on the next release. By submitting, you agree to LGPL-2.1 for your profile content (the same licence the rest of the project uses).
 
 ---
 
