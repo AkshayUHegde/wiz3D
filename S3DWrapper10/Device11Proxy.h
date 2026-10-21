@@ -26,6 +26,7 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // bundled lib/d3d10 dxgitype.h still
 #include "ShaderAnalyzer11.h"  // ShaderAnalysis11Result
 #include "ShaderModifier11.h"  // wiz3d::ModifiedVS11 (TryBuildModifiedVS Phase 1)
 #include "DeferredContext11.h" // CreateDeferredContextFor
+#include "..\S3DAPI\ImageProcessing.h"  // AutoFocus (per-device, drives UpdateZPS)
 
 namespace wiz3d
 {
@@ -147,6 +148,11 @@ public:
     // Stage 4b.2: SwapChain11Proxy::Present needs the immediate context to
     // call its frame-boundary hook (ClearFrameCommands / future replay).
     Context11Proxy* GetContextProxy() const { return m_ctxProxy; }
+    // 0.4.1 AutoFocus: SwapChain11Proxy's per-frame UpdateZPS call ran on
+    // the ShiftFinder's current/previous shifts goes through this device-
+    // scoped AutoFocus so its CallTimeDelta state survives swap-chain
+    // recreations (ResizeBuffers / Alt+Enter) that reset the ShiftFinder.
+    AutoFocus&      GetAutoFocus()          { return m_autoFocus; }
 
     // Logical (one-eye) backbuffer size, set by DXGI swap-chain creation /
     // ResizeBuffers. Used by 1b-iv's OMSetRenderTargets viewport routing.
@@ -277,6 +283,11 @@ private:
     CRITICAL_SECTION           m_recycleLock;
     unsigned                   m_recycleFrame = 0;
     LONG                       m_texMade = 0, m_texFreed = 0, m_rightReused = 0, m_rightFresh = 0;
+
+    // 0.4.1 AutoFocus: device-scoped ZPS driver. Default-constructs; its
+    // UpdateZPS reads from a ShiftFinder owned by the swap chain and writes
+    // the time-smoothed convergence delta back into the active preset.
+    AutoFocus                  m_autoFocus;
 };
 
 // Cache lookup for WrapD3D11DeviceAndContext: FC3 (Dunia 2) hits

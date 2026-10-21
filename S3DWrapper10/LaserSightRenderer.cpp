@@ -248,16 +248,19 @@ void LaserSightRenderer::DrawQuad(ID3D11DeviceContext* ctx,
     ctx->Draw(6, 0);
 }
 
-// Draw the crosshair over the composite output. We don't have the DX9's
-// LaserSightData / ShiftFinder available on the DX11 path yet (that
-// infrastructure runs in BaseStereoRenderer and ShiftFinder tracks the
-// per-draw auto-shift). For 0.4.0 we use a simpler geometry: place the
-// crosshair at the user's configured LaserSight (x, y) screen position
-// in EACH eye half of the SBS output. Horizontal split is detected by
-// output mode -- for TB modes we split vertically instead.
+// Draw the crosshair over the composite output. The ShiftFinder in
+// SwapChain11Proxy measures the per-eye horizontal pixel shift AutoFocus
+// has converged onto; passing it in as shiftPx lets us place the crosshair
+// on the fused convergence depth. shiftPx=0 falls back to a static position
+// at the user's configured (LaserSightXCoordinate, LaserSightYCoordinate),
+// mirroring the legacy DX10 behaviour when AutoFocus is off or still warming
+// up. Horizontal split assumes SBS output; TB modes are rare in practice
+// and the sprite only shifts horizontally so a TB display shows two
+// crosshairs stacked at the same column -- acceptable.
 void LaserSightRenderer::Render(ID3D11DeviceContext* ctx,
                                 ID3D11RenderTargetView* rtv,
-                                UINT bbW, UINT bbH)
+                                UINT bbW, UINT bbH,
+                                int shiftPx)
 {
     if (!ctx || !rtv || bbW == 0 || bbH == 0) return;
     if (!m_initDone) return;
@@ -275,9 +278,12 @@ void LaserSightRenderer::Render(ID3D11DeviceContext* ctx,
     // aspect ratio as a hint -- wiz3D composites to the real BB which keeps
     // the display's aspect, so SBS is the common case.
     const float halfW = (float)bbW * 0.5f;
-    const float cxL = relX * halfW - spriteSize * 0.5f;
-    const float cxR = halfW + relX * halfW - spriteSize * 0.5f;
-    const float cy  = relY * (float)bbH - spriteSize * 0.5f;
+    // ShiftFinder reports the full per-eye shift; split it half left / half
+    // right so the pair's midpoint lands on the user's configured relX.
+    const float shiftHalf = (float)shiftPx * 0.5f;
+    const float cxL = relX * halfW         - spriteSize * 0.5f - shiftHalf;
+    const float cxR = halfW + relX * halfW - spriteSize * 0.5f + shiftHalf;
+    const float cy  = relY * (float)bbH    - spriteSize * 0.5f;
 
     // Bind state and shaders.
     ctx->OMSetRenderTargets(1, &rtv, nullptr);

@@ -598,7 +598,7 @@ bool OSDRenderer::WantHotkeyHelp() const
     return gInfo.Input.ShowHotKeyOSD != 0;
 }
 
-// Status: "wiz3D | Preset N | Sep X% | Conv Yunits [EyesSwapped]"
+// Status: "wiz3D | Preset N | Sep X% | Conv Yunits [| AutoFocus] [| EyesSwapped]"
 void OSDRenderer::BuildStatusText(wchar_t* out, size_t cap) const
 {
     const CameraPreset* p = gInfo.Input.GetActivePreset();
@@ -609,7 +609,16 @@ void OSDRenderer::BuildStatusText(wchar_t* out, size_t cap) const
     // visible even at 4K BB where each step moves convUnits by ~0.02 units
     // (one decimal would collapse 3-4 consecutive presses onto the same
     // "2.0" reading before the user saw any number change).
-    if (gInfo.Input.SwapEyes) {
+    const bool af = p && p->AutoFocusEnable;
+    if (af && gInfo.Input.SwapEyes) {
+        _snwprintf_s(out, cap, _TRUNCATE,
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.2f   |   AutoFocus   |   Eyes Swapped",
+                     presetIdx, sepPercent, convUnits);
+    } else if (af) {
+        _snwprintf_s(out, cap, _TRUNCATE,
+                     L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.2f   |   AutoFocus",
+                     presetIdx, sepPercent, convUnits);
+    } else if (gInfo.Input.SwapEyes) {
         _snwprintf_s(out, cap, _TRUNCATE,
                      L"wiz3D   |   Preset %d   |   Sep %.0f%%   |   Conv %.2f   |   Eyes Swapped",
                      presetIdx, sepPercent, convUnits);

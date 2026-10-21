@@ -471,11 +471,36 @@ HRESULT SwapChain11Proxy::EnsureStereoBackBuffer()
 
     DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: leftBB=%p rightBB=%p wrappedBB=%p (%ux%u fmt=%d)\n",
            m_leftBB, m_rightBB, m_wrappedBB, m_bbWidth, m_bbHeight, (int)m_bbFormat);
+
+    // 0.4.1 AutoFocus / LaserSight: initialise the image-correlation
+    // ShiftFinder against the game-visible BB rects. The per-eye BBs are
+    // full-size, so leftRect == rightRect == whole BB. GetImmediateContext
+    // AddRefs; we Release right after Initialize because the ShiftFinder
+    // stashes the raw pointer (SwapChain owns the real context's lifetime
+    // via m_parent).
+    {
+        ID3D11DeviceContext* ctx = nullptr;
+        dev->GetImmediateContext(&ctx);
+        if (ctx)
+        {
+            RECT leftRect  = { 0, 0, (LONG)m_bbWidth, (LONG)m_bbHeight };
+            RECT rightRect = leftRect;
+            HRESULT shr = m_shiftFinder.Initialize(dev, ctx, &leftRect, &rightRect, m_bbFormat);
+            if (FAILED(shr))
+                DDILog("SwapChain11Proxy::EnsureStereoBackBuffer: ShiftFinder init failed 0x%08lX (AutoFocus/LaserSight disabled this chain)\n", shr);
+            ctx->Release();
+        }
+    }
     return S_OK;
 }
 
 void SwapChain11Proxy::ReleaseStereoBackBuffer()
 {
+    // 0.4.1 AutoFocus: Clear() stops the worker thread + releases staging --
+    // call it before the eye BBs go away so any in-flight CopySubresourceRegion
+    // completes against still-live source textures.
+    m_shiftFinder.Clear();
+
     if (m_realBBRTV) { m_realBBRTV->Release(); m_realBBRTV = nullptr; }
     if (m_leftSRV)   { m_leftSRV->Release();   m_leftSRV   = nullptr; }
     if (m_rightSRV)  { m_rightSRV->Release();  m_rightSRV  = nullptr; }
@@ -661,6 +686,46 @@ void SwapChain11Proxy::DoComposite()
     m_parent->GetReal()->GetImmediateContext(&ctx);
     if (!ctx) return;
 
+    // 0.4.1 AutoFocus / LaserSight image correlator. Fires BEFORE the composite
+    // runs so m_leftBB / m_rightBB still hold the per-eye game draws (the
+    // composite doesn't touch them -- it samples via m_leftSRV / m_rightSRV --
+    // but keeping the sample point consistent with legacy DX10 / DX9 ordering).
+    // Kick when either feature is on; UpdateZPS runs only for AutoFocus.
+    const CameraPreset* p = gInfo.Input.GetActivePreset();
+    const bool wantAF    = gInfo.Input.StereoActive && p && p->AutoFocusEnable;
+    const bool wantLaser = gInfo.Input.LaserSightEnable;
+    if ((wantAF || wantLaser) && m_shiftFinder.IsInitializedSuccessfully() && m_leftBB && m_rightBB)
+    {
+        // Preset / separation / convergence changes invalidate the hold shift
+        // so AutoFocus doesn't drift the user's fresh adjustment back under
+        // its own time-smoothed delta. Mirrors legacy DX10 D3DDeviceWrapper.
+        const unsigned curPreset = (unsigned)gInfo.Input.ActivePreset;
+        const float    curSep    = p ? p->StereoBase    : 0.f;
+        const float    curConv   = p ? p->One_div_ZPS   : 0.f;
+        if (curPreset != m_sfLastPreset || curSep != m_sfLastSep || curConv != m_sfLastConv)
+        {
+            m_shiftFinder.SetShiftToHoldInvalid(m_shiftFrame);
+            m_sfLastPreset = curPreset;
+            m_sfLastSep    = curSep;
+            m_sfLastConv   = curConv;
+        }
+
+        m_shiftFinder.FindShift(m_leftBB, m_rightBB, m_shiftFrame);
+
+        if (wantAF &&
+            m_shiftFinder.IsCalculationComplete() &&
+            m_shiftFinder.IsCurrentShiftValid())
+        {
+            // The ZPS write races the keyboard thread's own convergence hotkey
+            // writes -- hold the hotkey lock the same way the DX9+legacy DX10
+            // paths do (BaseStereoRenderer.cpp:1842, D3DDeviceWrapper.cpp:996).
+            gKbdHook.m_Access.Enter();
+            m_parent->GetAutoFocus().UpdateZPS(&m_shiftFinder, gInfo.Input.GetActivePreset());
+            gKbdHook.m_Access.Leave();
+        }
+        ++m_shiftFrame;
+    }
+
     ID3D11DeviceContext1* ctx1 = nullptr;
     ID3DDeviceContextState* gameState = nullptr;
     if (EnsureCompositeState() &&
@@ -685,9 +750,22 @@ void SwapChain11Proxy::DoComposite()
     // Laser-sight crosshair overlay. Gated by gInfo.Input.LaserSightEnable
     // internally; the renderer no-ops when off. Drawn AFTER the OSD so
     // the crosshair is on top of any help overlay.
+    // 0.4.1: the ShiftFinder's measured per-eye pixel shift drives the
+    // crosshair into stereo-depth alignment. 0 when the correlator hasn't
+    // converged yet (first few frames or after a preset change) falls back
+    // to the legacy static-position layout.
     if (!m_laser) m_laser = new LaserSightRenderer();
     if (m_laser && m_laser->Init(m_parent->GetReal()))
-        m_laser->Render(ctx, m_realBBRTV, m_realBBW, m_realBBH);
+    {
+        int shiftPx = 0;
+        if (m_shiftFinder.IsInitializedSuccessfully() &&
+            m_shiftFinder.IsCalculationComplete() &&
+            m_shiftFinder.IsCurrentShiftValid())
+        {
+            shiftPx = m_shiftFinder.GetCurrentShift();
+        }
+        m_laser->Render(ctx, m_realBBRTV, m_realBBW, m_realBBH, shiftPx);
+    }
     if (gameState)
     {
         ctx->ClearState();   // our state holds no back-buffer view across a ResizeBuffers

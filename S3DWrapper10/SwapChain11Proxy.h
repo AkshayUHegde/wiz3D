@@ -29,6 +29,7 @@ typedef D3DCOLORVALUE DXGI_RGBA;     // see DXGIDeviceProxy.h — bundled
 #include <dxgi.h>
 #include <dxgi1_2.h>
 #include <dxgi1_5.h>   // IDXGISwapChain2/3/4
+#include "ShiftFinder11.h"           // 0.4.1 AutoFocus / LaserSight image correlator
 
 // SR-Lib (ThirdPartyLibs/SR-Lib_v2.0.0): lightfield weave for Simulated
 // Reality displays. Forward-declared so only the .cpp includes SR.hpp.
@@ -120,6 +121,11 @@ public:
     Device11Proxy*  GetParent()  const { return m_parent; }
     // DisableFullscreenModeEmulation=0 created this chain windowed though the game asked for fullscreen.
     void            EmulateFullscreen() { m_emulateFullscreen = true; m_gameFullscreen = TRUE; }
+    // 0.4.1 AutoFocus / LaserSight: LaserSightRenderer pulls the measured
+    // current-shift pixels from here to position the crosshair on the
+    // feature AutoFocus has locked onto. Returns nullptr before the first
+    // EnsureStereoBackBuffer completes.
+    wiz3d::ShiftFinder11* GetShiftFinder() { return m_shiftFinder.IsInitializedSuccessfully() ? &m_shiftFinder : nullptr; }
 
 private:
     // Stage 4b.8: Present / Present1 split into pre + post hooks. Pre runs
@@ -281,6 +287,21 @@ private:
     // Laser sight overlay (Ctrl+Numpad / hotkey). Lazy-created on first
     // frame that has LaserSightEnable=1; released in dtor.
     LaserSightRenderer*       m_laser = nullptr;
+
+    // 0.4.1 AutoFocus / LaserSight image correlator. Shared infra lives in
+    // S3DAPI/ImageProcessing (worker thread + SSE converters); ShiftFinder11
+    // only owns the DX11 staging texture and the per-eye copy boxes. Driven
+    // from DoComposite once m_leftBB/m_rightBB are populated; its measured
+    // shift feeds Device11Proxy::m_autoFocus::UpdateZPS and the laser-sight
+    // crosshair position.
+    wiz3d::ShiftFinder11      m_shiftFinder;
+    UINT                      m_shiftFrame = 0;
+    // Snapshot of the active preset's stereo state used to spot user-driven
+    // changes (hotkey tap on separation / convergence / preset slot) and
+    // invalidate the AutoFocus hold-shift so a fresh adjustment settles.
+    unsigned                  m_sfLastPreset = 0xFFFFFFFFu;
+    float                     m_sfLastSep    = -1.f;
+    float                     m_sfLastConv   = 0.f;
 };
 
 } // namespace wiz3d

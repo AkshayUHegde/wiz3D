@@ -37,9 +37,15 @@ public:
     // Draws the crosshair in both eye halves of the composite BB.
     // Must be called AFTER DrawCompositePass has blitted the eyes into rtv.
     // bbW / bbH are the real BB dims (= composite output dims).
+    // shiftPx: measured per-eye horizontal pixel shift from the AutoFocus
+    //          ShiftFinder (0.4.1). When non-zero + valid, pulls the right-eye
+    //          crosshair horizontally by half of it so the stereo pair fuses
+    //          at the depth AutoFocus has locked onto. 0 falls back to the
+    //          static-position legacy behaviour.
     void Render(ID3D11DeviceContext* ctx,
                 ID3D11RenderTargetView* rtv,
-                UINT bbW, UINT bbH);
+                UINT bbW, UINT bbH,
+                int shiftPx = 0);
 
 private:
     bool  EnsureShaders(ID3D11Device* dev);
