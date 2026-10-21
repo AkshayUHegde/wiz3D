@@ -39,6 +39,9 @@ if exist "wiz3d.dll" del /f /q "wiz3d.dll"
 if exist "NvApiProxy.log" del /f /q "NvApiProxy.log"
 if exist "wiz3D_crash.dmp" del /f /q "wiz3D_crash.dmp"
 
+echo Removing wiz3D_Logs folder (per-game logs + shader dumps)...
+if exist "wiz3D_Logs" rmdir /s /q "wiz3D_Logs"
+
 echo.
 echo Wiz3D files removed successfully.
 echo.

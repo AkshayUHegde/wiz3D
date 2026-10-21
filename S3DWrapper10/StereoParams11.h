@@ -43,13 +43,25 @@ constexpr UINT kStereoParamsSlot = 125;
 // (very unusual — a tiny DYNAMIC texture on a working device).
 bool EnsureStereoParams(ID3D11Device* dev);
 
-// Called from Context11Proxy::BindEye at every left/right switch. Maps the
-// per-device texture via MAP_WRITE_DISCARD on the given context, writes the
-// four floats (sep, conv, eye_sign, 0), unmaps, then binds the SRV to
-// slot t125 on VS/HS/DS/GS/PS/CS. Safe to call before EnsureStereoParams —
-// it's a no-op in that case.
-void BindStereoParamsForEye(ID3D11DeviceContext* ctx, ID3D11Device* dev,
-                            bool right, float separation, float convergence);
+// Split into two operations so Context11Proxy can route the Map through the
+// IMMEDIATE context (never the right-eye recorder) while letting the SRV
+// bindings go through whichever context the current draw uses. Rolling the
+// Map through the recorder would land on RightRecorder11::Map, which only
+// accepts DYNAMIC BUFFERS — a texture would be rejected via `Unexpected`
+// and permanently stop batching for the frame. See 0.4.1 release notes.
+
+// Update the per-device texture's bytes. MUST be called on the immediate
+// context — passing a deferred/recording context will fail. The write is
+// idempotent for the same (eye, sep, conv) so repeated calls in a frame
+// are cheap. Safe to call before EnsureStereoParams — no-op in that case.
+void UpdateStereoParamsBytes(ID3D11DeviceContext* immediateCtx, ID3D11Device* dev,
+                             bool right, float separation, float convergence);
+
+// Bind the per-device SRV to t125 on every programmable stage. Safe on the
+// immediate context AND on RightRecorder11 (SSetShaderResources is a
+// first-class recorded op). No Map/Unmap here — the texture-byte update is
+// a separate call. No-op if EnsureStereoParams hasn't run yet.
+void BindStereoParamsSRV(ID3D11DeviceContext* ctx, ID3D11Device* dev);
 
 // Called from ~Device11Proxy. Releases the cached texture + SRV. Safe to
 // call for a device that was never Ensure()'d (no-op).

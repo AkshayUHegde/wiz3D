@@ -13,6 +13,7 @@ pause
 echo.
 echo Removing wiz3D proxy and wrapper files...
 if exist "dxgi.dll" del /f /q "dxgi.dll"
+if exist "d3d9.dll" del /f /q "d3d9.dll"
 if exist "d3d10.dll" del /f /q "d3d10.dll"
 if exist "d3d11.dll" del /f /q "d3d11.dll"
 if exist "nvapi64.dll" del /f /q "nvapi64.dll"
@@ -40,6 +41,9 @@ if exist "OutputMethods" rmdir /s /q "OutputMethods"
 
 echo Removing shader cache...
 if exist "DX9ShaderDataCache" rmdir /s /q "DX9ShaderDataCache"
+
+echo Removing wiz3D_Logs folder (per-game logs + shader dumps)...
+if exist "wiz3D_Logs" rmdir /s /q "wiz3D_Logs"
 
 echo.
 echo Wiz3D files removed successfully.

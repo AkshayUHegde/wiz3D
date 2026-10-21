@@ -27,6 +27,9 @@ if exist "HD3D_adl.log"    del /f /q "HD3D_adl.log"
 REM Legacy log name from wiz3D 0.2.x (renamed to HD3D_dxgi.log in 0.3.0):
 if exist "3DV_dxgi.log"    del /f /q "3DV_dxgi.log"
 
+echo Removing wiz3D_Logs folder (per-game logs + shader dumps)...
+if exist "wiz3D_Logs" rmdir /s /q "wiz3D_Logs"
+
 echo.
 echo Wiz3D HD3D files removed successfully.
 echo.

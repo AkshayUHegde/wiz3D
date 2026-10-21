@@ -79,25 +79,23 @@ bool EnsureStereoParams(ID3D11Device* dev)
     return true;
 }
 
-void BindStereoParamsForEye(ID3D11DeviceContext* ctx, ID3D11Device* dev,
-                            bool right, float separation, float convergence)
+void UpdateStereoParamsBytes(ID3D11DeviceContext* immediateCtx, ID3D11Device* dev,
+                             bool right, float separation, float convergence)
 {
-    if (!ctx || !dev) return;
-    ID3D11ShaderResourceView* srv = nullptr;
-    ID3D11Texture2D*          tex = nullptr;
+    if (!immediateCtx || !dev) return;
+    ID3D11Texture2D* tex = nullptr;
     {
         std::lock_guard<std::mutex> g(s_lock);
         auto it = s_byDevice.find(dev);
         if (it == s_byDevice.end()) return;
-        srv = it->second.srv;
         tex = it->second.tex;
     }
-    if (!srv || !tex) return;
+    if (!tex) return;
 
-    // Write the per-eye bytes. MAP_WRITE_DISCARD renames the GPU-side
-    // storage, so an in-flight draw reading the old eye's bytes isn't
-    // disturbed. We don't need a fence here — the next draw after this
-    // Bind sees the new bytes by construction of the DISCARD semantic.
+    // MAP_WRITE_DISCARD renames the GPU-side storage, so an in-flight draw
+    // reading the old eye's bytes isn't disturbed. Must be the immediate
+    // context — RightRecorder11::Map rejects textures (BUFFER-only), which
+    // was the batch-killer bug in 0.4.1 before this split.
     const float params[4] = {
         separation,
         convergence,
@@ -105,16 +103,30 @@ void BindStereoParamsForEye(ID3D11DeviceContext* ctx, ID3D11Device* dev,
         0.f
     };
     D3D11_MAPPED_SUBRESOURCE m = {};
-    if (SUCCEEDED(ctx->Map(tex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)) && m.pData)
+    if (SUCCEEDED(immediateCtx->Map(tex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)) && m.pData)
     {
         memcpy(m.pData, params, sizeof(params));
-        ctx->Unmap(tex, 0);
+        immediateCtx->Unmap(tex, 0);
     }
+}
 
-    // Bind to the reserved slot on every programmable stage. The game is
-    // unlikely to bind its own SRV at t125 but if it did, our Bind clobbers
-    // it. Documented as a known limitation if any game turns out to use
-    // this slot (none observed so far).
+void BindStereoParamsSRV(ID3D11DeviceContext* ctx, ID3D11Device* dev)
+{
+    if (!ctx || !dev) return;
+    ID3D11ShaderResourceView* srv = nullptr;
+    {
+        std::lock_guard<std::mutex> g(s_lock);
+        auto it = s_byDevice.find(dev);
+        if (it == s_byDevice.end()) return;
+        srv = it->second.srv;
+    }
+    if (!srv) return;
+
+    // SSetShaderResources is a first-class recorded op (RightRecorder11
+    // forwards it), so this is safe on either the immediate context or the
+    // right-eye recorder. The game is unlikely to bind its own SRV at t125
+    // but if it did, our Bind clobbers it. Documented as a known limitation
+    // if any game turns out to use this slot (none observed so far).
     ctx->VSSetShaderResources(kStereoParamsSlot, 1, &srv);
     ctx->HSSetShaderResources(kStereoParamsSlot, 1, &srv);
     ctx->DSSetShaderResources(kStereoParamsSlot, 1, &srv);
