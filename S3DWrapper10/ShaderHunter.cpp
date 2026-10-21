@@ -69,6 +69,12 @@ inline CrcStageKey MakeKey(uint32_t crc, HuntStage stage)
 std::unordered_map<CrcStageKey, HuntMeta>   s_known;        // all shaders seen so far
 std::unordered_set<CrcStageKey>             s_drewThisFrame;// cleared at FrameEnd
 std::unordered_map<CrcStageKey, uint32_t>   s_drawCountForFrame;
+// 0.4.1 diagnostic: how many NoteDraw calls arrived this frame (regardless of
+// whether vsCrc / psCrc were non-zero). A frame with notedDraws > 0 but a
+// zero-sized s_drewThisFrame means BoundShaderCRC returned 0 for every draw —
+// i.e. the bound shaders aren't registered in Device11Proxy's projection map.
+// Printed once per hunt-mode frame-end.
+unsigned                                    s_notedDrawsThisFrame = 0;
 
 std::vector<CrcStageKey>                    s_cycle;        // stable order built at FrameEnd
 size_t                                      s_cycleIdx = 0;
@@ -152,6 +158,7 @@ void ShaderHunter::NoteDraw(uint32_t vsCrc, uint32_t psCrc)
     // can be big (hundreds of distinct CRCs on a complex game), but the two
     // insert calls amortise to ~constant time against the hashmap.
     std::lock_guard<std::mutex> g(s_lock);
+    ++s_notedDrawsThisFrame;
     if (vsCrc)
     {
         auto k = MakeKey(vsCrc, HuntStage::VS);
@@ -213,6 +220,14 @@ void ShaderHunter::FrameEnd()
         s_cycleIdx = 0;
     }
 
+    // Diagnostic once per frame while hunt mode is on. A notedDraws > 0 with
+    // drewUnique == 0 means BoundShaderCRC returned 0 for every draw this
+    // frame — the shaders aren't registered in Device11Proxy's projection
+    // map, so the hunter can't name them. A notedDraws == 0 means our Draw()
+    // override isn't on the hot path (deferred-context draws bypass it).
+    DDILog("[hunt] frame-end: notedDraws=%u drewUnique=%zu cycleSize=%zu\n",
+           s_notedDrawsThisFrame, s_drewThisFrame.size(), s_cycle.size());
+    s_notedDrawsThisFrame = 0;
     s_drewThisFrame.clear();
     s_drawCountForFrame.clear();
 }
