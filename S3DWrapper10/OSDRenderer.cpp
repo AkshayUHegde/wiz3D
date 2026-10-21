@@ -847,12 +847,34 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
     ctx->OMSetBlendState(m_blend, blendFactor, 0xFFFFFFFFu);
     ctx->OMSetDepthStencilState(m_depth, 0);
 
+    // 0.4.1 OSD position offsets (legacy DX10 D3DDeviceWrapper.cpp:830-850).
+    //  - FrustumAdjustMode + BlackAreaWidth add comfort bars at the LEFT /
+    //    RIGHT edges; shift the top-left Status X right and the top-right
+    //    FPS X left by that width so the text clears them. SeparationMode=1
+    //    doubles the shift (half-SBS: each eye has its own bar).
+    //  - FixNone16x9TextPosition shifts top-anchored text DOWN by the top
+    //    letterbox height, when the game render is 16:9 but the BB is taller.
+    //    Hunter (bottom-anchored) shifts UP by the matching bottom letterbox.
+    float barX = 0.f;
+    if (gInfo.Input.StereoActive && gInfo.FrustumAdjustMode)
+    {
+        const float width = gInfo.BlackAreaWidth * (float)bbW;
+        barX = (gInfo.SeparationMode == 1) ? 2.f * width : width;
+    }
+    float letterboxY = 0.f;
+    if (gInfo.FixNone16x9TextPosition && bbW > 0)
+    {
+        const float render16x9H = (float)bbW / (16.f / 9.f);
+        letterboxY = (std::max<float>)(0.f, ((float)bbH - render16x9H) * 0.5f);
+    }
+
     // Draw order: hotkey help underneath (full-screen dim), then status, then FPS.
     if (wantHelp) {
         TexSlot& s = m_slots[(int)Slot::HotkeyHelp];
         // Centred, max 720x520 pixels. Scale down proportionally only if BB
         // is smaller than the slot (rare -- 480p-era displays). Otherwise
-        // 1:1 pixel mapping.
+        // 1:1 pixel mapping. Centred placement already clears both comfort
+        // bars and letterbox so no offsets apply here.
         float dw = (float)(std::min<UINT>)(bbW > 40 ? bbW - 40 : (UINT)s.w, (UINT)s.w);
         float dh = (float)(std::min<UINT>)(bbH > 40 ? bbH - 40 : (UINT)s.h, (UINT)s.h);
         float dx = ((float)bbW - dw) * 0.5f;
@@ -861,20 +883,21 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
     }
     if (wantStatus) {
         TexSlot& s = m_slots[(int)Slot::Status];
-        DrawQuad(ctx, s.srv, 20.f, 20.f, (float)s.w, (float)s.h, bbW, bbH);
+        DrawQuad(ctx, s.srv, 20.f + barX, 20.f + letterboxY, (float)s.w, (float)s.h, bbW, bbH);
     }
     if (wantFps) {
         TexSlot& s = m_slots[(int)Slot::Fps];
-        DrawQuad(ctx, s.srv, (float)bbW - 20.f - (float)s.w, 20.f, (float)s.w, (float)s.h, bbW, bbH);
+        DrawQuad(ctx, s.srv, (float)bbW - 20.f - barX - (float)s.w, 20.f + letterboxY, (float)s.w, (float)s.h, bbW, bbH);
     }
     // 0.5.0 ShaderHunter: bottom-centre strip. Fits inside bb width with
     // 20px side margins when bb is wider than the slot; otherwise shrinks
-    // to fit (keeps the status visible even at 480p).
+    // to fit (keeps the status visible even at 480p). Letterbox lifts the
+    // strip clear of the bottom bar when FixNone16x9TextPosition is on.
     if (wantHunter) {
         TexSlot& s = m_slots[(int)Slot::Hunter];
         float dw = (float)(std::min<UINT>)(bbW > 40 ? bbW - 40 : (UINT)s.w, (UINT)s.w);
         float dx = ((float)bbW - dw) * 0.5f;
-        float dy = (float)bbH - (float)s.h - 20.f;
+        float dy = (float)bbH - (float)s.h - 20.f - letterboxY;
         if (dy < 0) dy = 0;
         DrawQuad(ctx, s.srv, dx, dy, dw, (float)s.h, bbW, bbH);
     }
