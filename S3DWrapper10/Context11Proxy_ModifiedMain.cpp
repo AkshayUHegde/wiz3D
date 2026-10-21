@@ -36,6 +36,18 @@ void Context11Proxy::EndFrame()
         if (v.second.first > s_sceneP00Votes) { s_sceneP00Votes = v.second.first; s_sceneP00 = v.second.second; }
     }
     s_cleanP00Votes.clear();
+    // UiProjectionParallax SceneNear: the reference is the scene camera whose own near plane is that (its z row recorded
+    // this frame, at a focal two frames running, so a camera change cannot pair one camera's focal with another's row).
+    static float s_lastVote = 0.f;
+    if (const float zr = UiProjectionReferenceNear())
+    {
+        const float m22 = s_sceneZRow[0], m23 = s_sceneZRow[1];
+        const float zn = m23 < 0.f ? -m23 / m22 : m23 / (1.f - m22);
+        // The id already moved on above: the row must be from the frame that just ended.
+        if (s_sceneZRowFrame + 1 == s_frameId && s_sceneP00 > 0.f && s_sceneP00 == s_lastVote && fabsf(zn - zr) < 0.01f * zr)
+            s_referenceP00 = s_sceneP00;
+    }
+    s_lastVote = s_sceneP00;
     for (auto& f : Features()) f->OnFrameEnd(*this, s_frameId, report);
     if (report)
     {

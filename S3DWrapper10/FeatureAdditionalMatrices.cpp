@@ -7,6 +7,7 @@
 // misses it (Max Payne 3's particle sprites, gWorldViewProj).
 
 #include "StdAfx.h"
+#include <algorithm>
 #include "ProfileFeature.h"
 #include "ShaderAnalyzer11.h"
 #include "AdapterFunctions.h"              // DDILog
@@ -42,12 +43,45 @@ public:
     }
 };
 
+// <AdditionalMatrixLayout Value="code"/>, after AdditionalMatricesFeature: a named matrix whose first two registers the
+// code reads whole in dp4s is patched as rows (a per-object velocity's), otherwise as columns.
+class AdditionalMatrixLayoutFeature : public ProfileFeature
+{
+public:
+    void OnShaderCreated(const RdefView&, ShaderAnalysis11Result& info) const override
+    {
+        if (!info.parsed || info.namedMatrices.empty() || !info.bytecode) return;
+        std::vector<std::pair<int, UINT>> dp4;
+        CodeDp4ConstantReads(info.bytecode->data(), info.bytecode->size(), dp4);
+        auto reads = [&](int slot, UINT reg) { return std::find(dp4.begin(), dp4.end(), std::make_pair(slot, reg)) != dp4.end(); };
+        for (const auto& m : info.namedMatrices)
+        {
+            if (!reads(m.first, m.second) || !reads(m.first, m.second + 1)) continue;
+            auto it = info.projection.matrixData.cb.find((DWORD)m.first);
+            if (it == info.projection.matrixData.cb.end()) continue;
+            for (auto& pmd : it->second)
+            {
+                if (pmd.matrixRegister != m.second || pmd.matrixIsTransposed) continue;
+                pmd.matrixIsTransposed = TRUE;
+                FeatureLog("  AdditionalMatrixLayout: CRC=0x%08lX matrix cb%d reg %u read by dp4: patched as rows\n", info.crc32,
+                           m.first, m.second);
+            }
+        }
+    }
+};
+
 } // namespace
 
 std::unique_ptr<ProfileFeature> MakeAdditionalMatrices(const ProfileEntry*)
 {
     if (g_ProfileData.AdditionalMatrixName.empty()) return nullptr;
     return std::unique_ptr<ProfileFeature>(new AdditionalMatricesFeature());
+}
+
+std::unique_ptr<ProfileFeature> MakeAdditionalMatrixLayout(const ProfileEntry* e)
+{
+    if (!e || EntryValue(*e, "Value") != "code" || g_ProfileData.AdditionalMatrixName.empty()) return nullptr;
+    return std::unique_ptr<ProfileFeature>(new AdditionalMatrixLayoutFeature());
 }
 
 } // namespace wiz3d

@@ -1823,7 +1823,31 @@
 		             ViewProjection="g_ViewProjection" MoveOriginFor="g_Shadow_Tex" FocalRays="1"/>
 		<!-- The title's logo and vines are camera-facing cards a unit or two from the camera, far nearer than the
 		     convergence: in a menu they are the menu's own layers and sit at the screen -->
-		<HudSceneDepth MenuLayers="25" MinSceneDraws="200"/>
+		<!-- The HUD draws into its own target through the cbUIParam/UIParam shaders; a marker (frame, icon, glyphs) takes
+		     one scene depth, searched below its origin: g_WorldMatrix's translation through the HUD's g_ViewProjection -->
+		<HudSceneDepth MenuLayers="25" MinSceneDraws="200" HudConstants="cbUIParam UIParam" DepthCopy="any"
+		               Band="-0.62 0.62 -0.55 0.75" Below="3" Anchor="g_WorldMatrix g_ViewProjection" AnchorGroup="0.125">
+			<!-- The minimap's tiles and icons: clipped by a mask the HUD drew -->
+			<Flat Texture="g_MaskTexture" Bound="RenderTarget"/>
+			<!-- 2B's health, the top-right panel, tutorial boxes: on the game's own tilted or pushed-back HUD plane -->
+			<Flat Tilted="1"/>
+			<Flat ZOutside="-1 1"/>
+			<!-- Talk prompts, the lock-on reticle: the game puts the marked point's depth in z -->
+			<GameDepth ZInside="0 1"/>
+		</HudSceneDepth>
+		<!-- The pause map's telephoto camera takes the gameplay camera's parallax, told apart by its near plane -->
+		<UiProjectionParallax Value="1" SceneNear="0.1"/>
+		<!-- Per-object velocity builds its position as g_Proj * g_View and blends it with last frame's g_OldViewProj, a chain
+		     the trace does not follow: both are patched, as the rows its dp4s read -->
+		<AdditionalMatrixName Value="g_Proj"/>
+		<AdditionalMatrixName Value="g_OldViewProj"/>
+		<AdditionalMatrixLayout Value="code"/>
+		<!-- A caller's portrait and the minimap are drawn by their own cameras into 256x256 targets and shown on panels:
+		     they stay flat -->
+		<LightViewPasses Value="1" ColorSize="256x256"/>
+		<!-- The linear depth the ambient occlusion reads is filled through the real texture: its right copy is filled from
+		     the right source -->
+		<RawResources Value="1"/>
 	</Profile>
 	<Profile Name="Ryse: Son of Rome">
 		<File Name="Ryse.exe" />

@@ -69,6 +69,8 @@ struct CameraMove
 };
 // One attribute, "" when absent.
 const std::string& EntryValue(const ProfileEntry& entry, const char* attr);
+// A profile element's child elements in order, each with its own name under "@".
+std::vector<const ProfileEntry*> ChildEntries(const char* element);
 
 class ProfileFeature
 {
@@ -128,6 +130,7 @@ std::unique_ptr<ProfileFeature> MakeLightViewPasses(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeVertexCameraMatrices(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeUiProjectionParallax(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeAdditionalMatrices(const ProfileEntry* entry);
+std::unique_ptr<ProfileFeature> MakeAdditionalMatrixLayout(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeRightCamera(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeRayCorners(const ProfileEntry* entry);
 std::unique_ptr<ProfileFeature> MakeDuniaLocalLights(const ProfileEntry* entry);
@@ -177,6 +180,7 @@ bool Factory2SwapChainsOn();     // Factory2 swap chains wrapped on any factory,
 bool BatchRightEyeOn();          // the right eye's draws recorded and replayed once per pass; on unless Value="0"
 bool PrivateBackBufferRefsOn();  // our holds on the back buffer left out of the count the game reads
 bool RecycleRightCopiesOn();     // a freed texture's right copy serves the next texture created with its desc
+float UiProjectionReferenceNear();   // UiProjectionParallax SceneNear, 0 = the frame's own scene camera
 
 // Stereo state the core owns, for features to read or feed.
 namespace stereo
@@ -185,6 +189,8 @@ float Convergence();               // zero-parallax distance in world units, 0 =
 float FallbackB(float eyeShift);   // the shear from the last shifted camera matrix, for when the camera's p00 is unknown
 void  PublishCameraP00(float p00); // the scene camera's p00, used for scaled matrices (0 = unknown)
 float SceneP00();                  // the frame's scene camera p00 (0 = unknown)
+float UiParallaxScale(float p00);  // under UiProjectionParallax SceneNear, the factor a camera of this p00 scales its
+                                   // eye shift by to take the gameplay camera's parallax; 1 otherwise
 bool  SceneZRow(float& m22, float& m23);   // its projection's z row (z_ndc = m22 + m23 / w); false = none this frame
 }
 
