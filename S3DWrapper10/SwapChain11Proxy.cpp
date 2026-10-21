@@ -1270,7 +1270,30 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc)
         pDesc->BufferDesc.Width  = m_bbWidth;
         pDesc->BufferDesc.Height = m_bbHeight;
     }
+    if (SUCCEEDED(hr) && pDesc && m_emulateFullscreen)
+        pDesc->Windowed = !m_gameFullscreen;
     return hr;
+}
+
+HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pDesc)
+{
+    if (!m_real1) return E_NOINTERFACE;
+    HRESULT hr = m_real1->GetFullscreenDesc(pDesc);
+    if (SUCCEEDED(hr) && pDesc && m_emulateFullscreen)
+        pDesc->Windowed = !m_gameFullscreen;
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetFullscreenState(BOOL* pFullscreen, IDXGIOutput** ppTarget)
+{
+    if (!m_emulateFullscreen) return m_real->GetFullscreenState(pFullscreen, ppTarget);
+    if (pFullscreen) *pFullscreen = m_gameFullscreen;
+    if (ppTarget)
+    {
+        *ppTarget = nullptr;
+        if (m_gameFullscreen) m_real->GetContainingOutput(ppTarget);
+    }
+    return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE SwapChain11Proxy::GetDesc1(DXGI_SWAP_CHAIN_DESC1* pDesc)
@@ -1348,6 +1371,13 @@ HRESULT STDMETHODCALLTYPE SwapChain11Proxy::SetFullscreenState(BOOL Fullscreen, 
     {
         if (Context11Proxy* ctx = m_parent->GetContextProxy())
             ctx->ClearFrameCommands();
+    }
+    // An emulated chain never enters fullscreen, but leaving it always reaches DXGI: Alt+Enter can switch the real chain
+    // behind us, and a fullscreen chain must go windowed before it is released.
+    if (m_emulateFullscreen)
+    {
+        m_gameFullscreen = Fullscreen;
+        if (Fullscreen) return S_OK;
     }
     HRESULT hr = m_real->SetFullscreenState(Fullscreen, pTarget);
     DDILog("SwapChain11Proxy::SetFullscreenState -> hr=0x%08lX\n", hr);

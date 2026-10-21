@@ -429,3 +429,12 @@ wiz3D_WrapSwapChain(void** ppSwapChainInOut, void* pWrappedDevice)
            realSC, realSC1, scProxy, deviceProxy);
     *ppSwapChainInOut = static_cast<IDXGISwapChain*>(scProxy);
 }
+
+void wiz3D_EmulateFullscreen(IDXGISwapChain* pSwapChain)
+{
+    IUnknown* ours = nullptr;
+    if (!pSwapChain || FAILED(pSwapChain->QueryInterface(IID_wiz3D_SwapChain11Proxy, reinterpret_cast<void**>(&ours))) || !ours)
+        return;
+    static_cast<wiz3d::SwapChain11Proxy*>(static_cast<IDXGISwapChain*>(ours))->EmulateFullscreen();
+    ours->Release();
+}
