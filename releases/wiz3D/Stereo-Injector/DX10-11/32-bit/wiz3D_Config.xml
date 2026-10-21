@@ -29,43 +29,24 @@
 		<!-- endif -->
 		<OGLRunAtStartup Value="0"/>
 
-		<!-- ifdef ${outputMethodDll} -->
-		<!-- <OutputMethodDll Value="${outputMethodDll}"/> -->
-		<!-- else -->
-		<!-- OutputMethodDll + OutputMode both accept the same short name across every
-		     wiz3D wrapper (DX7/8/9/10-11, OpenGL, NvDirectMode). The wrapper routes
-		     to the right output path internally — DX7-9 loads the matching plugin
-		     DLL, DX10-11 picks an inline composite shader by mode id. Case-insensitive.
-
-		     Short name   | Mode id | Description                           | DX7-9 plugin available?
-		     -------------+---------+---------------------------------------+------------------------
-		     HalfSBS, SBS |    1    | Half Side-by-Side (default pairing)   | yes
-		     FullSBS      |    2    | Full SBS (game renders half-width)    | DX10-11 only
-		     HalfTAB, TAB |    3    | Half Top-and-Bottom                   | DX10-11 only
-		     FullTAB      |    4    | Full TAB (game renders half-height)   | DX10-11 only
-		     Anaglyph     |    5    | Red/Cyan (Dubois)                     | yes
-		     RowIL        |    6    | Row interleaved (passive 3D TVs)      | yes
-		     ColIL        |    7    | Column interleaved                    | DX10-11 only
-		     Checker      |    8    | Checkerboard (DLP-Link projectors)    | DX10-11 only
-		     SRWeave      |    9    | Simulated Reality Weave (Leia/Odyssey 3D) | yes
-		     Mirror       |   10    | StereoMirror (second-display mirror)  | yes
-		     iZ3D         |    0    | iZ3D dual-panel (legacy hardware)     | yes
-
-		     The default below is "SRWeave", which auto-falls back to HalfSBS when a
-		     Simulated Reality runtime / Service / display isn't available — so users
-		     without SR hardware still get a usable stereo image out of the box.
-
-		     Legacy forms also recognised: HalfSideBySide, FullSideBySide, HalfTopAndBottom,
-		     FullTopAndBottom, RowInterleaved, ColumnInterleaved, Checkerboard,
-		     SimulatedRealityWeave, StereoMirror, iZ3DDualPanel, plus the old iZ3D
-		     plugin DLL names (SideBySideOutput, AnaglyphOutput, S3DOutput, etc.). -->
-		<OutputMethodDll Value="SRWeave"/>
-		<!-- endif -->
-		<!-- OutputMode is a legacy numeric mirror of the field above. When OutputMethodDll
-		     is set to a recognised name, the wrapper backfills OutputMode from the table
-		     above, so you can leave this at 0. Only set a number here if you want to
-		     override everything else (e.g. force OutputMode="1" to lock HalfSBS). -->
-		<OutputMode Value="0"/>
+		<!-- OutputMode: pick either the number or the short name — both parse. -->
+		<!-- 0 == "iZ3D"       iZ3D dual-panel (legacy); modern wrappers fall back to Half SBS -->
+		<!-- 1 == "HalfSBS"    Half Side-by-Side (default modern pairing with a stereo panel) -->
+		<!-- 2 == "FullSBS"    Full Side-by-Side (game renders at half display width) -->
+		<!-- 3 == "HalfTAB"    Half Top-and-Bottom -->
+		<!-- 4 == "FullTAB"    Full Top-and-Bottom -->
+		<!-- 5 == "Anaglyph"   Red/Cyan Dubois -->
+		<!-- 6 == "RowIL"      Row interleaved (passive 3D TVs) -->
+		<!-- 7 == "ColumnIL"   Column interleaved -->
+		<!-- 8 == "Checker"    Checkerboard (DLP-Link projectors) -->
+		<!-- 9 == "SRWeave"    Simulated Reality Weave (Leia / Samsung Odyssey 3D) -->
+		<!-- 10 == "Mirror"    StereoMirror (second-display mirror) -->
+		<OutputMode Value="SRWeave"/>   <!-- or "1" / "9" / etc. -->
+		<!-- OutputMethodDll is the legacy iZ3D plugin DLL selector; left blank it's
+		     backfilled from the OutputMode above. Set a specific plugin filename
+		     here only to pin a legacy DX7-9 output DLL (SideBySideOutput, S3DOutput,
+		     any CMOShutter / Zalman / VR920 / Z800 / Lenovo hardware driver, etc). -->
+		<OutputMethodDll Value=""/>
 		<OutputSpanMode Value="0"/>
 		<!-- DisplayScalingMode Values: -->
 		<!-- 0 == No Scaling (or Scaling Unknown) -->

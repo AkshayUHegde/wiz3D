@@ -69,7 +69,7 @@ static const OutputModeEntry kOutputModeTable[] =
     { OUTMODE_FULL_TOP_AND_BOTTOM,  "FullTAB",                "FullTopAndBottomOutput"      },
     { OUTMODE_ANAGLYPH,             "Anaglyph",               "AnaglyphOutput"              },
     { OUTMODE_ROW_INTERLEAVED,      "RowIL",                  "InterlacedOutput"            },
-    { OUTMODE_COLUMN_INTERLEAVED,   "ColIL",                  "ColumnInterleavedOutput"     },
+    { OUTMODE_COLUMN_INTERLEAVED,   "ColumnIL",               "ColumnInterleavedOutput"     },
     { OUTMODE_CHECKERBOARD,         "Checker",                "CheckerboardOutput"          },
     { OUTMODE_SR_WEAVE,             "SRWeave",                "SimulatedRealityWeaveOutput" },
     { OUTMODE_STEREO_MIRROR,        "Mirror",                 "StereoMirrorOutput"          },

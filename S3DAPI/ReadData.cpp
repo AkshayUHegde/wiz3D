@@ -348,6 +348,24 @@ bool ReadConfigRouterType()
 	// DX9 plugin loader still finds them. See the shared header's
 	// comment block for the full priority rule.
 	{
+		// 0.4.1: OutputMode accepts a short name too (e.g. <OutputMode
+		// Value="SRWeave"/>). The main parse pass runs QueryIntAttribute
+		// which silently fails on a non-numeric Value and leaves the
+		// gInfo field at zero; re-read the raw string here and resolve
+		// through the names table. The OutputMethodDll resolver below
+		// still wins if BOTH fields are set to recognised names, so
+		// pre-0.4.1 configs keep their historical priority.
+		if (TiXmlElement* omElement = node->FirstChildElement("OutputMode"))
+		{
+			const char* omRaw = omElement->Attribute("Value");
+			if (omRaw && *omRaw)
+			{
+				int resolvedOM = wiz3d::ResolveOutputModeName(omRaw);
+				if (resolvedOM != wiz3d::OUTMODE_UNKNOWN)
+					gInfo.OutputMode = static_cast<DWORD>(resolvedOM);
+			}
+		}
+
 		std::string nameAscii = common::utils::to_multibyte(gInfo.OutputMethodDll);
 		int resolved = wiz3d::ResolveOutputModeName(nameAscii.c_str());
 		if (resolved != wiz3d::OUTMODE_UNKNOWN)
