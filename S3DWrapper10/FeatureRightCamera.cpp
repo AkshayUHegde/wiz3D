@@ -354,7 +354,8 @@ private:
             out.p00 = p00;
             for (int k = 0; k < 3; ++k) out.right[k] = R[k] / rn;
         }
-        out.d = eyeShift * stereo::Convergence();
+        // A menu's own 3D view takes the gameplay camera's parallax (UiProjectionParallax SceneNear), as its geometry does.
+        out.d = eyeShift * stereo::UiParallaxScale(out.p00) * stereo::Convergence();
         for (int k = 0; k < 3; ++k) out.world[k] = out.d * out.right[k];
         return true;
     }
@@ -383,6 +384,7 @@ private:
         if (!Camera(ctx, data, size, cam)) { if (!s_layout.registers) ++m_skipped; return false; }
         // Found by its bytes in any slot: the view-projection's x axis has the projection's p00 too.
         if (s_layout.registers && !AxisAgrees(data, size, s_layout.viewProj, cam.p00)) return false;
+        eyeShift *= stereo::UiParallaxScale(cam.p00);
         PerP00& seen = m_byP00[(int)(cam.p00 * 1000.f + 0.5f)];
         ++seen.count;
         seen.latest = cam;

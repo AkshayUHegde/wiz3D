@@ -163,6 +163,8 @@ unsigned s_lightOnlyKept = 0;    // light matrices (read only by shadow passes) 
 // and shows how often the last one cached is another (weapon, UI).
 std::map<int, std::pair<unsigned, float>> s_cleanP00Votes;
 float    s_sceneP00 = 0.f;
+// UiProjectionParallax SceneNear: the p00 of the last scene camera with that near plane, 0 = off.
+float    s_referenceP00 = 0.f;
 // The scene projection's z row (z_ndc = m22 + m23 / w_view) from the frame's last clean view-projection, so a
 // vertex given in NDC (ClipSpaceSprites) gets back its view depth.
 float    s_sceneZRow[2] = { 0.f, 0.f };

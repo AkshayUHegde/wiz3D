@@ -939,6 +939,12 @@ float Convergence()               { return StereoConvergence(); }
 float FallbackB(float eyeShift)   { return EyeShiftB(eyeShift); }
 void  PublishCameraP00(float p00) { s_camP00 = p00; }
 float SceneP00()                  { return s_camP00 > 0.f ? s_camP00 : s_sceneP00; }
+float UiParallaxScale(float p00)
+{
+    const float ref = s_referenceP00;
+    if (!s_uiProjectionParallax || !(ref > 0.f) || !(p00 > 0.f) || (p00 >= 0.5f * ref && p00 <= 2.f * ref)) return 1.f;
+    return ref / p00;
+}
 bool  SceneZRow(float& m22, float& m23)
 {
     if (!s_sceneZRowFrame || s_frameId - s_sceneZRowFrame > 1 || s_sceneZRow[1] == 0.f) return false;
@@ -1132,9 +1138,11 @@ void ApplyTargetedEyeShiftToCB(unsigned char* data, size_t byteCount,
         // UiProjectionParallax: a clean matrix whose focal is beyond 2x from the scene camera's is a UI projection, not
         // another FOV (a weapon's stays within), and its draw takes the scene's parallax.
         const float scene = s_camP00 > 0.f ? s_camP00 : s_sceneP00;
-        const bool uiFocal = s_uiProjectionParallax && unitW && scene > 0.f && (own < 0.5f * scene || own > 2.f * scene);
+        // SceneNear: the reference is the gameplay camera's, as a menu's own 3D view is no scene camera.
+        const float uiScene = s_referenceP00 > 0.f ? s_referenceP00 : scene;
+        const bool uiFocal = s_uiProjectionParallax && unitW && uiScene > 0.f && (own < 0.5f * uiScene || own > 2.f * uiScene);
         if (!unitW && s_camP00 > 0.f) ++s_scaledByCamera;
-        const float camXScale = uiFocal ? scene : (!unitW && s_camP00 > 0.f) ? s_camP00 : own;
+        const float camXScale = uiFocal ? uiScene : (!unitW && s_camP00 > 0.f) ? s_camP00 : own;
 
         if (fullColumn)
         {

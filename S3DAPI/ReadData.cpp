@@ -806,6 +806,20 @@ static void ReadFeatureEntry( TiXmlElement* itemElement )
 	std::map<std::string, std::string>& entry = g_ProfileData.FeatureEntries[itemElement->Value()];
 	for (const TiXmlAttribute* a = itemElement->FirstAttribute(); a; a = a->Next())
 		entry[a->Name()] = a->Value();
+	// Its child elements in order, as "Name/1", "Name/2"... with the child's own name under "@" (a later profile part
+	// replaces the whole list).
+	const std::string prefix = std::string(itemElement->Value()) + "/";
+	for (auto it = g_ProfileData.FeatureEntries.lower_bound(prefix);
+		 it != g_ProfileData.FeatureEntries.end() && it->first.compare(0, prefix.size(), prefix) == 0; )
+		it = g_ProfileData.FeatureEntries.erase(it);
+	int n = 0;
+	for (TiXmlElement* child = itemElement->FirstChildElement(); child; child = child->NextSiblingElement())
+	{
+		std::map<std::string, std::string>& c = g_ProfileData.FeatureEntries[prefix + std::to_string(++n)];
+		c["@"] = child->Value();
+		for (const TiXmlAttribute* a = child->FirstAttribute(); a; a = a->Next())
+			c[a->Name()] = a->Value();
+	}
 }
 
 void ReadProfilePart2Data(TiXmlNode* node)

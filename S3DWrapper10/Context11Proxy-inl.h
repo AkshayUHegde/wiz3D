@@ -121,6 +121,7 @@ extern unsigned s_scaledByCamera;
 extern unsigned s_lightOnlyKept;
 extern std::map<int, std::pair<unsigned, float>> s_cleanP00Votes;
 extern float    s_sceneP00;
+extern float    s_referenceP00;
 extern float    s_sceneZRow[2];
 extern unsigned s_sceneZRowFrame;
 extern unsigned s_sceneP00Votes, s_cleanP00Total;

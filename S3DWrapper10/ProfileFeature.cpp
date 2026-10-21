@@ -213,6 +213,18 @@ const std::string& EntryValue(const ProfileEntry& entry, const char* attr)
     return it == entry.end() ? none : it->second;
 }
 
+std::vector<const ProfileEntry*> ChildEntries(const char* element)
+{
+    std::vector<const ProfileEntry*> out;
+    for (int n = 1; ; ++n)
+    {
+        const auto it = g_ProfileData.FeatureEntries.find(std::string(element) + "/" + std::to_string(n));
+        if (it == g_ProfileData.FeatureEntries.end()) break;
+        out.push_back(&it->second);
+    }
+    return out;
+}
+
 bool ProfileSwitchOn(const char* element)
 {
     const auto it = g_ProfileData.FeatureEntries.find(element);
@@ -233,6 +245,7 @@ ProfileFeatures CreateProfileFeatures()
         { "VertexCameraMatrices", &MakeVertexCameraMatrices, false },
         { "UiProjectionParallax", &MakeUiProjectionParallax, false },
         { "AdditionalMatrixName", &MakeAdditionalMatrices, false },
+        { "AdditionalMatrixLayout", &MakeAdditionalMatrixLayout, false },
         { "RightCamera",          &MakeRightCamera,        false },
         { "RayCorners",           &MakeRayCorners,         true  },
         { "DuniaLocalLights",     &MakeDuniaLocalLights,   true  },
@@ -287,7 +300,9 @@ ProfileFeatures CreateProfileFeatures()
     for (const auto& e : g_ProfileData.FeatureEntries)
     {
         bool known = false;
-        for (const auto& r : kRegistry) if (e.first == r.element) known = true;
+        // A child element ("Parent/n") belongs to its parent's feature.
+        const std::string parent = e.first.substr(0, e.first.find('/'));
+        for (const auto& r : kRegistry) if (parent == r.element) known = true;
         if (!known) problems.push_back("<" + e.first + "> is no DX11 feature; ignored");
     }
     std::call_once(s_checked, [&] { for (const std::string& p : problems) FeatureLog("  profile: %s\n", p.c_str()); });

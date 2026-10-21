@@ -664,6 +664,22 @@ void ConstantReads(const shader_analyzer::TShaderList& shList, std::vector<std::
     }
 }
 
+// The constant registers a dp4 reads whole: (slot, register).
+void Dp4ConstantReads(const shader_analyzer::TShaderList& shList, std::vector<std::pair<int, UINT>>& out)
+{
+    for (const auto& inst : shList)
+    {
+        const shader_analyzer::ShaderOperation* op = inst.getOperation();
+        if (!op || op->isDeclaration() || op->isCustomData() || op->getType() != D3D10_SB_OPCODE_DP4) continue;
+        for (unsigned i = 1; i < (unsigned)inst.getOperandsCount(); ++i)
+        {
+            int slot;
+            unsigned reg;
+            if (ConstantOperand(inst.getOperand(i), slot, reg) && reg != ~0u) AddOnce(out, slot, reg);
+        }
+    }
+}
+
 bool ParseCode(const void* pBytecode, SIZE_T byteLength, shader_analyzer::TShaderList& shList)
 {
     DWORD size = 0;
@@ -706,6 +722,12 @@ void CodeConstantReads(const void* pBytecode, SIZE_T byteLength, std::vector<std
 {
     shader_analyzer::TShaderList shList;
     if (pBytecode && ParseCode(pBytecode, byteLength, shList)) ConstantReads(shList, out);
+}
+
+void CodeDp4ConstantReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out)
+{
+    shader_analyzer::TShaderList shList;
+    if (pBytecode && ParseCode(pBytecode, byteLength, shList)) Dp4ConstantReads(shList, out);
 }
 
 bool AnalyzeShader11(const void* pBytecode, SIZE_T byteLength,

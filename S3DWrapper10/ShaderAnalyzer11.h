@@ -113,5 +113,7 @@ void CodeMatrixReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::
 void CodeScreenMatrices(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out);
 // Every constant register the code reads: (cb slot, register), ~0u where it indexes the slot at run time.
 void CodeConstantReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out);
+// The constant registers the code reads whole in a dp4: (cb slot, register).
+void CodeDp4ConstantReads(const void* pBytecode, SIZE_T byteLength, std::vector<std::pair<int, UINT>>& out);
 
 } // namespace wiz3d
