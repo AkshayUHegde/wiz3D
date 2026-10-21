@@ -1,7 +1,24 @@
 ﻿<?xml version="1.0" encoding="utf-8" ?>
-<!-- Don't change that file, instead modify :
-  XP:	X:\Documents and Settings\<username>\Application Data\iZ3D Driver\UserProfile.xml
-  Vista:	X\Users\<username>\AppData\Roaming\iZ3D Driver\UserProfile.xml
+<!--
+  wiz3D BaseProfile.xml -- per-game stereo profile library.
+
+  Licensed under the GNU Lesser General Public License v2.1 (LGPL-2.1-or-later),
+  the same licence as wiz3D itself. See COPYING in the project root for the full
+  text.
+
+  WHAT THIS MEANS FOR YOU:
+   - You can freely edit this file for your own local use -- adding a game
+     profile, adjusting StereoBase, writing a ShaderOverride for a game you play.
+   - If you share your profile with others (Discord, forums, pull requests, etc.),
+     your contribution is LGPL-2.1 licensed too, and must stay that way.
+   - If you figure out a working profile for a new game, please consider sending
+     it back so every wiz3D user benefits. Open a pull request or an issue at:
+         https://github.com/effcol/wiz3D
+     Even a rough profile is useful -- someone else can polish it from there.
+
+  Profiles are matched by exe name (case-insensitive). See docs/SHADER_FIXES.md
+  for the ShaderPatch / ShaderOverride schema and the ShaderHunter workflow for
+  finding CRCs. Hit Ctrl+F5 in-game to reload this file without restarting.
 -->
 <Profiles Version="1" xmlns="http://schemas.iz3d.com/baseprofile/2007">
 	<Profile Name="Disable driver">
