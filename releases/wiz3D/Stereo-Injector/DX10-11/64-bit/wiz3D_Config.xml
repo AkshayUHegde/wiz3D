@@ -32,14 +32,39 @@
 		<!-- ifdef ${outputMethodDll} -->
 		<!-- <OutputMethodDll Value="${outputMethodDll}"/> -->
 		<!-- else -->
-		<!-- Default = SR weave. The SimulatedRealityWeaveOutput plugin auto-falls
-		     back to Half SBS when the Simulated Reality runtime / SR Service / SR display
-		     isn't available — so users without an SR setup get a usable stereo
-		     image without having to change this. To force pure SBS (or any other
-		     output) regardless of SR availability, set this to "SideBySideOutput"
-		     (or AnaglyphOutput / S3DOutput / etc.). -->
-		<OutputMethodDll Value="SimulatedRealityWeaveOutput"/>
+		<!-- OutputMethodDll + OutputMode both accept the same short name across every
+		     wiz3D wrapper (DX7/8/9/10-11, OpenGL, NvDirectMode). The wrapper routes
+		     to the right output path internally — DX7-9 loads the matching plugin
+		     DLL, DX10-11 picks an inline composite shader by mode id. Case-insensitive.
+
+		     Short name   | Mode id | Description                           | DX7-9 plugin available?
+		     -------------+---------+---------------------------------------+------------------------
+		     HalfSBS, SBS |    1    | Half Side-by-Side (default pairing)   | yes
+		     FullSBS      |    2    | Full SBS (game renders half-width)    | DX10-11 only
+		     HalfTAB, TAB |    3    | Half Top-and-Bottom                   | DX10-11 only
+		     FullTAB      |    4    | Full TAB (game renders half-height)   | DX10-11 only
+		     Anaglyph     |    5    | Red/Cyan (Dubois)                     | yes
+		     RowIL        |    6    | Row interleaved (passive 3D TVs)      | yes
+		     ColIL        |    7    | Column interleaved                    | DX10-11 only
+		     Checker      |    8    | Checkerboard (DLP-Link projectors)    | DX10-11 only
+		     SRWeave      |    9    | Simulated Reality Weave (Leia/Odyssey 3D) | yes
+		     Mirror       |   10    | StereoMirror (second-display mirror)  | yes
+		     iZ3D         |    0    | iZ3D dual-panel (legacy hardware)     | yes
+
+		     The default below is "SRWeave", which auto-falls back to HalfSBS when a
+		     Simulated Reality runtime / Service / display isn't available — so users
+		     without SR hardware still get a usable stereo image out of the box.
+
+		     Legacy forms also recognised: HalfSideBySide, FullSideBySide, HalfTopAndBottom,
+		     FullTopAndBottom, RowInterleaved, ColumnInterleaved, Checkerboard,
+		     SimulatedRealityWeave, StereoMirror, iZ3DDualPanel, plus the old iZ3D
+		     plugin DLL names (SideBySideOutput, AnaglyphOutput, S3DOutput, etc.). -->
+		<OutputMethodDll Value="SRWeave"/>
 		<!-- endif -->
+		<!-- OutputMode is a legacy numeric mirror of the field above. When OutputMethodDll
+		     is set to a recognised name, the wrapper backfills OutputMode from the table
+		     above, so you can leave this at 0. Only set a number here if you want to
+		     override everything else (e.g. force OutputMode="1" to lock HalfSBS). -->
 		<OutputMode Value="0"/>
 		<OutputSpanMode Value="0"/>
 		<!-- DisplayScalingMode Values: -->
@@ -88,12 +113,15 @@
 		       F3            capture current CRC's bytecode + CB layout to
 		                     wiz3D_Logs\<Game>\Shaders\Hunter\<CRC>_<ts>.txt
 		     The report includes a suggested ShaderPatch skeleton you can
-		     drop into BaseProfile.xml. Zero cost when hunt mode is off. -->
+		     drop into BaseProfile.xml. Zero cost when hunt mode is off.
+		     DX10/11 only in 0.4.1; DX9 to follow. See
+		     docs/SHADER_HUNTER_DESIGN.md and docs/SHADER_FIXES.md. -->
 
 		<!-- Dump every shader the game creates to a single concatenated file
 		     per stage, with D3DDisassemble output + iZ3D shader tree + CRC32.
-		     DumpVS covers VS/HS/DS/GS, DumpPS covers PS/CS. Dumps land in
-		     Shaders\Dump\DX10\{VS,PS,GS,HS,DS,CS}.txt.
+		     DumpVS covers VS/HS/DS/GS, DumpPS covers PS/CS. On DX10/11 the
+		     dumps land in Shaders\Dump\DX10\{VS,PS,GS,HS,DS,CS}.txt; on DX9
+		     they split into {vs,ps}.{client,converted,modified}.txt.
 		     These dumps are HUGE on complex games — only enable them when you
 		     need to read specific shader bytecode (e.g. authoring a
 		     ShaderOverride entry for a hunted CRC). For profile authoring
@@ -106,7 +134,7 @@
 		     Set VerboseFrameTrace to 60 and FrameTraceStartFrame to 0 for the
 		     first second after game launch; raise FrameTraceStartFrame to skip
 		     past loading screens. Expensive — only enable for a specific
-		     repro case. -->
+		     repro case. DX10/11 only. -->
 		<VerboseFrameTrace Value="0"/>
 		<FrameTraceStartFrame Value="0"/>
 		<!-- 0 == JPS -->

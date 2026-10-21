@@ -55,17 +55,34 @@ struct OutputModeEntry
     const char* legacyDll;        // iZ3D-era OutputMethodDll value for back-compat
 };
 
-// Canonical names come first; legacy DLL names are the exact filenames the
-// DX9 plugin loader looks up at runtime. If a mode's legacy slot is a new
-// name (never had a DX9 plugin DLL), that string is reserved for future
-// use. Case-insensitive matching, so configs can mix capitalisations.
+// 0.4.1 rename: short canonical names first (what OutputModeToCanonical
+// returns, what the config comments show), legacy long-form names kept as
+// alias rows below so pre-0.4.1 configs still parse. Legacy DLL column is
+// the exact filename DX9's plugin loader looks up; unchanged. Case-
+// insensitive matching across the whole table.
 static const OutputModeEntry kOutputModeTable[] =
 {
+    // --- Canonical short names (0.4.1+). These are what the config comments show. ---
+    { OUTMODE_HALF_SIDE_BY_SIDE,    "HalfSBS",                "SideBySideOutput"            },
+    { OUTMODE_FULL_SIDE_BY_SIDE,    "FullSBS",                "FullSideBySideOutput"        },
+    { OUTMODE_HALF_TOP_AND_BOTTOM,  "HalfTAB",                "TopAndBottomOutput"          },
+    { OUTMODE_FULL_TOP_AND_BOTTOM,  "FullTAB",                "FullTopAndBottomOutput"      },
+    { OUTMODE_ANAGLYPH,             "Anaglyph",               "AnaglyphOutput"              },
+    { OUTMODE_ROW_INTERLEAVED,      "RowIL",                  "InterlacedOutput"            },
+    { OUTMODE_COLUMN_INTERLEAVED,   "ColIL",                  "ColumnInterleavedOutput"     },
+    { OUTMODE_CHECKERBOARD,         "Checker",                "CheckerboardOutput"          },
+    { OUTMODE_SR_WEAVE,             "SRWeave",                "SimulatedRealityWeaveOutput" },
+    { OUTMODE_STEREO_MIRROR,        "Mirror",                 "StereoMirrorOutput"          },
+    { OUTMODE_IZ3D_DUAL,            "iZ3D",                   "S3DOutput"                   },
+    // --- Ultra-short bare-mode aliases (user convenience). "SBS" means
+    //     HalfSBS, "TAB" means HalfTAB -- picking the common half variants.
+    { OUTMODE_HALF_SIDE_BY_SIDE,    "SBS",                    "SideBySideOutput"            },
+    { OUTMODE_HALF_TOP_AND_BOTTOM,  "TAB",                    "TopAndBottomOutput"          },
+    // --- Legacy long-form aliases (pre-0.4.1 names kept recognised). ---
     { OUTMODE_HALF_SIDE_BY_SIDE,    "HalfSideBySide",         "SideBySideOutput"            },
     { OUTMODE_FULL_SIDE_BY_SIDE,    "FullSideBySide",         "FullSideBySideOutput"        },
     { OUTMODE_HALF_TOP_AND_BOTTOM,  "HalfTopAndBottom",       "TopAndBottomOutput"          },
     { OUTMODE_FULL_TOP_AND_BOTTOM,  "FullTopAndBottom",       "FullTopAndBottomOutput"      },
-    { OUTMODE_ANAGLYPH,             "Anaglyph",               "AnaglyphOutput"              },
     { OUTMODE_ROW_INTERLEAVED,      "RowInterleaved",         "InterlacedOutput"            },
     { OUTMODE_COLUMN_INTERLEAVED,   "ColumnInterleaved",      "ColumnInterleavedOutput"     },
     { OUTMODE_CHECKERBOARD,         "Checkerboard",           "CheckerboardOutput"          },
