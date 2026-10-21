@@ -421,8 +421,18 @@ void OSDRenderer9::BuildHunterText(wchar_t* line1, size_t cap1,
                      (s.hiddenStage == wiz3d::dx9::HuntStage::VS ? "VS" : "PS"),
                      s.hiddenCRC, s.drawsForHidden, s.cycleIdx, s.cycleSize);
     }
-    _snwprintf_s(line2, cap2, _TRUNCATE,
-                 L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
+    if (s.flashDeadline != 0)
+    {
+        _snwprintf_s(line2, cap2, _TRUNCATE,
+                     L"Saved %hs:0x%08X  ->  wiz3D_Logs\\<Game>\\Shaders\\Hunter\\",
+                     (s.flashStage == wiz3d::dx9::HuntStage::VS ? "VS" : "PS"),
+                     s.flashCRC);
+    }
+    else
+    {
+        _snwprintf_s(line2, cap2, _TRUNCATE,
+                     L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
+    }
 }
 
 void OSDRenderer9::BuildStatusText(wchar_t* out, size_t cap) const
@@ -540,10 +550,10 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
             L"Shift + F1",           L"Toggle this hotkey list",
             L"Ctrl + F1",            L"Toggle OSD strip + FPS",
             L"Shift + Numpad *",     L"Open the wizard overlay",
-            // 0.4.1 ShaderHunter + runtime reload hotkeys.
+            // ShaderHunter cycle/capture/exit keys live on the hunter OSD
+            // line 2 while hunt mode is active; only the entry hotkey needs
+            // to appear in the global menu (user 2026-10-21 feedback).
             L"Ctrl + F2",            L"ShaderHunter: enter / exit hunt mode",
-            L"F2  /  Shift + F2",    L"ShaderHunter: cycle hidden shader",
-            L"F3",                   L"ShaderHunter: capture current CRC",
             L"Ctrl + F5",            L"Reload BaseProfile.xml (live)",
         };
         int row = 72;

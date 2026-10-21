@@ -73,6 +73,13 @@ std::vector<CrcStageKey>                    s_cycle;        // stable order buil
 size_t                                      s_cycleIdx = 0;
 CrcStageKey                                 s_hidden = 0;   // 0 => nothing hidden
 
+// 0.4.1 save-flash: OnCapture stamps these on success so the OSD can show a
+// 2 s "saved <CRC>" confirmation under the normal legend. The deadline is
+// GetTickCount64() + flashMs; OSDRenderer polls State.flashDeadline every
+// frame and renders the flash while now < deadline.
+uint64_t                                    s_flashDeadline = 0;
+CrcStageKey                                 s_flashKey      = 0;
+
 bool PathIsOn() { return g_active.load(std::memory_order_relaxed); }
 
 // Build wiz3D_Logs/<Game>/Shaders/Hunter/<CRC>_<ts>.txt. Returns false if the
@@ -257,10 +264,21 @@ void ShaderHunter::OnCapture()
     uint32_t     drawsSeen;
     {
         std::lock_guard<std::mutex> g(s_lock);
+        // 0.4.1 ergonomics: if the user enters hunt mode and presses F3
+        // before cycling (F2 / Shift+F2) to pick a shader, auto-select the
+        // first shader in the current cycle so the capture still fires.
+        // Previously this was a silent no-op that left Shaders/Hunter/ empty
+        // and gave the user no feedback — hard to tell from "nothing happened"
+        // whether the hotkey, the file I/O, or the hunter itself was broken.
+        if (!s_hidden && !s_cycle.empty())
+        {
+            s_cycleIdx = 0;
+            s_hidden   = s_cycle[0];
+        }
         hidden = s_hidden;
         if (!hidden)
         {
-            DDILog("[hunt] capture: nothing hidden\n");
+            DDILog("[hunt] capture: nothing hidden and no draws seen yet\n");
             return;
         }
         auto it = s_known.find(hidden);
@@ -394,6 +412,16 @@ void ShaderHunter::OnCapture()
     fclose(fp);
     DDILog("[hunt] captured CRC=0x%08X stage=%s to %ls\n",
            crc, (stage == HuntStage::VS ? "VS" : "PS"), path);
+
+    // Light up the OSD save-flash. 2 s matches the status popup's fade time
+    // (NoteSettingChanged) so the two feel consistent. Updating the flash
+    // overwrites any still-running pulse — the user cares about the newest
+    // capture, not the one from 1.9 seconds ago.
+    {
+        std::lock_guard<std::mutex> g(s_lock);
+        s_flashDeadline = (uint64_t)GetTickCount64() + 2000;
+        s_flashKey      = hidden;
+    }
 }
 
 ShaderHunter::State ShaderHunter::GetState()
@@ -411,6 +439,14 @@ ShaderHunter::State ShaderHunter::GetState()
         out.cycleIdx       = s_cycleIdx + 1;   // 1-based for the OSD
     }
     out.cycleSize = s_cycle.size();
+    // Save-flash: non-zero only while GetTickCount64() hasn't crossed the
+    // deadline. The OSD renderer treats deadline==0 as "no flash".
+    if (s_flashDeadline && (uint64_t)GetTickCount64() < s_flashDeadline)
+    {
+        out.flashDeadline = s_flashDeadline;
+        out.flashCRC      = (uint32_t)(s_flashKey >> 1);
+        out.flashStage    = (HuntStage)(s_flashKey & 1);
+    }
     return out;
 }
 

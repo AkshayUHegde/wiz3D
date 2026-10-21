@@ -70,6 +70,10 @@ struct HunterState
     uint32_t drawsForHidden;
     size_t   cycleIdx;
     size_t   cycleSize;
+    // 0.4.1 save-flash: non-zero while OSD should show "saved CRC …" pulse.
+    uint64_t  flashDeadline;
+    uint32_t  flashCRC;
+    HuntStage flashStage;
 };
 HunterState HunterGetState();
 

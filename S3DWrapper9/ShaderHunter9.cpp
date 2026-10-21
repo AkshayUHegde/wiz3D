@@ -51,6 +51,10 @@ std::vector<CrcStageKey>                    s_cycle;
 size_t                                      s_cycleIdx = 0;
 CrcStageKey                                 s_hidden   = 0;
 
+// 0.4.1 save-flash. See S3DWrapper10/ShaderHunter.cpp for the design.
+uint64_t                                    s_flashDeadline = 0;
+CrcStageKey                                 s_flashKey      = 0;
+
 bool PathIsOn() { return g_active.load(std::memory_order_relaxed); }
 
 // Diagnostic log appender — writes to the game folder's wiz3D_proxy.log
@@ -216,8 +220,15 @@ void HunterOnCapture()
     uint32_t    drawsSeen;
     {
         std::lock_guard<std::mutex> g(s_lock);
+        // 0.4.1: if the user presses F3 before cycling, auto-pick the first
+        // shader in the current cycle so the capture still fires. Matches DX11.
+        if (!s_hidden && !s_cycle.empty())
+        {
+            s_cycleIdx = 0;
+            s_hidden   = s_cycle[0];
+        }
         hidden = s_hidden;
-        if (!hidden) { HLog("[hunt-dx9] capture: nothing hidden\n"); return; }
+        if (!hidden) { HLog("[hunt-dx9] capture: nothing hidden and no draws seen yet\n"); return; }
         auto it = s_known.find(hidden);
         if (it == s_known.end())
         {
@@ -295,6 +306,13 @@ void HunterOnCapture()
     fclose(fp);
     HLog("[hunt-dx9] captured CRC=0x%08X stage=%s to %ls\n",
          crc, (stage == HuntStage::VS ? "VS" : "PS"), path);
+
+    // Save-flash — mirror of DX11. 2 s matches the OSD status popup.
+    {
+        std::lock_guard<std::mutex> g(s_lock);
+        s_flashDeadline = (uint64_t)GetTickCount64() + 2000;
+        s_flashKey      = hidden;
+    }
 }
 
 HunterState HunterGetState()
@@ -312,6 +330,12 @@ HunterState HunterGetState()
         out.cycleIdx = s_cycleIdx + 1;
     }
     out.cycleSize = s_cycle.size();
+    if (s_flashDeadline && (uint64_t)GetTickCount64() < s_flashDeadline)
+    {
+        out.flashDeadline = s_flashDeadline;
+        out.flashCRC      = (uint32_t)(s_flashKey >> 1);
+        out.flashStage    = (HuntStage)(s_flashKey & 1);
+    }
     return out;
 }
 

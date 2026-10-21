@@ -642,6 +642,8 @@ bool OSDRenderer::WantHunter() const
 // Two-line hunter status, rendered bottom-centre when hunt mode is on.
 //   line 1: HUNT  VS:0xABC12345  draws:847  cycle 23/142
 //   line 2: F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit
+//      — OR, for 2 s after an F3 capture, the save-flash message:
+//            Saved VS:0xABC12345  ->  wiz3D_Logs\<Game>\Shaders\Hunter\
 // Pulled from the ShaderHunter's atomic snapshot — no locks held while
 // GDI renders, so a cycle change mid-frame is fine.
 void OSDRenderer::BuildHunterText(wchar_t* line1, size_t cap1,
@@ -667,8 +669,18 @@ void OSDRenderer::BuildHunterText(wchar_t* line1, size_t cap1,
                      (s.hiddenStage == HuntStage::VS ? "VS" : "PS"),
                      s.hiddenCRC, s.drawsForHidden, s.cycleIdx, s.cycleSize);
     }
-    _snwprintf_s(line2, cap2, _TRUNCATE,
-                 L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
+    if (s.flashDeadline != 0)
+    {
+        _snwprintf_s(line2, cap2, _TRUNCATE,
+                     L"Saved %hs:0x%08X  ->  wiz3D_Logs\\<Game>\\Shaders\\Hunter\\",
+                     (s.flashStage == HuntStage::VS ? "VS" : "PS"),
+                     s.flashCRC);
+    }
+    else
+    {
+        _snwprintf_s(line2, cap2, _TRUNCATE,
+                     L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
+    }
 }
 
 // Draw a textured quad. (x, y) and (w, h) are in pixels in the real BB
@@ -772,6 +784,14 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
         s.DrawTextLine(L"wiz3D Hotkeys", title, m_fontHelp.font, RGB(255, 255, 255),
                    DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
         // Body: two columns. Keep it tight so it fits in the 720x520 slot.
+        // Only the ENTRY hotkey for ShaderHunter is listed here — the cycle/
+        // capture/exit keys are already shown on the hunter OSD line 2 while
+        // hunt mode is on, and only act there anyway. Listing them in the
+        // global help was crowding three ShaderHunter: rows into the menu
+        // (user 2026-10-21: "shader names were layered on top of each other
+        // making them hard to read" / "you don't need to show the shaderlog
+        // shortcut keys, only the one to enter the mode, as those buttons
+        // only work when you're inside the mode").
         static const wchar_t* lines[] = {
             L"Numpad *",             L"Toggle stereo on / off",
             L"Numpad +  /  -",       L"Separation (depth strength)",
@@ -784,12 +804,7 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
             L"Shift + F1",           L"Toggle this hotkey list",
             L"Ctrl + F1",            L"Toggle OSD strip + FPS",
             L"Shift + Numpad *",     L"Open the wizard overlay",
-            // 0.4.1 ShaderHunter + runtime profile reload. The hunter
-            // hotkeys only cycle shaders while hunt mode is on; Ctrl+F5
-            // re-parses BaseProfile.xml at the next frame boundary.
             L"Ctrl + F2",            L"ShaderHunter: enter / exit hunt mode",
-            L"F2  /  Shift + F2",    L"ShaderHunter: cycle hidden shader",
-            L"F3",                   L"ShaderHunter: capture current CRC",
             L"Ctrl + F5",            L"Reload BaseProfile.xml (live)",
         };
         int row = 72;
