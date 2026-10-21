@@ -426,7 +426,7 @@ Write-Host ("  {0,-30}  spread to {1} dirs" -f 'wiz3D_Config.xml', $wiz3dConfigT
 # the release root gets LICENSE renamed to LICENSE.txt for Windows users.
 Copy-Item -Path (Join-Path $repoRoot 'LICENSE')                  -Destination (Join-Path $relRoot 'LICENSE.txt') -Force
 Copy-Item -Path (Join-Path $repoRoot 'THIRD_PARTY_NOTICES.txt')  -Destination $relRoot -Force
-Copy-Item -Path (Join-Path $repoRoot 'README.txt')               -Destination $relRoot -Force
+Copy-Item -Path (Join-Path $repoRoot 'S3DDriverSetup\Content\release-readme.txt') -Destination (Join-Path $relRoot 'README.txt') -Force
 Write-Host ("  {0,-30}  copied to release root" -f 'LICENSE.txt, NOTICES, README')
 
 # --- nvapi[64].dll across DX subfolders that need it ---

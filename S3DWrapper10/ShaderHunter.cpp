@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <ctime>
 #include <shlwapi.h>
+#include <tchar.h>
 #include <d3dcompiler.h>
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -73,12 +74,15 @@ std::vector<CrcStageKey>                    s_cycle;        // stable order buil
 size_t                                      s_cycleIdx = 0;
 CrcStageKey                                 s_hidden = 0;   // 0 => nothing hidden
 
-// 0.4.1 save-flash: OnCapture stamps these on success so the OSD can show a
-// 2 s "saved <CRC>" confirmation under the normal legend. The deadline is
+// 0.4.1 save-toast: OnCapture stamps these on success so the OSD can show
+// a 2 s "Shader saved: <leaf>" toast in the bottom-right. The deadline is
 // GetTickCount64() + flashMs; OSDRenderer polls State.flashDeadline every
-// frame and renders the flash while now < deadline.
+// frame and renders the toast while now < deadline. s_flashLeaf is the
+// written file's basename (no path), ASCII-only — the Hunter path builder
+// writes ASCII filenames (CRC + stage + timestamp) so no wide conversion
+// is needed on the OSD side.
 uint64_t                                    s_flashDeadline = 0;
-CrcStageKey                                 s_flashKey      = 0;
+char                                        s_flashLeaf[128] = {};
 
 bool PathIsOn() { return g_active.load(std::memory_order_relaxed); }
 
@@ -413,22 +417,42 @@ void ShaderHunter::OnCapture()
     DDILog("[hunt] captured CRC=0x%08X stage=%s to %ls\n",
            crc, (stage == HuntStage::VS ? "VS" : "PS"), path);
 
-    // Light up the OSD save-flash. 2 s matches the status popup's fade time
+    // Light up the OSD save-toast. 2 s matches the status popup's fade time
     // (NoteSettingChanged) so the two feel consistent. Updating the flash
     // overwrites any still-running pulse — the user cares about the newest
     // capture, not the one from 1.9 seconds ago.
+    //
+    // Extract just the leaf (basename) for the toast. Hunter files are
+    // written with ASCII names "0x<CRC>_<stage>_YYYYMMDD_HHMMSS.txt", so a
+    // best-effort TCHAR -> char conversion of the leaf is lossless.
     {
+        const TCHAR* leaf = _tcsrchr(path, _T('\\'));
+        leaf = leaf ? leaf + 1 : path;
+        char leafA[128] = {};
+#ifdef _UNICODE
+        WideCharToMultiByte(CP_ACP, 0, leaf, -1, leafA, (int)sizeof(leafA) - 1, nullptr, nullptr);
+#else
+        strncpy_s(leafA, leaf, _TRUNCATE);
+#endif
         std::lock_guard<std::mutex> g(s_lock);
         s_flashDeadline = (uint64_t)GetTickCount64() + 2000;
-        s_flashKey      = hidden;
+        strncpy_s(s_flashLeaf, leafA, _TRUNCATE);
     }
 }
 
 ShaderHunter::State ShaderHunter::GetState()
 {
     State out = {};
-    if (!PathIsOn()) return out;
+    // Lock up-front: the save-toast fields need to be readable even when
+    // hunt mode is off, so the toast keeps rendering if the user exits
+    // hunt mode in the 2 s window after pressing F3.
     std::lock_guard<std::mutex> g(s_lock);
+    if (s_flashDeadline && (uint64_t)GetTickCount64() < s_flashDeadline)
+    {
+        out.flashDeadline = s_flashDeadline;
+        strncpy_s(out.flashLeaf, s_flashLeaf, _TRUNCATE);
+    }
+    if (!PathIsOn()) return out;
     out.active     = true;
     if (s_hidden)
     {
@@ -439,14 +463,6 @@ ShaderHunter::State ShaderHunter::GetState()
         out.cycleIdx       = s_cycleIdx + 1;   // 1-based for the OSD
     }
     out.cycleSize = s_cycle.size();
-    // Save-flash: non-zero only while GetTickCount64() hasn't crossed the
-    // deadline. The OSD renderer treats deadline==0 as "no flash".
-    if (s_flashDeadline && (uint64_t)GetTickCount64() < s_flashDeadline)
-    {
-        out.flashDeadline = s_flashDeadline;
-        out.flashCRC      = (uint32_t)(s_flashKey >> 1);
-        out.flashStage    = (HuntStage)(s_flashKey & 1);
-    }
     return out;
 }
 

@@ -172,19 +172,29 @@ static void LoadConfig(HMODULE hProxy)
     g_verboseEnabled  = ReadConfigInt(buf, "VerboseLogging",  g_verboseEnabled);
     g_swapEyes        = ReadConfigInt(buf, "SwapEyes",        g_swapEyes);
     g_wrapDevices     = ReadConfigInt(buf, "WrapDevices",     g_wrapDevices);
-    g_outputMode      = ReadConfigInt(buf, "OutputMode",      g_outputMode);
     g_anaglyphColour  = ReadConfigInt(buf, "AnaglyphColour",  g_anaglyphColour);
     g_anaglyphMethod  = ReadConfigInt(buf, "AnaglyphMethod",  g_anaglyphMethod);
     g_blockEOSOverlay = ReadConfigInt(buf, "BlockEOSOverlay", g_blockEOSOverlay);
 
-    // OutputMethodDll string overrides the numeric OutputMode when it
-    // matches a canonical shortname or legacy iZ3D-era DLL name. Unknown
-    // strings (user-added plugins, legacy hardware we don't inline) leave
-    // g_outputMode as set above, so the DX9 plugin pipeline keeps working.
+    // OutputMode resolution — unified wiz3D 0.4.1 format. The user writes
+    // the SAME value here as in every other wrapper's config (Stereo
+    // Injector, HD3D, OpenGL QB). Resolution order:
+    //   1. <OutputMode Value="..."/> as a shortname via the shared resolver
+    //      (Shared/OutputModeNames.h): "SRWeave", "HalfSBS", "HalfTAB",
+    //      "RowIL", etc. — also accepts legacy iZ3D plugin DLL names.
+    //   2. <OutputMethodDll Value="..."/> as a shortname (legacy slot).
+    //   3. <OutputMode Value="N"/> as a numeric id (0..10) — backward-compat.
     char outputMethod[64] = {};
-    ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+    ReadConfigString(buf, "OutputMode", outputMethod, sizeof(outputMethod));
     int resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    if (resolved == wiz3d::OUTMODE_UNKNOWN)
+    {
+        outputMethod[0] = '\0';
+        ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+        resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    }
     if (resolved != wiz3d::OUTMODE_UNKNOWN) g_outputMode = resolved;
+    else g_outputMode = ReadConfigInt(buf, "OutputMode", g_outputMode);
 
     free(buf);
 }

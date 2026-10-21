@@ -143,7 +143,6 @@ static void LoadConfig(HMODULE hProxy)
     g_swapEyes       = ReadConfigInt(buf, "SwapEyes",       g_swapEyes);
     g_wrapDevices     = ReadConfigInt(buf, "WrapDevices",         g_wrapDevices);
     g_useLayoutStable = ReadConfigInt(buf, "UseLayoutStableProxy", g_useLayoutStable);
-    g_outputMode      = ReadConfigInt(buf, "OutputMode",      g_outputMode);
     g_anaglyphColour  = ReadConfigInt(buf, "AnaglyphColour",  g_anaglyphColour);
     g_anaglyphMethod  = ReadConfigInt(buf, "AnaglyphMethod",  g_anaglyphMethod);
     g_disableComposite = ReadConfigInt(buf, "DisableComposite", g_disableComposite);
@@ -151,10 +150,19 @@ static void LoadConfig(HMODULE hProxy)
     g_traceD9Methods   = ReadConfigInt(buf, "TraceD9Methods",   g_traceD9Methods);
     g_traceLoadedModules = ReadConfigInt(buf, "TraceLoadedModules", g_traceLoadedModules);
 
+    // OutputMode: unified wiz3D 0.4.1 format. See the d3d11 proxy's dllmain
+    // for the full comment.
     char outputMethod[64] = {};
-    ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+    ReadConfigString(buf, "OutputMode", outputMethod, sizeof(outputMethod));
     int resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    if (resolved == wiz3d::OUTMODE_UNKNOWN)
+    {
+        outputMethod[0] = '\0';
+        ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+        resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    }
     if (resolved != wiz3d::OUTMODE_UNKNOWN) g_outputMode = resolved;
+    else g_outputMode = ReadConfigInt(buf, "OutputMode", g_outputMode);
 
     free(buf);
 }

@@ -210,22 +210,39 @@ static void LoadConfig()
     buf[bytesRead] = '\0';
     CloseHandle(hFile);
 
-    // Load OutputMode. First try the OutputMethodDll string -- the shared
-    // resolver (Shared/OutputModeNames.h) accepts both canonical shortnames
-    // ("Anaglyph", "HalfSideBySide", ...) and legacy iZ3D plugin DLL names
-    // ("AnaglyphOutput", "SideBySideOutput", ...), and we care about the
-    // canonical shortnames so a user can set the same name here as in a
-    // wiz3D DX11 / OGL / DX9 config. Fall back to the numeric OutputMode
-    // for backward-compat.
+    // Load OutputMode. The unified wiz3D config format (0.4.1+) accepts a
+    // shortname OR a numeric id in <OutputMode Value="..."/> so the user
+    // writes the same thing in every wrapper's config (Stereo Injector, HD3D,
+    // 3D Vision Direct, OpenGL QB). Resolution order:
+    //   1. <OutputMode> as a shortname via the shared resolver
+    //      (Shared/OutputModeNames.h): "SRWeave", "HalfSBS", "HalfTAB",
+    //      "RowIL", etc., including legacy iZ3D plugin DLL names
+    //      ("SideBySideOutput", "AnaglyphOutput", ...).
+    //   2. <OutputMethodDll> as a shortname via the same resolver — legacy
+    //      slot kept for configs written before 0.4.1.
+    //   3. <OutputMode> as a numeric id (0..10) — direct backward-compat.
     {
         char nameStr[64] = {};
-        ReadConfigString(buf, "OutputMethodDll", nameStr, sizeof(nameStr));
-        int resolved = wiz3d::ResolveOutputModeName(nameStr);
-        if (resolved != wiz3d::OUTMODE_UNKNOWN)
+        bool resolved = false;
+        ReadConfigString(buf, "OutputMode", nameStr, sizeof(nameStr));
+        int r = wiz3d::ResolveOutputModeName(nameStr);
+        if (r != wiz3d::OUTMODE_UNKNOWN)
         {
-            g_OutputMode = static_cast<OutputMode>(resolved);
+            g_OutputMode = static_cast<OutputMode>(r);
+            resolved = true;
         }
-        else
+        if (!resolved)
+        {
+            nameStr[0] = '\0';
+            ReadConfigString(buf, "OutputMethodDll", nameStr, sizeof(nameStr));
+            r = wiz3d::ResolveOutputModeName(nameStr);
+            if (r != wiz3d::OUTMODE_UNKNOWN)
+            {
+                g_OutputMode = static_cast<OutputMode>(r);
+                resolved = true;
+            }
+        }
+        if (!resolved)
         {
             int mode = ReadConfigInt(buf, "OutputMode", g_OutputMode);
             if (mode >= OM_IZ3D_DUAL && mode <= OM_STEREO_MIRROR)

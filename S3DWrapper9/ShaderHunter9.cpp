@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <ctime>
 #include <shlwapi.h>
+#include <tchar.h>
 
 #include "../S3DAPI/GlobalData.h"
 #include "../S3DAPI/ReadData.h"
@@ -51,9 +52,9 @@ std::vector<CrcStageKey>                    s_cycle;
 size_t                                      s_cycleIdx = 0;
 CrcStageKey                                 s_hidden   = 0;
 
-// 0.4.1 save-flash. See S3DWrapper10/ShaderHunter.cpp for the design.
-uint64_t                                    s_flashDeadline = 0;
-CrcStageKey                                 s_flashKey      = 0;
+// 0.4.1 save-toast. See S3DWrapper10/ShaderHunter.cpp for the design.
+uint64_t                                    s_flashDeadline  = 0;
+char                                        s_flashLeaf[128] = {};
 
 bool PathIsOn() { return g_active.load(std::memory_order_relaxed); }
 
@@ -307,19 +308,34 @@ void HunterOnCapture()
     HLog("[hunt-dx9] captured CRC=0x%08X stage=%s to %ls\n",
          crc, (stage == HuntStage::VS ? "VS" : "PS"), path);
 
-    // Save-flash — mirror of DX11. 2 s matches the OSD status popup.
+    // Save-toast — mirror of DX11. 2 s matches the OSD status popup.
     {
+        const TCHAR* leaf = _tcsrchr(path, _T('\\'));
+        leaf = leaf ? leaf + 1 : path;
+        char leafA[128] = {};
+#ifdef _UNICODE
+        WideCharToMultiByte(CP_ACP, 0, leaf, -1, leafA, (int)sizeof(leafA) - 1, nullptr, nullptr);
+#else
+        strncpy_s(leafA, leaf, _TRUNCATE);
+#endif
         std::lock_guard<std::mutex> g(s_lock);
         s_flashDeadline = (uint64_t)GetTickCount64() + 2000;
-        s_flashKey      = hidden;
+        strncpy_s(s_flashLeaf, leafA, _TRUNCATE);
     }
 }
 
 HunterState HunterGetState()
 {
     HunterState out = {};
-    if (!PathIsOn()) return out;
+    // Lock up-front so the save-toast fields are readable even if hunt
+    // mode is off (mirrors DX11 behaviour — toast survives exiting hunt).
     std::lock_guard<std::mutex> g(s_lock);
+    if (s_flashDeadline && (uint64_t)GetTickCount64() < s_flashDeadline)
+    {
+        out.flashDeadline = s_flashDeadline;
+        strncpy_s(out.flashLeaf, s_flashLeaf, _TRUNCATE);
+    }
+    if (!PathIsOn()) return out;
     out.active = true;
     if (s_hidden)
     {
@@ -330,12 +346,6 @@ HunterState HunterGetState()
         out.cycleIdx = s_cycleIdx + 1;
     }
     out.cycleSize = s_cycle.size();
-    if (s_flashDeadline && (uint64_t)GetTickCount64() < s_flashDeadline)
-    {
-        out.flashDeadline = s_flashDeadline;
-        out.flashCRC      = (uint32_t)(s_flashKey >> 1);
-        out.flashStage    = (HuntStage)(s_flashKey & 1);
-    }
     return out;
 }
 

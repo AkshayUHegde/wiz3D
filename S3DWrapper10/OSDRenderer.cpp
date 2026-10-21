@@ -433,6 +433,10 @@ bool OSDRenderer::Init(ID3D11Device* device)
     // "HUNT  VS:0x12345678  draws:999999  cycle 999/9999" on line 1 plus the
     // hotkey legend on line 2 at the status font size.
     if (!m_slots[(int)Slot::Hunter].Create(device, 820, 72))      { ReleaseAll(); m_initFailed = true; return false; }
+    // 0.4.1 save-toast: bottom-right. Width fits a typical filename
+    //   "0x12345678_VS_20261021_225834.txt" (34 chars) at the FPS font size
+    //   plus a small side margin.
+    if (!m_slots[(int)Slot::SaveToast].Create(device, 480, 72))   { ReleaseAll(); m_initFailed = true; return false; }
 
     m_initDone = true;
     return true;
@@ -639,11 +643,19 @@ bool OSDRenderer::WantHunter() const
     return ShaderHunter::IsActive();
 }
 
+// Save-toast lives independently of hunt mode so the toast still shows if
+// the user exits hunt mode between pressing F3 and the deadline expiring.
+bool OSDRenderer::WantSaveToast() const
+{
+    const ShaderHunter::State s = ShaderHunter::GetState();
+    return s.flashDeadline != 0 && s.flashLeaf[0] != '\0';
+}
+
 // Two-line hunter status, rendered bottom-centre when hunt mode is on.
 //   line 1: HUNT  VS:0xABC12345  draws:847  cycle 23/142
-//   line 2: F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit
-//      — OR, for 2 s after an F3 capture, the save-flash message:
-//            Saved VS:0xABC12345  ->  wiz3D_Logs\<Game>\Shaders\Hunter\
+//           — OR "HUNT  none selected  (N CRCs drawn last frame)" when no
+//              shader has been cycled onto yet.
+//   line 2: F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit (always).
 // Pulled from the ShaderHunter's atomic snapshot — no locks held while
 // GDI renders, so a cycle change mid-frame is fine.
 void OSDRenderer::BuildHunterText(wchar_t* line1, size_t cap1,
@@ -659,7 +671,7 @@ void OSDRenderer::BuildHunterText(wchar_t* line1, size_t cap1,
     if (s.hiddenCRC == 0)
     {
         _snwprintf_s(line1, cap1, _TRUNCATE,
-                     L"HUNT  no shader hidden  (%zu CRCs drawn last frame)",
+                     L"HUNT  none selected  (%zu CRCs drawn last frame)",
                      s.cycleSize);
     }
     else
@@ -669,18 +681,26 @@ void OSDRenderer::BuildHunterText(wchar_t* line1, size_t cap1,
                      (s.hiddenStage == HuntStage::VS ? "VS" : "PS"),
                      s.hiddenCRC, s.drawsForHidden, s.cycleIdx, s.cycleSize);
     }
-    if (s.flashDeadline != 0)
+    _snwprintf_s(line2, cap2, _TRUNCATE,
+                 L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
+}
+
+// 0.4.1 save-toast: bottom-right, two lines like "Shader saved" / "<leaf>".
+// Rendered as its own slot (SaveToast) so it stays visible even when hunt
+// mode is off (the user may have exited hunt mode in the 2 s window between
+// pressing F3 and the toast expiring).
+void OSDRenderer::BuildSaveToastText(wchar_t* line1, size_t cap1,
+                                     wchar_t* line2, size_t cap2) const
+{
+    const ShaderHunter::State s = ShaderHunter::GetState();
+    if (s.flashDeadline == 0 || s.flashLeaf[0] == '\0')
     {
-        _snwprintf_s(line2, cap2, _TRUNCATE,
-                     L"Saved %hs:0x%08X  ->  wiz3D_Logs\\<Game>\\Shaders\\Hunter\\",
-                     (s.flashStage == HuntStage::VS ? "VS" : "PS"),
-                     s.flashCRC);
+        line1[0] = L'\0';
+        line2[0] = L'\0';
+        return;
     }
-    else
-    {
-        _snwprintf_s(line2, cap2, _TRUNCATE,
-                     L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
-    }
+    _snwprintf_s(line1, cap1, _TRUNCATE, L"Shader saved");
+    _snwprintf_s(line2, cap2, _TRUNCATE, L"%hs", s.flashLeaf);
 }
 
 // Draw a textured quad. (x, y) and (w, h) are in pixels in the real BB
@@ -743,7 +763,8 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
     const bool wantFps    = WantFps();
     const bool wantHelp   = WantHotkeyHelp();
     const bool wantHunter = WantHunter();
-    if (!wantStatus && !wantFps && !wantHelp && !wantHunter) return;
+    const bool wantToast  = WantSaveToast();
+    if (!wantStatus && !wantFps && !wantHelp && !wantHunter && !wantToast) return;
 
     // Update DIBs where content changed.
     if (wantStatus) {
@@ -845,11 +866,37 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
         }
     }
 
+    // 0.4.1 save-toast: build + upload two-line DIB (bottom-right). Updated
+    // when either line changes. The leaf changes once per capture; line 1
+    // ("Shader saved") is constant per toast life.
+    if (wantToast) {
+        wchar_t t1[32], t2[160];
+        BuildSaveToastText(t1, _countof(t1), t2, _countof(t2));
+        if (wcscmp(t1, m_lastToast1) != 0 || wcscmp(t2, m_lastToast2) != 0) {
+            TexSlot& s = m_slots[(int)Slot::SaveToast];
+            s.Clear();
+            RECT line1Rect = { 12, 4,  s.w - 12, 36 };
+            RECT line2Rect = { 12, 38, s.w - 12, 68 };
+            s.DrawTextLine(t1, line1Rect, m_fontStatus.font, RGB(255, 255, 255),
+                       DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            s.DrawTextLine(t2, line2Rect, m_fontFps.font,    RGB(200, 220, 255),
+                       DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            wcscpy_s(m_lastToast1, t1);
+            wcscpy_s(m_lastToast2, t2);
+        }
+    } else if (m_lastToast1[0] != L'\0') {
+        // Toast just expired — clear the slot so a later re-trigger re-renders.
+        m_slots[(int)Slot::SaveToast].Clear();
+        m_lastToast1[0] = L'\0';
+        m_lastToast2[0] = L'\0';
+    }
+
     // Upload any dirty DIBs.
     if (wantStatus) m_slots[(int)Slot::Status].Upload(ctx);
     if (wantFps)    m_slots[(int)Slot::Fps].Upload(ctx);
     if (wantHelp)   m_slots[(int)Slot::HotkeyHelp].Upload(ctx);
     if (wantHunter) m_slots[(int)Slot::Hunter].Upload(ctx);
+    if (wantToast)  m_slots[(int)Slot::SaveToast].Upload(ctx);
 
     // State setup once for all draws.
     ctx->OMSetRenderTargets(1, &rtv, nullptr);
@@ -915,6 +962,18 @@ void OSDRenderer::Render(ID3D11DeviceContext* ctx,
         float dy = (float)bbH - (float)s.h - 20.f - letterboxY;
         if (dy < 0) dy = 0;
         DrawQuad(ctx, s.srv, dx, dy, dw, (float)s.h, bbW, bbH);
+    }
+    // 0.4.1 save-toast: bottom-right corner (clears the right-side comfort
+    // bar + bottom letterbox like FPS does). Sits above the hunter strip
+    // when both are visible (the hunter strip is centred, the toast is far
+    // right — no visual collision at any sensible BB width).
+    if (wantToast) {
+        TexSlot& s = m_slots[(int)Slot::SaveToast];
+        float dx = (float)bbW - 20.f - barX - (float)s.w;
+        float dy = (float)bbH - (float)s.h - 20.f - letterboxY;
+        if (dx < 0) dx = 0;
+        if (dy < 0) dy = 0;
+        DrawQuad(ctx, s.srv, dx, dy, (float)s.w, (float)s.h, bbW, bbH);
     }
 }
 

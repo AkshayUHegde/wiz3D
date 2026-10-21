@@ -47,66 +47,20 @@
              won't crash. A future dxgi.dll proxy will fix the underlying cause. -->
         <WrapDevices Value="1"/>
 
-        <!-- OutputMode: how the game's per-eye render lands in the swap chain
-             that gets presented. NvDirectMode's job is to route per-eye RTs
-             into a side-by-side or top-and-bottom doubled surface; this
-             option picks the geometry.
-
-             Unified numbering (shared across every wiz3D wrapper — DX7-11,
-             OGL, HD3D, 3D Vision Direct). See Shared/OutputModeNames.h for
-             the full table.
-
-             1 = Half Side-by-Side    — game runs at full resolution; each
-                                        eye gets half the horizontal width
-                                        (iZ3D-era default).
-             2 = Full Side-by-Side    — set the game to HALF the display's
-                                        horizontal resolution; each eye is
-                                        output at full display width.
-             3 = Half Top-and-Bottom  — game runs at full resolution; each
-                                        eye gets half the vertical height.
-             4 = Full Top-and-Bottom  — set the game to HALF the display's
-                                        vertical resolution; each eye is
-                                        output at full display height.
-             5 = Anaglyph             — colour-filtered stereo (red/cyan
-                                        etc., works through coloured
-                                        glasses on any monitor). See
-                                        AnaglyphColour and AnaglyphMethod
-                                        below to pick filter colour and
-                                        ghosting-suppression style.
-             6 = Row Interleaved      — alternating horizontal rows; passive
-                                        3D TVs and FPR LG/Vizio panels.
-                                        (Formerly "Line Interleaved".)
-             7 = Column Interleaved   — alternating vertical columns; rare,
-                                        some old polarised monitors.
-             8 = Checkerboard         — alternating pixels in a checkerboard
-                                        pattern; DLP 3D projectors.
-             9 = Simulated Reality    — Leia / Samsung Odyssey moving-
-                                        lightfield weave. Implemented for
-                                        DX11; falls back to SBS automatically
-                                        on systems without the SR runtime
-                                        installed. DX9/DX10/OpenGL weave is
-                                        wired but currently unverified.
-
-             You can ALSO (or instead) set OutputMethodDll to a canonical name
-             (HalfSideBySide, FullSideBySide, HalfTopAndBottom, FullTopAndBottom,
-             Anaglyph, RowInterleaved, ColumnInterleaved, Checkerboard,
-             SimulatedRealityWeave) or a legacy iZ3D DLL filename
-             (SideBySideOutput, InterlacedOutput, AnaglyphOutput,
-             SimulatedRealityWeaveOutput, etc.). The string takes precedence
-             over the numeric OutputMode when it resolves to a known mode;
-             unknown strings fall through and leave OutputMode as the
-             effective choice.
-
-             Default: 9 (SR weave) — auto-falls back to Half SBS when no SR
-             runtime is installed or when running a game that crashes with
-             SR loaded. On non-SR displays this still produces Half SBS
-             output, so the default is safe across hardware. -->
-        <OutputMode Value="9"/>
-
-        <!-- OutputMethodDll: optional canonical/legacy name override for
-             OutputMode. Leave empty to use the numeric OutputMode above.
-             See the OutputMode comment for the list of recognised names. -->
-        <OutputMethodDll Value=""/>
+        <!-- OutputMode: pick either the number or the short name — both parse. -->
+        <!-- 1 == "HalfSBS"    Half Side-by-Side (default modern pairing with a stereo panel) -->
+        <!-- 2 == "FullSBS"    Full Side-by-Side (game renders at half display width) -->
+        <!-- 3 == "HalfTAB"    Half Top-and-Bottom -->
+        <!-- 4 == "FullTAB"    Full Top-and-Bottom -->
+        <!-- 5 == "Anaglyph"   Red/Cyan Dubois -->
+        <!-- 6 == "RowIL"      Row interleaved (passive 3D TVs) -->
+        <!-- 7 == "ColumnIL"   Column interleaved -->
+        <!-- 8 == "Checker"    Checkerboard (DLP-Link projectors) -->
+        <!-- 9 == "SRWeave"    Simulated Reality Weave (Leia / Samsung Odyssey 3D) -->
+        <OutputMode Value="SRWeave"/>   <!-- or "1" / "9" / etc. -->
+        <!-- SR weave auto-falls back to Half SBS when no SR runtime is installed
+             or when a game crashes with SR loaded, so the default is safe
+             across hardware. See Shared/OutputModeNames.h for the full table. -->
 
         <!-- AnaglyphColour: glasses filter colour pair (only used when
              OutputMode=5).

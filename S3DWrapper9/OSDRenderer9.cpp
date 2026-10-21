@@ -303,6 +303,8 @@ bool OSDRenderer9::Init(IDirect3DDevice9* device)
     // 0.4.1 ShaderHunter DX9: two-line bottom-centre strip. Same 820x72
     // footprint as the DX11 slot so the OSD looks the same across APIs.
     if (!m_slots[(int)Slot::Hunter].Create(device, 820, 72))      { ReleaseAll(); m_initFailed = true; return false; }
+    // 0.4.1 save-toast — mirror of DX11.
+    if (!m_slots[(int)Slot::SaveToast].Create(device, 480, 72))   { ReleaseAll(); m_initFailed = true; return false; }
 
     m_initDone = true;
     return true;
@@ -401,6 +403,14 @@ bool OSDRenderer9::WantHunter() const
     return wiz3d::dx9::HunterIsActive();
 }
 
+// Save-toast survives exiting hunt mode so a user who presses F3 then
+// Ctrl+F2 still sees the confirmation. Mirrors DX11 behaviour.
+bool OSDRenderer9::WantSaveToast() const
+{
+    const wiz3d::dx9::HunterState s = wiz3d::dx9::HunterGetState();
+    return s.flashDeadline != 0 && s.flashLeaf[0] != '\0';
+}
+
 // Two-line hunter status, rendered bottom-centre while hunt mode is active.
 // Mirror of OSDRenderer::BuildHunterText on DX11.
 void OSDRenderer9::BuildHunterText(wchar_t* line1, size_t cap1,
@@ -411,7 +421,7 @@ void OSDRenderer9::BuildHunterText(wchar_t* line1, size_t cap1,
     if (s.hiddenCRC == 0)
     {
         _snwprintf_s(line1, cap1, _TRUNCATE,
-                     L"HUNT  no shader hidden  (%zu CRCs drawn last frame)",
+                     L"HUNT  none selected  (%zu CRCs drawn last frame)",
                      s.cycleSize);
     }
     else
@@ -421,18 +431,23 @@ void OSDRenderer9::BuildHunterText(wchar_t* line1, size_t cap1,
                      (s.hiddenStage == wiz3d::dx9::HuntStage::VS ? "VS" : "PS"),
                      s.hiddenCRC, s.drawsForHidden, s.cycleIdx, s.cycleSize);
     }
-    if (s.flashDeadline != 0)
+    _snwprintf_s(line2, cap2, _TRUNCATE,
+                 L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
+}
+
+// 0.4.1 save-toast — bottom-right "Shader saved" / "<leaf>". Mirror of DX11.
+void OSDRenderer9::BuildSaveToastText(wchar_t* line1, size_t cap1,
+                                      wchar_t* line2, size_t cap2) const
+{
+    const wiz3d::dx9::HunterState s = wiz3d::dx9::HunterGetState();
+    if (s.flashDeadline == 0 || s.flashLeaf[0] == '\0')
     {
-        _snwprintf_s(line2, cap2, _TRUNCATE,
-                     L"Saved %hs:0x%08X  ->  wiz3D_Logs\\<Game>\\Shaders\\Hunter\\",
-                     (s.flashStage == wiz3d::dx9::HuntStage::VS ? "VS" : "PS"),
-                     s.flashCRC);
+        line1[0] = L'\0';
+        line2[0] = L'\0';
+        return;
     }
-    else
-    {
-        _snwprintf_s(line2, cap2, _TRUNCATE,
-                     L"F2 prev   Shift+F2 next   F3 capture   Ctrl+F2 exit");
-    }
+    _snwprintf_s(line1, cap1, _TRUNCATE, L"Shader saved");
+    _snwprintf_s(line2, cap2, _TRUNCATE, L"%hs", s.flashLeaf);
 }
 
 void OSDRenderer9::BuildStatusText(wchar_t* out, size_t cap) const
@@ -504,7 +519,8 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
     const bool wantFps    = WantFps();
     const bool wantHelp   = WantHotkeyHelp();
     const bool wantHunter = WantHunter();
-    if (!wantStatus && !wantFps && !wantHelp && !wantHunter) return;
+    const bool wantToast  = WantSaveToast();
+    if (!wantStatus && !wantFps && !wantHelp && !wantHunter && !wantToast) return;
 
     if (wantStatus) {
         wchar_t text[128];
@@ -592,10 +608,33 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
         }
     }
 
+    // 0.4.1 save-toast — bottom-right slot.
+    if (wantToast) {
+        wchar_t t1[32], t2[160];
+        BuildSaveToastText(t1, _countof(t1), t2, _countof(t2));
+        if (wcscmp(t1, m_lastToast1) != 0 || wcscmp(t2, m_lastToast2) != 0) {
+            TexSlot& s = m_slots[(int)Slot::SaveToast];
+            s.Clear();
+            RECT line1Rect = { 12, 4,  s.w - 12, 36 };
+            RECT line2Rect = { 12, 38, s.w - 12, 68 };
+            s.DrawTextLine(t1, line1Rect, m_fontStatus.font, RGB(255, 255, 255),
+                           DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            s.DrawTextLine(t2, line2Rect, m_fontFps.font,    RGB(200, 220, 255),
+                           DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            wcscpy_s(m_lastToast1, t1);
+            wcscpy_s(m_lastToast2, t2);
+        }
+    } else if (m_lastToast1[0] != L'\0') {
+        m_slots[(int)Slot::SaveToast].Clear();
+        m_lastToast1[0] = L'\0';
+        m_lastToast2[0] = L'\0';
+    }
+
     if (wantStatus) m_slots[(int)Slot::Status].Upload();
     if (wantFps)    m_slots[(int)Slot::Fps].Upload();
     if (wantHelp)   m_slots[(int)Slot::HotkeyHelp].Upload();
     if (wantHunter) m_slots[(int)Slot::Hunter].Upload();
+    if (wantToast)  m_slots[(int)Slot::SaveToast].Upload();
 
     // Save state via a state block so we can restore the game's render state.
     IDirect3DStateBlock9* sb = nullptr;
@@ -644,6 +683,15 @@ void OSDRenderer9::Render(IDirect3DDevice9* device, UINT bbW, UINT bbH)
         float dy = (float)bbH - (float)s.h - 20.f;
         if (dy < 0) dy = 0;
         DrawQuad(device, s.tex, dx, dy, dw, (float)s.h);
+    }
+    // Save-toast: bottom-right (mirror of DX11).
+    if (wantToast) {
+        TexSlot& s = m_slots[(int)Slot::SaveToast];
+        float dx = (float)bbW - 20.f - (float)s.w;
+        float dy = (float)bbH - (float)s.h - 20.f;
+        if (dx < 0) dx = 0;
+        if (dy < 0) dy = 0;
+        DrawQuad(device, s.tex, dx, dy, (float)s.w, (float)s.h);
     }
 
     sb->Apply();

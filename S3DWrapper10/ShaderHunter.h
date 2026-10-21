@@ -117,13 +117,12 @@ public:
         uint32_t drawsForHidden; // draws observed for hiddenCRC this frame
         size_t   cycleIdx;       // 1-based position in cycle (0 if none)
         size_t   cycleSize;      // total CRCs drawn last frame
-        // 0.4.1 save-flash: non-zero while an OSD "saved CRC …" pulse is
-        // active. OSDRenderer compares this against its last-observed tick
-        // to decide whether to show the flash. The timestamp is a GetTickCount64
-        // deadline; the CRC + stage identify which capture to show.
-        uint64_t  flashDeadline;
-        uint32_t  flashCRC;
-        HuntStage flashStage;
+        // 0.4.1 save-toast: non-zero flashDeadline means an OSD "Shader
+        // saved: <leaf>" toast should render bottom-right until the
+        // deadline. flashLeaf carries the written file's basename so the
+        // toast can tell the user what landed on disk.
+        uint64_t flashDeadline;
+        char     flashLeaf[128];
     };
 
     static State GetState();

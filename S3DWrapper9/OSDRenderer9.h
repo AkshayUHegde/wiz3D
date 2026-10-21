@@ -50,7 +50,7 @@ public:
     void TickFrame();
 
 private:
-    enum class Slot { Status = 0, Fps, HotkeyHelp, Hunter, _Count };
+    enum class Slot { Status = 0, Fps, HotkeyHelp, Hunter, SaveToast, _Count };
 
     struct GDIFont {
         HFONT font     = nullptr;
@@ -82,12 +82,15 @@ private:
     void  BuildFpsText(wchar_t* out, size_t cap) const;
     void  BuildHunterText(wchar_t* line1, size_t cap1,
                           wchar_t* line2, size_t cap2) const;
+    void  BuildSaveToastText(wchar_t* line1, size_t cap1,
+                             wchar_t* line2, size_t cap2) const;
     void  DrawQuad(IDirect3DDevice9* device, IDirect3DTexture9* tex,
                    float x, float y, float w, float h);
     bool  WantStatus() const;
     bool  WantFps() const;
     bool  WantHotkeyHelp() const;
     bool  WantHunter() const;
+    bool  WantSaveToast() const;
 
     GDIFont m_fontStatus;
     GDIFont m_fontFps;
@@ -115,6 +118,8 @@ private:
     wchar_t   m_lastFps[32]     = {};
     wchar_t   m_lastHunter1[96]  = {};
     wchar_t   m_lastHunter2[128] = {};
+    wchar_t   m_lastToast1[32]   = {};
+    wchar_t   m_lastToast2[160]  = {};
     bool      m_helpTextRendered = false;
 
     bool              m_initDone   = false;

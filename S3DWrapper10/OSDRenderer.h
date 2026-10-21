@@ -66,6 +66,7 @@ private:
         Fps,           // top-right FPS counter
         HotkeyHelp,    // centred, full-screen dim behind
         Hunter,        // 0.5.0 ShaderHunter: bottom-centre, two-line status
+        SaveToast,     // 0.4.1 ShaderHunter: bottom-right 2 s "Shader saved" pulse
         _Count
     };
 
@@ -101,6 +102,8 @@ private:
     void  BuildFpsText(wchar_t* out, size_t cap) const;
     void  BuildHunterText(wchar_t* line1, size_t cap1,
                           wchar_t* line2, size_t cap2) const;
+    void  BuildSaveToastText(wchar_t* line1, size_t cap1,
+                             wchar_t* line2, size_t cap2) const;
     void  DrawQuad(ID3D11DeviceContext* ctx,
                    ID3D11ShaderResourceView* srv,
                    float x, float y, float w, float h,
@@ -109,6 +112,7 @@ private:
     bool  WantFps() const;
     bool  WantHotkeyHelp() const;
     bool  WantHunter() const;
+    bool  WantSaveToast() const;
 
     // Shared D3D11 state. One VS, one PS, one blend, one sampler.
     ID3D11VertexShader*       m_vs      = nullptr;
@@ -161,6 +165,8 @@ private:
     wchar_t   m_lastFps[32]     = {};
     wchar_t   m_lastHunter1[96] = {};
     wchar_t   m_lastHunter2[128] = {};
+    wchar_t   m_lastToast1[32]  = {};
+    wchar_t   m_lastToast2[160] = {};
     bool      m_helpTextRendered = false;
 
     bool      m_initDone   = false;

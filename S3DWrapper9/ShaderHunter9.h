@@ -70,10 +70,10 @@ struct HunterState
     uint32_t drawsForHidden;
     size_t   cycleIdx;
     size_t   cycleSize;
-    // 0.4.1 save-flash: non-zero while OSD should show "saved CRC …" pulse.
-    uint64_t  flashDeadline;
-    uint32_t  flashCRC;
-    HuntStage flashStage;
+    // 0.4.1 save-toast: non-zero flashDeadline means render a "Shader
+    // saved: <leaf>" toast bottom-right until the deadline. Mirrors DX11.
+    uint64_t flashDeadline;
+    char     flashLeaf[128];
 };
 HunterState HunterGetState();
 

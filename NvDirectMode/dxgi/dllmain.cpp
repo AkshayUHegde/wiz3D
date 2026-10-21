@@ -154,12 +154,19 @@ static void LoadConfig(HMODULE hProxy)
     g_verboseEnabled = ReadConfigInt(buf, "VerboseLogging", g_verboseEnabled);
     g_swapEyes       = ReadConfigInt(buf, "SwapEyes",       g_swapEyes);
     g_wrapDevices    = ReadConfigInt(buf, "WrapDevices",    g_wrapDevices);
-    g_outputMode     = ReadConfigInt(buf, "OutputMode",     g_outputMode);
-
+    // OutputMode: unified wiz3D 0.4.1 format. See the d3d11 proxy's dllmain
+    // for the full comment.
     char outputMethod[64] = {};
-    ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+    ReadConfigString(buf, "OutputMode", outputMethod, sizeof(outputMethod));
     int resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    if (resolved == wiz3d::OUTMODE_UNKNOWN)
+    {
+        outputMethod[0] = '\0';
+        ReadConfigString(buf, "OutputMethodDll", outputMethod, sizeof(outputMethod));
+        resolved = wiz3d::ResolveOutputModeName(outputMethod);
+    }
     if (resolved != wiz3d::OUTMODE_UNKNOWN) g_outputMode = resolved;
+    else g_outputMode = ReadConfigInt(buf, "OutputMode", g_outputMode);
 
     free(buf);
 }
