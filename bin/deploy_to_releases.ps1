@@ -419,6 +419,24 @@ foreach ($t in "$relRoot\Stereo-Injector\DX7",
         [IO.File]::WriteAllText($dst, $xml)
     }
 }
+
+# Local-only diagnostic default: flip CollectDebugInformation=0 -> 1 in the
+# deployed Stereo-Injector configs so a local test run always captures the
+# VEH crash shield + the DX11 right-eye-recording telemetry. We detect CI
+# via GITHUB_ACTIONS (always set in GitHub Actions runners); any build that
+# isn't CI gets the diagnostic flip. The source Config.xml stays at =0 so
+# shipped CI artifacts match the user-facing default.
+$isCI = ($env:GITHUB_ACTIONS -eq 'true') -or ($env:CI -eq 'true')
+if (-not $isCI) {
+    foreach ($t in $wiz3dConfigTargets) {
+        $dst = Join-Path $t 'wiz3D_Config.xml'
+        if (Test-Path $dst) {
+            $xml = [IO.File]::ReadAllText($dst) -replace '<CollectDebugInformation Value="0"/>', '<CollectDebugInformation Value="1"/>'
+            [IO.File]::WriteAllText($dst, $xml)
+        }
+    }
+    Write-Host "  CollectDebugInformation=1 (local build; CI deploys keep the default 0)"
+}
 Write-Host ("  {0,-30}  spread to {1} dirs" -f 'wiz3D_Config.xml', $wiz3dConfigTargets.Count)
 
 # --- Root docs: license + notices + user quick-start ---
