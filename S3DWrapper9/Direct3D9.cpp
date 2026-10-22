@@ -180,6 +180,15 @@ HMODULE CDirect3D9::GetCallingModule( LPCVOID pCaller )
 
 STDMETHODIMP CDirect3D9::CreateDevice( UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags, D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DDevice9** ppReturnedDeviceInterface )
 {
+	// Always-on first-call log so a user wiz3D_proxy.log says whether the
+	// game actually reached CreateDevice through our wrapper (parity with
+	// CreateDeviceEx below). FINAL_RELEASE builds strip the DEBUG_MESSAGE
+	// path downstream, so without this line the log leaves us blind about
+	// whether rendering even started. Issue #38 diagnostic hook.
+	static volatile LONG s_firstCreateDevice = 0;
+	if (InterlockedCompareExchange(&s_firstCreateDevice, 1, 0) == 0)
+		D9Log("  CDirect3D9::CreateDevice first call wrapper=%p Adapter=%u DevType=%d BehaviorFlags=0x%08lX hFocus=%p\n",
+			(void*)this, (unsigned)Adapter, (int)DeviceType, (unsigned long)BehaviorFlags, (void*)hFocusWindow);
 	HRESULT hResult = S_OK;
 	if (gInfo.UseMonoDeviceWrapper)
 	{
