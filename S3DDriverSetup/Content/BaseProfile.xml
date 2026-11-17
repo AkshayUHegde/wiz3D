@@ -199,6 +199,33 @@
 		<VKRpcs3 Value="1"/>
 		<VKUnitWEpsilon Value="0.000001"/>
 	</Profile>
+	<Profile Name="KytyPS5">
+		<File Name="kyty_emulator.exe" />
+		<DetectInverseMatrix Value="1"/>
+		<VKSmallDrawUnshift Value="0"/>
+		<VKGprPositionChain Value="1"/>
+		<VKDynamicRendering Value="1"/>
+		<VKDoubleTransferImages Value="1"/>
+		<VKShiftPrevClipVaryings Value="1"/>
+		<VKPushConstantOrder Value="1"/>
+		<VKComputeRemap Value="1"/>
+		<VKDoubleFroxelVolumes Value="1"/>
+		<!-- KytyPS5 (S3DWrapperVK\KytyVK.cpp): buffer trips, fused MAD, the tile lists, DLSS-G, material masks -->
+		<VKKyty Value="1">
+			<!-- The tile-lighting chain (clear, classify, count, sum, list; v20261106's three recompiles), with the
+			     block offsets of the lists each fills: indirect args, per-tile class words, tile indices -->
+			<TileChain ComputeShader="0x633E4A45" Lists="44 64"/>
+			<TileChain ComputeShader="0x94049677" Lists="300"/>
+			<TileChain ComputeShader="0x03FF0B64"/>
+			<TileChain ComputeShader="0x8CBAEB35"/>
+			<TileChain ComputeShader="0xDF55310B" Lists="108"/>
+			<TileChain ComputeShader="0x49AB3480" Lists="300"/>
+			<TileChain ComputeShader="0x4F75C91C"/>
+			<TileChain ComputeShader="0x2F06C6E3" Lists="108"/>
+			<!-- Projects its position back to the screen for its depth reads: the remap leaves it alone -->
+			<RemapSkipped ComputeShader="0x2C9F3155"/>
+		</VKKyty>
+	</Profile>
 	<Profile Name="Disable driver">
 		<File AppName="iZ3D Control Center" Name="Control Center.exe" />
 		<File AppName="Windows Media Player" Name="wmplayer.exe" />
