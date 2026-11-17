@@ -342,6 +342,23 @@
 		<Engine Value="shadPS4"/>
 		<VKComputeRemap Value="0"/>
 	</Profile>
+	<Profile Name="Gran Turismo Sport">
+		<File Name="GTSport.exe" />
+		<Engine Value="shadPS4"/>
+		<VKBufferTwins Value="0"/>
+		<VKDoubleTransferImages Value="1"/>
+		<VKDynByPipeline Value="1"/>
+		<VKPushDeltas Value="1"/>
+		<!-- ShadGT (S3DWrapperVK\ShadGtVK.cpp): flat UI, motion vectors, refractive glass, box decals and skies; the UI's
+		     track maps and icons are RGBA8 targets of 790x520 at most, kept mono -->
+		<VKShadGT Value="1" Velocity="1" Glass="1" Decal="1" Sky="1" UiTargetMaxPixels="410800">
+			<!-- Scene and mirror skies: w == 1 quads with the left's rays, and the FS reading the screen at them -->
+			<Sky VertexShader="0x59AF3003"/>
+			<Sky VertexShader="0xE12EB9FC"/>
+			<SkyScreenRead PixelShader="0xA5A914D7"/>
+			<SkyScreenRead PixelShader="0x1DADD46D"/>
+		</VKShadGT>
+	</Profile>
 	<Profile Name="Disable driver">
 		<File AppName="iZ3D Control Center" Name="Control Center.exe" />
 		<File AppName="Windows Media Player" Name="wmplayer.exe" />
