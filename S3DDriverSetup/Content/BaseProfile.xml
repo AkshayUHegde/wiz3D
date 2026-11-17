@@ -23,6 +23,86 @@
 <Profiles Version="1" xmlns="http://schemas.iz3d.com/baseprofile/2007">
 	<!-- Vulkan (S3DWrapperVK): every VK* element is a layer switch (S3DWrapperVK\ProfileVK.h) or an engine family
 	     (FamilyVK.cpp); games with no profile run the layer's defaults. -->
+	<Profile Name="Red Dead Redemption 2">
+		<File Name="RDR2.exe" />
+		<DetectInverseMatrix Value="1"/>
+		<!-- RAGE: everything the engine needs beyond the shared Vulkan layer (S3DWrapperVK\RageVK.cpp). Its children name the
+		     shaders each rule applies to and the engine's block layout; water materials are found by shape and need no entry. -->
+		<VKRage Value="1">
+			<!-- The camera block (binding 29, or 31 in some materials): its projection and previous-frame projection members -->
+			<CameraBlock Binding="29" AltBinding="31" Projection="2" PreviousProjection="7"/>
+			<!-- The shared water block's view-projection, which the refracted point is projected through -->
+			<WaterBlock Binding="99" Member="7" Field="3"/>
+			<!-- 6-index world quads (water planes: trough, puddles; mirror glass): geometry, not full-screen passes -->
+			<WorldQuad VertexShader="0x7C985FE7"/>
+			<WorldQuad VertexShader="0x16CE266B"/>
+			<WorldQuad VertexShader="0x952D40FA"/>
+			<!-- The water surface: cached right-eye sets holding its camera block follow the patched copy -->
+			<WaterSurface VertexShader="0x9B9A7666"/>
+			<!-- Mirror glass reads its reflection at a clip varying (input 4), drawn for the left eye's crop of the mirror -->
+			<MirrorGlass PixelShader="0xA780EB35" Clip="4"/>
+			<!-- The full-screen fog apply reads the froxel volume, built once for the left camera -->
+			<FogApply PixelShader="0x24FD67D6"/>
+			<!-- Full-screen lighting drawn with the left camera's ray (input 1; uv input 0): its view direction, reflected into the
+			     probe cubes, is taken at the right eye's ray (outdoor lighting, and its snow variant) -->
+			<LightViewRay PixelShader="0xD24D1E16" Ray="1" Uv="0"/>
+			<LightViewRay PixelShader="0x2ABE3AC2"/>
+			<!-- ... and its position, ray * depth, gets the eye offset: the clustered lighting triangles, the pinned proxy pass,
+			     and the same two outdoor shaders -->
+			<ScreenRayLight PixelShader="0xD590B4DE" Ray="1"/>
+			<ScreenRayLight PixelShader="0xB954755C"/>
+			<ScreenRayLight PixelShader="0x04FBF1DA"/>
+			<ScreenRayLight PixelShader="0xC2CE9572"/>
+			<ScreenRayLight PixelShader="0xD24D1E16"/>
+			<ScreenRayLight PixelShader="0x2ABE3AC2"/>
+			<!-- Storage images that stay one copy (VkFormat numbers): the pass writing each also writes a shared output, so it
+			     runs once. The auto-exposure grid (R32F) and the depth-of-field tile map (R11G11B10F, backbuffer / 48) -->
+			<MonoExposureGrid Format="100" Width="16" Height="16"/>
+			<MonoDofTiles Format="122" BackbufferDivisor="48"/>
+			<!-- The water reflection array (RGBA16F, 3 layers, 2:1) is written in each eye's run and needs a right-eye copy -->
+			<StereoReflectionArray Format="97" Layers="3" Aspect="2"/>
+			<!-- Drawn with the occlusion-box vertex shaders (props, horses, characters; the last is the far-range boxes') -->
+			<OcclusionVolume PixelShader="0x562EE2E7"/>
+			<OcclusionVolume PixelShader="0x3F59AD2E"/>
+			<OcclusionVolume PixelShader="0x86ECB97A"/>
+			<OcclusionVolume PixelShader="0x7134A479"/>
+			<OcclusionVolume PixelShader="0x47BACCA8"/>
+			<OcclusionVolume PixelShader="0xDBEA5A52"/>
+			<OcclusionVolume PixelShader="0xA9EB9128"/>
+			<OcclusionVolume PixelShader="0x6FC13A1F"/>
+			<!-- The sun mask's far-depth half: its rays are skewed, but it has no ray-varying product of its own -->
+			<SunMaskFar PixelShader="0x9EEE8191"/>
+			<!-- Half-res cloud passes: far layer, volumetric raymarch, the far layer under clear skies, the fog pass that marches cumulus -->
+			<CloudRays ComputeShader="0x940259FC"/>
+			<CloudRays ComputeShader="0x5EACDB76"/>
+			<CloudRays ComputeShader="0x53721516"/>
+			<CloudRays ComputeShader="0x9E7889D3"/>
+			<!-- Screen-space reflections: the trace and its history resolve -->
+			<SsrRays ComputeShader="0xBACD9949"/>
+			<SsrRays ComputeShader="0x1957E871"/>
+		</VKRage>
+		<!-- Shared defaults RAGE never ran on: serve fallback, EQUAL-pass self-shift, array doubling, set re-pointing -->
+		<VKServeFallback Value="0"/>
+		<VKEqualPassSelfShift Value="0"/>
+		<VKDoubleArrayImages Value="0"/>
+		<VKRepointLearnedSets Value="0"/>
+		<VKShadowAtlasByShape Value="0"/>
+		<!-- The SR weave's stages wait for each other on the GPU, so the present no longer waits for the frame to finish -->
+		<VKWeaveGpuSync Value="1"/>
+		<Presets>
+			<!-- The projection gives near = 0.15 and camera coordinates in the
+			     thousands, so the world unit is the metre. Convergence at 5 m
+			     sits near the third-person camera's subject: the shift is
+			     sep*(1 - 5/w), which spreads the 5-100 m band over a fifth of
+			     the budget. At the 0.14 m it had been tuned to, everything from
+			     1 m to the horizon fell between 0.86 and 1.00 of sep - a
+			     uniform sideways translation with no depth in it at all. -->
+			<Preset Index="0">
+				<One_div_ZPS Value="0.200000" />
+				<StereoBase Value="0.060000" />
+			</Preset>
+		</Presets>
+	</Profile>
 	<Profile Name="DOOM (2016)">
 		<File Name="DOOMx64vk.exe" />
 		<!-- Forward-shifted geometry is enough; no inverse-matrix scan. The constants-path refinements stay off. -->
