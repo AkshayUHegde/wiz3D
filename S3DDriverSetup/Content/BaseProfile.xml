@@ -157,6 +157,41 @@
 		<!-- Characters' contact shadows march from the pixel toward a point projected through the left camera -->
 		<VKScreenMarch Value="1"/>
 	</Profile>
+	<Profile Name="Cemu">
+		<File Name="Cemu.exe" />
+		<!-- Wii U: register-chain positions, screen varyings, edge crop; the separation scale is BOTW's projection P00 -->
+		<VKSeparationScale Value="1.2063"/>
+		<VKSmallDrawUnshift Value="0"/>
+		<VKEdgeCrop Value="1"/>
+		<VKGprPositionChain Value="1"/>
+		<VKShiftNdcVaryings Value="1"/>
+		<VKComputeRemap Value="3"/>
+	</Profile>
+	<Profile Name="Ryubing">
+		<File Name="Ryujinx.exe" />
+		<VKSmallDrawUnshift Value="0"/>
+		<VKShiftNdcVaryings Value="1"/>
+	</Profile>
+	<Profile Name="Lichii">
+		<File Name="lichii.exe" />
+		<!-- Eden: descriptor buffers and depth-bias control hidden, mesh draws replayed, occlusion counted in both eyes -->
+		<VKSmallDrawUnshift Value="0"/>
+		<VKDynamicRendering Value="1"/>
+		<VKScreenReadVaryings Value="1"/>
+		<VKShiftNdcVaryings Value="1"/>
+		<VKComputeRemap Value="4"/>
+		<VKDynByPipeline Value="1"/>
+		<VKPinLayer Value="1"/>
+		<VKHideDescriptorBuffer Value="1"/>
+		<VKHideDepthBiasControl Value="1"/>
+		<VKMonoPassCopies Value="1"/>
+		<VKMeshDraws Value="1"/>
+		<VKScreenUvVaryings Value="1"/>
+		<VKFroxelLookups Value="1"/>
+		<VKFragCoordRays Value="1"/>
+		<VKOcclusionBothEyes Value="1"/>
+		<VKUnitWEpsilon Value="0.000001"/>
+	</Profile>
 	<Profile Name="Disable driver">
 		<File AppName="iZ3D Control Center" Name="Control Center.exe" />
 		<File AppName="Windows Media Player" Name="wmplayer.exe" />
