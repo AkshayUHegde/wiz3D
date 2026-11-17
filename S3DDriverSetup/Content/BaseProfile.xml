@@ -192,6 +192,13 @@
 		<VKOcclusionBothEyes Value="1"/>
 		<VKUnitWEpsilon Value="0.000001"/>
 	</Profile>
+	<Profile Name="RPCS3">
+		<File Name="rpcs3.exe" />
+		<VKSmallDrawUnshift Value="0"/>
+		<VKShiftNdcVaryings Value="1"/>
+		<VKRpcs3 Value="1"/>
+		<VKUnitWEpsilon Value="0.000001"/>
+	</Profile>
 	<Profile Name="Disable driver">
 		<File AppName="iZ3D Control Center" Name="Control Center.exe" />
 		<File AppName="Windows Media Player" Name="wmplayer.exe" />
