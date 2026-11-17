@@ -1,23 +1,5 @@
-/* wiz3D - vulkan-1.dll Proxy Loader
- *
- * Drop this vulkan-1.dll into a game's folder alongside S3DWrapperVK.dll.
- * Forwards Vulkan loader entry points to the real system vulkan-1.dll, and
- * routes vkCreateInstance through the wiz3D wrapper using the same
- * InitializeExchangeServer protocol as the d3d9/d3d12 proxies.
- *
- * Why DLL proxy and not implicit layer:
- *   - Same drop-in pattern as the rest of wiz3D — no registry edits, no
- *     admin needed. User copies file into game folder, done.
- *   - The Vulkan implicit-layer manifest path (registered globally for all
- *     Vulkan apps) is in the long-term plan but more invasive. Saved for
- *     later. See S3DWrapper12/PLAN.md.
- *
- * Most Vulkan apps directly import only a small set of loader entry points
- * (vkGetInstanceProcAddr is the gateway for everything else). We forward
- * the canonical six and let the game fetch the rest via proc-addr lookup.
- *
- * M0 groundwork — passthrough only. No stereo injection yet.
- */
+/* wiz3D - vulkan-1.dll proxy loader: forwards every loader export to the system vulkan-1.dll and, before its first
+ * layer scan, enables VK_LAYER_wiz3D_stereo from this folder (VK_ADD_LAYER_PATH, VK_LOADER_LAYERS_ENABLE). */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -25,6 +7,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <string>
 
 // ---------------------------------------------------------------------------
 // Log to wiz3D_proxy.log (shared with d3d9 / d3d12 proxies via append mode)
@@ -42,6 +25,14 @@ static void LogOpen(void)
     CreateDirectoryW(dir, NULL);
     lstrcatW(dir, L"\\wiz3D_proxy.log");
     g_logFile = _wfopen(dir, L"a");
+    if (g_logFile) return;
+    // Game folders under Program Files-style ACLs refuse writes.
+    WCHAR local[MAX_PATH] = {};
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH)) return;
+    lstrcatW(local, L"\\wiz3D");
+    CreateDirectoryW(local, NULL);
+    lstrcatW(local, L"\\wiz3D_proxy.log");
+    g_logFile = _wfopen(local, L"a");
 }
 
 static void Log(const char* fmt, ...)
@@ -93,14 +84,88 @@ static PFN_vkEnumerateInstanceExtensionProperties g_pfnRealEnumInstanceExtension
 static PFN_vkEnumerateInstanceLayerProperties     g_pfnRealEnumInstanceLayerProperties     = nullptr;
 static PFN_vkEnumerateInstanceVersion             g_pfnRealEnumInstanceVersion             = nullptr;
 
-static PFN_vkCreateInstance g_pfnWrapCreateInstance = nullptr;
-
 // ---------------------------------------------------------------------------
 // Load real system vulkan-1.dll
 // ---------------------------------------------------------------------------
+static void GetProxyDirectory(WCHAR* out, DWORD cch)
+{
+    GetModuleFileNameW(g_hProxy, out, cch);
+    WCHAR* pSlash = wcsrchr(out, L'\\');
+    if (pSlash) *(pSlash + 1) = L'\0';
+}
+
+// Puts `item` first in the `sep`-separated list in environment variable `name`, keeping the value set before; an
+// item already listed (case aside) leaves the variable as it is.
+static void PrependEnvItem(const WCHAR* name, const WCHAR* item, WCHAR sep)
+{
+    const DWORD n = GetEnvironmentVariableW(name, nullptr, 0);
+    if (!n) { SetEnvironmentVariableW(name, item); return; }
+    std::wstring cur(n, L'\0');
+    cur.resize(GetEnvironmentVariableW(name, &cur[0], n));
+    const size_t len = wcslen(item);
+    for (size_t at = 0; at <= cur.size(); )
+    {
+        size_t end = cur.find(sep, at);
+        if (end == std::wstring::npos) end = cur.size();
+        if (end - at == len && _wcsnicmp(cur.c_str() + at, item, len) == 0) return;
+        at = end + 1;
+    }
+    Log("%ls: %ls put first, the value set before kept (%ls)\n", name, item, cur.c_str());
+    SetEnvironmentVariableW(name, (std::wstring(item) + sep + cur).c_str());
+}
+
+// Points the loader at our manifest and enables the layer, before any call into the real vulkan-1.dll (read on its
+// first layer scan); a VK_LAYER_PATH, which would override VK_ADD_LAYER_PATH, is reported.
+static void EnableWiz3DLayer(void)
+{
+    WCHAR dir[MAX_PATH];
+    GetProxyDirectory(dir, MAX_PATH);
+    WCHAR manifest[MAX_PATH];
+    wcscpy_s(manifest, dir);
+    wcscat_s(manifest, L"VK_LAYER_wiz3D_stereo.json");
+    if (GetFileAttributesW(manifest) == INVALID_FILE_ATTRIBUTES)
+    {
+        Log("WARN: %ls not found — layer not enabled, passthrough\n", manifest);
+        return;
+    }
+    PrependEnvItem(L"VK_ADD_LAYER_PATH", dir, L';');
+    PrependEnvItem(L"VK_LOADER_LAYERS_ENABLE", L"VK_LAYER_wiz3D_stereo", L',');
+    WCHAR existing[MAX_PATH];
+    if (GetEnvironmentVariableW(L"VK_LAYER_PATH", existing, MAX_PATH))
+        Log("WARN: VK_LAYER_PATH is set (%ls); it overrides VK_ADD_LAYER_PATH\n", existing);
+    Log("Layer enabled: VK_ADD_LAYER_PATH=%ls\n", dir);
+}
+
+// Trampoline table for the 259 exports games import directly (vk_forwards.asm), filled once the real loader is
+// loaded; a stub hit before that resolves its own slot through wiz3D_ResolveForward.
+#include "vk_forward_names.h"
+extern "C" void* g_vkForward[WIZ3D_VK_FORWARD_COUNT] = {};
+static BOOL LoadRealVulkan(void);
+
+static void FillForwardTable(void)
+{
+    for (int i = 0; i < WIZ3D_VK_FORWARD_COUNT; ++i)
+        g_vkForward[i] = (void*)GetProcAddress(g_hRealVulkan, g_vkForwardNames[i]);
+}
+
+extern "C" void* wiz3D_ResolveForward(unsigned index)
+{
+    LoadRealVulkan();
+    void* p = index < WIZ3D_VK_FORWARD_COUNT ? g_vkForward[index] : nullptr;
+    if (!p)
+    {
+        Log("FAIL: forward slot %u (%s) unresolved\n", index,
+            index < WIZ3D_VK_FORWARD_COUNT ? g_vkForwardNames[index] : "?");
+        RaiseException(STATUS_ENTRYPOINT_NOT_FOUND, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    }
+    return p;
+}
+
 static BOOL LoadRealVulkan(void)
 {
     if (g_hRealVulkan) return TRUE;
+
+    EnableWiz3DLayer();
 
     WCHAR sysDir[MAX_PATH];
     GetSystemDirectoryW(sysDir, MAX_PATH);
@@ -123,20 +188,13 @@ static BOOL LoadRealVulkan(void)
     g_pfnRealEnumInstanceExtensionProperties = (PFN_vkEnumerateInstanceExtensionProperties) GetProcAddress(g_hRealVulkan, "vkEnumerateInstanceExtensionProperties");
     g_pfnRealEnumInstanceLayerProperties     = (PFN_vkEnumerateInstanceLayerProperties)     GetProcAddress(g_hRealVulkan, "vkEnumerateInstanceLayerProperties");
     g_pfnRealEnumInstanceVersion             = (PFN_vkEnumerateInstanceVersion)             GetProcAddress(g_hRealVulkan, "vkEnumerateInstanceVersion");
+    FillForwardTable();
     return TRUE;
 }
 
-// ---------------------------------------------------------------------------
-// LoadWrapper — same protocol as d3d9 / d3d12 proxies
-// ---------------------------------------------------------------------------
+// LoadWrapper: the InitializeExchangeServer probe of the other proxies; the loader loads the DLL as a layer, this only
+// confirms it is loadable, so wiz3D_proxy.log explains a missing layer.
 typedef DWORD (WINAPI *pfnInitializeExchangeServer)();
-
-static void GetProxyDirectory(WCHAR* out, DWORD cch)
-{
-    GetModuleFileNameW(g_hProxy, out, cch);
-    WCHAR* pSlash = wcsrchr(out, L'\\');
-    if (pSlash) *(pSlash + 1) = L'\0';
-}
 
 static void LoadWrapper(void)
 {
@@ -146,34 +204,19 @@ static void LoadWrapper(void)
     WCHAR wrapPath[MAX_PATH];
     GetProxyDirectory(wrapPath, MAX_PATH);
     lstrcatW(wrapPath, L"S3DWrapperVK.dll");
-    Log("Loading wrapper: %ls\n", wrapPath);
 
     g_hWrapper = LoadLibraryW(wrapPath);
     if (!g_hWrapper)
     {
-        Log("WARN: S3DWrapperVK.dll not found (err=%lu) — passthrough\n", GetLastError());
+        Log("WARN: S3DWrapperVK.dll not loadable (err=%lu) — passthrough\n", GetLastError());
         return;
     }
-    Log("OK: Wrapper loaded\n");
-
     pfnInitializeExchangeServer pInit =
         (pfnInitializeExchangeServer)GetProcAddress(g_hWrapper, "InitializeExchangeServer");
     if (pInit)
-    {
-        Log("Calling InitializeExchangeServer...\n");
-        DWORD routerType = pInit();
-        Log("InitializeExchangeServer returned routerType=%lu\n", routerType);
-        if (routerType <= 1)
-        {
-            g_pfnWrapCreateInstance = (PFN_vkCreateInstance)
-                GetProcAddress(g_hWrapper, "vkCreateInstance");
-            Log("Wrapper exports: vkCreateInstance=%p\n", g_pfnWrapCreateInstance);
-        }
-    }
+        Log("OK: Wrapper present, InitializeExchangeServer returned %lu\n", pInit());
     else
-    {
-        Log("FAIL: InitializeExchangeServer not in wrapper — passthrough\n");
-    }
+        Log("FAIL: InitializeExchangeServer not in wrapper\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -185,18 +228,10 @@ extern "C" __declspec(dllexport) VkResult __stdcall vkCreateInstance(
     Log("vkCreateInstance called\n");
     if (!LoadRealVulkan()) return -1;  // VK_ERROR_INITIALIZATION_FAILED
     LoadWrapper();
-
-    if (g_pfnWrapCreateInstance)
-    {
-        Log("Routing through WRAPPER vkCreateInstance...\n");
-        return g_pfnWrapCreateInstance(pCreateInfo, pAllocator, pInstance);
-    }
-    if (g_pfnRealCreateInstance)
-    {
-        Log("Routing through REAL vkCreateInstance (no wrapper)\n");
-        return g_pfnRealCreateInstance(pCreateInfo, pAllocator, pInstance);
-    }
-    return -1;
+    if (!g_pfnRealCreateInstance) return -1;
+    VkResult r = g_pfnRealCreateInstance(pCreateInfo, pAllocator, pInstance);
+    Log("vkCreateInstance -> %d\n", r);
+    return r;
 }
 
 extern "C" __declspec(dllexport) PFN_vkVoidFunction __stdcall vkGetInstanceProcAddr(

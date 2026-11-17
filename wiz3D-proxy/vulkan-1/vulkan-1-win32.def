@@ -1,0 +1,8 @@
+LIBRARY vulkan-1
+EXPORTS
+    vkGetInstanceProcAddr                      @1
+    vkCreateInstance                           @2
+    vkEnumerateInstanceExtensionProperties     @3
+    vkEnumerateInstanceLayerProperties         @4
+    vkEnumerateInstanceVersion                 @5
+    vkGetDeviceProcAddr                        @6
