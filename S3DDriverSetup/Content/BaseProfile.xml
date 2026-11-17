@@ -226,6 +226,122 @@
 			<RemapSkipped ComputeShader="0x2C9F3155"/>
 		</VKKyty>
 	</Profile>
+	<!-- The PS4 ports built on shadPS4: one block, which each port's profile names with <Engine Value="shadPS4"/> -->
+	<Engine Name="shadPS4">
+		<DetectInverseMatrix Value="1"/>
+		<VKSmallDrawUnshift Value="0"/>
+		<VKGprPositionChain Value="1"/>
+		<VKDynamicRendering Value="1"/>
+		<VKBufferTwins Value="1"/>
+		<VKFsCameraWindows Value="1"/>
+		<VKScreenReadVaryings Value="1"/>
+		<VKShiftPrevClipVaryings Value="1"/>
+		<VKShiftNdcVaryings Value="1"/>
+		<VKIndirectFromLeft Value="2"/>
+		<VKComputeRemap Value="3"/>
+		<VKDoubleFroxelVolumes Value="1"/>
+		<VKShadowSetTwins Value="1"/>
+		<VKUnitWEpsilon Value="0.00001"/>
+	</Engine>
+	<Profile Name="PS4 ports (bb-probe)">
+		<!-- Bloodborne, Shadow of the Colossus and Uncharted ship the same exe -->
+		<File Name="bb-probe.exe" />
+		<Engine Value="shadPS4"/>
+		<!-- The SR weave's stages wait for each other on the GPU, so the present no longer waits for the frame to finish -->
+		<VKWeaveGpuSync Value="1"/>
+		<!-- Uncharted's sun shadow rebuilds positions from gl_FragCoord and depth: the remap's pixel-ray rule moves them -->
+		<VKFragCoordRays Value="1"/>
+		<!-- Which Bloodborne shaders take each VKFsCameraWindows treatment (S3DWrapperVK\ShadPs4VK.cpp) -->
+		<VKShadPS4 Value="1">
+			<!-- Shader IDs are as Supermedo's port 1.9.8.6 compiles them (shader cache v16) -->
+			<!-- Lamp lights: their camera matrices patched in their own module -->
+			<CameraWindows PixelShader="0x617AC6E3"/>
+			<CameraWindows PixelShader="0xDB3FA7A5"/>
+			<CameraWindows PixelShader="0x5FD4CD22"/>
+			<CameraWindows PixelShader="0xB3784BED"/>
+			<CameraWindows PixelShader="0x6489DB33"/>
+			<!-- Blood decals: screen x goes to the left eye's before both matrices -->
+			<CameraDecal PixelShader="0x2C70DE88"/>
+			<!-- The messenger glow: Position copied into a varying that its FS reads at x / w -->
+			<ScreenReadTes DomainShader="0x9A9B5D1C"/>
+			<ScreenReadTes DomainShader="0x25153257"/>
+			<ScreenReadTes DomainShader="0xE112717C"/>
+			<!-- Lantern glow and light shaft at w == 1: moved by their depth's parallax (the shaft's varying 0 too) -->
+			<CameraSprite VertexShader="0xC2F1ECB2"/>
+			<CameraSprite VertexShader="0xC400A44F" Varying="0"/>
+			<!-- The moon shadow mask: screen x is the left eye's before every matrix -->
+			<CameraScreenX PixelShader="0xEF3FEE5C"/>
+			<!-- Lamp tiles: their lights take the camera twin and open depth bounds in the right eye. 24170DB8 draws every
+			     deferred light tile (all of them with depth bounds on) -->
+			<LampTile VertexShader="0x24170DB8"/>
+			<LampTile VertexShader="0x0EAA75B2"/>
+			<LampTile VertexShader="0xE4B28AA2"/>
+			<LampTile VertexShader="0xEBF272C3"/>
+			<LampTile VertexShader="0x6EF8B63F"/>
+			<LampTile VertexShader="0xCE0FF2A8"/>
+			<!-- The window shaft's depth store, and the pass blurring it toward a centre -->
+			<CameraShaft PixelShader="0x9DB06429"/>
+			<CameraShaft PixelShader="0x415207AF" Blur="1"/>
+		</VKShadPS4>
+	</Profile>
+	<Profile Name="PS4 ports (tlg-probe)">
+		<!-- The Last Guardian and inFAMOUS Second Son ship the same exe -->
+		<File Name="tlg-probe.exe" />
+		<File Name="tlg-probe-v2.exe" />
+		<Engine Value="shadPS4"/>
+		<VKDynByPipeline Value="1"/>
+		<VKPushDeltas Value="1"/>
+		<!-- Which shaders take each VKComputeRemap / VKPushDeltas treatment (S3DWrapperVK\ShadPs4VK.cpp) -->
+		<VKShadPS4 Value="1">
+			<!-- TLG: they store the camera inverse's w row for the sun mask -->
+			<StoresCamera PixelShader="0xD5E35102"/>
+			<StoresCamera PixelShader="0x1A43388D"/>
+			<!-- inFAMOUS Second Son from here. Tiled lighting: lights culled per tile by the left camera -->
+			<TiledLights ComputeShader="0xEE786618"/>
+			<!-- The same pass in the port's beta (4K tiles, 240x135 groups) -->
+			<TiledLights ComputeShader="0x8A470AB3"/>
+			<!-- Screen passes rebuilding from depth by the per-view inverse (shadow masks, box decals, full screen) -->
+			<RayRows PixelShader="0xBD42BAC1"/>
+			<RayRows PixelShader="0xD4B4E14E"/>
+			<RayRows PixelShader="0x57127E64"/>
+			<RayRows PixelShader="0xCD5BB9EE"/>
+			<RayRows PixelShader="0x6BACFCD5"/>
+			<!-- Depth read at a clip copy the screen-read test misses: the box decal, the sky and its reflections -->
+			<ScreenRead PixelShader="0xCD5BB9EE"/>
+			<ScreenRead PixelShader="0x319C271C"/>
+			<ScreenRead PixelShader="0x7FA0291E"/>
+			<ScreenRead PixelShader="0x9CA3DFCF"/>
+			<!-- The sky, pinned at w == 1 with the left's rays, and its two draws into the water's reflection -->
+			<Sky VertexShader="0x0AC242F0"/>
+			<Sky VertexShader="0x52C0C1B2"/>
+			<Sky VertexShader="0x86560FDE"/>
+			<!-- A box decal turning its screen coordinate back into a world point: the coordinate stays -->
+			<KeepsScreenUv VertexShader="0x817018DB"/>
+			<!-- Soft particles reading depth at a varying built before the shift -->
+			<SoftParticle PixelShader="0xE2257BAC"/>
+			<!-- The lens flare: glows from a table filled from the left camera -->
+			<Flare PixelShader="0xFA44E970"/>
+			<!-- inFAMOUS's sun shafts: depth blurred toward the sun's screen point, also a left-camera table entry -->
+			<Flare PixelShader="0xBE075994"/>
+			<!-- The depth-only occluder mesh: its right-eye draw is skipped -->
+			<DepthOccluder VertexShader="0x5B47F1A3"/>
+		</VKShadPS4>
+	</Profile>
+	<Profile Name="DriveClub">
+		<File Name="DriveClubGame.exe" />
+		<Engine Value="shadPS4"/>
+		<VKIndirectFromLeft Value="1"/>
+		<VKLightRaysCamera Value="1"/>
+		<VKComputeRemap Value="0"/>
+		<VKShiftPrevClipVaryings Value="0"/>
+		<VKDoubleFroxelVolumes Value="0"/>
+		<VKShadowSetTwins Value="0"/>
+	</Profile>
+	<Profile Name="God of War III">
+		<File Name="spartanport-probe.exe" />
+		<Engine Value="shadPS4"/>
+		<VKComputeRemap Value="0"/>
+	</Profile>
 	<Profile Name="Disable driver">
 		<File AppName="iZ3D Control Center" Name="Control Center.exe" />
 		<File AppName="Windows Media Player" Name="wmplayer.exe" />
