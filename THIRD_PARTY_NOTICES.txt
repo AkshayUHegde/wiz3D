@@ -467,6 +467,31 @@ Credit: Bo3b Johnson for the Katanga viewer and its shared-texture
 protocol.
 
 ============================================================================
+13. Vulkan-Headers (Khronos Group)
+============================================================================
+https://github.com/KhronosGroup/Vulkan-Headers
+Version: 1.4.360 (C headers only: include/vulkan/*.h, include/vk_video/*.h)
+
+Used in: S3DWrapperVK.dll (headers only, no linked code)
+
+Copyright 2015-2026 The Khronos Group Inc.
+SPDX-License-Identifier: Apache-2.0 OR MIT. The full texts are in
+ThirdPartyLibs/Vulkan-Headers_v1.4.360/LICENSE.md and LICENSES/.
+
+============================================================================
+14. SPIRV-Headers (Khronos Group)
+============================================================================
+https://github.com/KhronosGroup/SPIRV-Headers
+Version: SPIR-V 1.6 revision 1 (include/spirv/unified1/spirv.hpp11 and
+GLSL.std.450.h only)
+
+Used in: S3DWrapperVK.dll (headers only, no linked code)
+
+Copyright (c) 2014-2024 The Khronos Group Inc.
+License: MIT. The full text is in
+ThirdPartyLibs/SPIRV-Headers_v1.6.1/LICENSE and LICENSES/.
+
+============================================================================
 
 The WiZ3D project itself is licensed under the GNU Lesser General Public
 License v2.1. See LICENSE (LGPLv2.1) and LICENSE-iZ3D.txt (MIT) in the
