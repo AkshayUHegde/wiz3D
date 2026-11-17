@@ -9,6 +9,7 @@
 #include "Layer.h"
 #include "FamilyVK.h"
 #include "../S3DAPI/GlobalData.h"
+#include "../S3DAPI/KeyboardHook.h"
 #include "../S3DAPI/ReadData.h"
 
 namespace wiz3d { namespace vk {
@@ -209,35 +210,45 @@ void StereoParamsDestroy(DeviceData* d)
 void StereoParamsUpdate(DeviceData* d)
 {
     if (!d->stereoMapped) return;
-    CameraPreset* p = gInfo.Input.GetActivePreset();
-    // The convergence hotkey can cross zero; hold it at the floor, as the stored value too.
-    if (p && p->One_div_ZPS < kMinOneDivZps) p->One_div_ZPS = kMinOneDivZps;
+    // One snapshot of what the hotkey thread writes, for this present.
+    gKbdHook.m_Access.Enter();
+    DataInput now = gInfo.Input;
+    const float eyeShift = wiz3D_GetEffectiveEyeShift();
+    gKbdHook.m_Access.Leave();
+    const CameraPreset* p = now.GetActivePreset();
+    // DX11's StereoConvergence(): 1/One_div_ZPS at either sign, and 0 at 0, where the eye shift is 0 as well.
     const float conv = (p && p->One_div_ZPS != 0.f) ? 1.f / p->One_div_ZPS : 0.f;
     // The shaders apply the forward shift per draw and the constants path corrects the inverses: both need the same
     // clip-space offset, so sep carries the projection's _11 (DX11's camXScale).
     const float p11 = d->cameraP11.load(std::memory_order_relaxed);
     const float scale = (p11 > 0.f) ? p11 : Vk().VKSeparationScale;
-    const float sep = gInfo.Input.StereoActive ? wiz3D_GetEffectiveEyeShift() * scale : 0.f;
+    const float sep = now.StereoActive ? eyeShift * scale : 0.f;
     // World-unit eye offset (the constants path's eyeSep): patched fragment shaders add eye*right to
-    // camera-relative positions.
-    const float eye = (gInfo.Input.StereoActive && p) ? p->StereoBase * Vk().VKSeparationScale : 0.f;
-    // Hotkey-tuned values persist to UserProfile.xml two seconds after the last change (the legacy wrapper's
-    // debounce), so a game that is killed or crashes keeps them too.
-    static DWORD s_dirtySince = 0;
-    if (s_dirtySince && GetTickCount() - s_dirtySince > 2000)
+    // camera-relative positions. None where sep is none.
+    const float eye = (now.StereoActive && p && conv != 0.f) ? p->StereoBase * gInfo.SeparationScale * Vk().VKSeparationScale : 0.f;
+    // DX11's PersistSettings: a changed input is written to UserProfile.xml five seconds after its last change, so a
+    // game that is killed or crashes keeps it too.
+    static DataInput s_saved = now;
+    static ULONGLONG s_writeAt = 0;
+    const ULONGLONG tick = GetTickCount64();
+    if (s_saved.IsChanged(now))
     {
-        s_dirtySince = 0;
-        WriteInputData(&gInfo.Input);
+        s_saved = now;
+        s_writeAt = tick + 5000;
+    }
+    else if (s_writeAt && tick >= s_writeAt)
+    {
+        s_writeAt = 0;
+        WriteInputData(&s_saved);
         Log("StereoParams: saved StereoBase=%.6f One_div_ZPS=%.6f to UserProfile.xml\n", p ? p->StereoBase : 0.f, p ? p->One_div_ZPS : 0.f);
     }
     if (sep == d->lastSep && conv == d->lastConv && eye == d->lastEye) return;
-    if (d->frames) s_dirtySince = GetTickCount() | 1;   // not the initial load
     d->lastSep = sep;
     d->lastConv = conv;
     d->lastEye = eye;
     // VKNearClamp: everything nearer than wMin (a fraction of conv) gets wMin's parallax, so a first-person weapon
-    // centimetres from the eye stops diverging while the world is untouched.
-    const float wMin = (Vk().VKNearClamp > 0.f) ? Vk().VKNearClamp * conv : 0.f;
+    // centimetres from the eye stops diverging while the world is untouched. A convergence behind the eye has none.
+    const float wMin = (Vk().VKNearClamp > 0.f && conv > 0.f) ? Vk().VKNearClamp * conv : 0.f;
     float* left = d->stereoMapped;
     float* right = (float*)((char*)d->stereoMapped + d->stereoStride);
     float* rightNoShift = (float*)((char*)d->stereoMapped + d->stereoStride * 2);
@@ -251,7 +262,7 @@ void StereoParamsUpdate(DeviceData* d)
         memcpy((char*)d->stereoMapped + d->stereoStride * (4 + 2 * i), rightNoShift, 5 * sizeof(float));
     }
     Log("StereoParams: sep=%.6f conv=%.4f wMin=%.4f eye=%.4f (eyeShift=%.6f scale=%.3f active=%d)\n",
-        sep, conv, wMin, eye, wiz3D_GetEffectiveEyeShift(), Vk().VKSeparationScale, (int)gInfo.Input.StereoActive);
+        sep, conv, wMin, eye, eyeShift, Vk().VKSeparationScale, (int)now.StereoActive);
 }
 
 }} // namespace wiz3d::vk

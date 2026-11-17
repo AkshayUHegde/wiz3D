@@ -718,13 +718,20 @@ bool PatchReconstructionFS(const uint32_t* code, size_t words, uint32_t stereoSe
             if (volumeConv)
             {
                 // A full-screen pass's ray (w = 1, the left camera's rows): ray*z + eye*right*(1 - z/conv).
-                const uint32_t pC = next++, conv = next++;
+                // z/conv as z*conv / max(conv^2, tiny): conv keeps its sign, and 0 gives 0.
+                const uint32_t pC = next++, conv = next++, c2 = next++, zc = next++;
                 e.Op(spv::Op::OpAccessChain, { tPtrUF, pC, vStereo, cI1 });
                 e.Op(spv::Op::OpLoad, { tFloat, conv, pC });
-                e.Op(spv::Op::OpExtInst, { tFloat, zs, glsl, GLSLstd450FMax, conv, cTiny });
+                e.Op(spv::Op::OpFMul, { tFloat, c2, conv, conv });
+                e.Op(spv::Op::OpExtInst, { tFloat, zs, glsl, GLSLstd450FMax, c2, cTiny });
+                e.Op(spv::Op::OpFMul, { tFloat, zc, zr, conv });
+                e.Op(spv::Op::OpFDiv, { tFloat, q, zc, zs });
             }
-            else e.Op(spv::Op::OpExtInst, { tFloat, zs, glsl, GLSLstd450FMax, w, cTiny });
-            e.Op(spv::Op::OpFDiv, { tFloat, q, zr, zs });
+            else
+            {
+                e.Op(spv::Op::OpExtInst, { tFloat, zs, glsl, GLSLstd450FMax, w, cTiny });
+                e.Op(spv::Op::OpFDiv, { tFloat, q, zr, zs });
+            }
             e.Op(spv::Op::OpFSub, { tFloat, om, cOne, q });
             e.Op(spv::Op::OpFMul, { tFloat, t1, is, eye });
             e.Op(spv::Op::OpFMul, { tFloat, kk, t1, om });
@@ -1307,7 +1314,7 @@ bool PatchViewRayFS(const uint32_t* code, size_t words, uint32_t stereoSet, uint
     types.Op(spv::Op::OpConstant, { tInt, cI1, 1 });
     types.Op(spv::Op::OpConstant, { tInt, cI3, 3 });
     types.Op(spv::Op::OpConstant, { tInt, cIM, projMember });
-    types.Op(spv::Op::OpConstant, { tFloat, cEps, 0x38D1B717u });   // 1e-4
+    types.Op(spv::Op::OpConstant, { tFloat, cEps, 0x322BCC77u });   // 1e-8: the floor under conv^2
     DeclareStereo(types, deco, tFloat, tS, tPtrS, vStereo, tPtrUF, next, stereoSet);
 
     // The moved ray is built right after the ray itself (the entry block: derivatives need uniform control flow).
@@ -1337,7 +1344,7 @@ bool PatchViewRayFS(const uint32_t* code, size_t words, uint32_t stereoSet, uint
         if (rt == rayType.end()) continue;
         const uint32_t ray = i[2], t3 = i[1];
         const uint32_t dRay = next++, U = next++, ux = next++, uw = next++, u = next++, du = next++, pE = next++, eye = next++, pC = next++, conv = next++, cm = next++,
-                       pP = next++, p00 = next++, ep = next++, s = next++, den = next++, kk = next++, off = next++, r2 = next++;
+                       pP = next++, p00 = next++, ep = next++, s = next++, den = next++, kk = next++, off = next++, r2 = next++, c2 = next++, epc = next++;
         Emit e;
         e.Op(spv::Op::OpDPdx, { t3, dRay, ray });
         e.Op(spv::Op::OpLoad, { rt->second, U, vUv });
@@ -1349,11 +1356,14 @@ bool PatchViewRayFS(const uint32_t* code, size_t words, uint32_t stereoSet, uint
         e.Op(spv::Op::OpLoad, { tFloat, eye, pE });
         e.Op(spv::Op::OpAccessChain, { tPtrUF, pC, vStereo, cI1 });
         e.Op(spv::Op::OpLoad, { tFloat, conv, pC });
-        e.Op(spv::Op::OpExtInst, { tFloat, cm, glsl, 40, conv, cEps });   // FMax: conv 0 must not NaN the left eye
+        // eye*P00/conv as eye*P00*conv / max(conv^2, 1e-8): conv keeps its sign, and 0 gives 0, not a NaN.
+        e.Op(spv::Op::OpFMul, { tFloat, c2, conv, conv });
+        e.Op(spv::Op::OpExtInst, { tFloat, cm, glsl, 40, c2, cEps });   // FMax
         e.Op(spv::Op::OpAccessChain, { tPtrUF, pP, vProj, cIM, cI0, cI0 });
         e.Op(spv::Op::OpLoad, { tFloat, p00, pP });
         e.Op(spv::Op::OpFMul, { tFloat, ep, eye, p00 });
-        e.Op(spv::Op::OpFDiv, { tFloat, s, ep, cm });
+        e.Op(spv::Op::OpFMul, { tFloat, epc, ep, conv });
+        e.Op(spv::Op::OpFDiv, { tFloat, s, epc, cm });
         e.Op(spv::Op::OpFAdd, { tFloat, den, du, du });
         e.Op(spv::Op::OpFDiv, { tFloat, kk, s, den });
         e.Op(spv::Op::OpVectorTimesScalar, { t3, off, dRay, kk });
@@ -1436,7 +1446,7 @@ bool PatchScreenRayPositionFS(const uint32_t* code, size_t words, uint32_t stere
     types.Op(spv::Op::OpConstant, { tInt, cI1, 1 });
     types.Op(spv::Op::OpConstant, { tInt, cI2, 2 });
     types.Op(spv::Op::OpConstant, { tInt, cI3, 3 });
-    types.Op(spv::Op::OpConstant, { tFloat, cEps, 0x38D1B717u });    // 1e-4: conv 0 must not NaN the left eye
+    types.Op(spv::Op::OpConstant, { tFloat, cEps, 0x322BCC77u });    // 1e-8: the floor under conv^2
     types.Op(spv::Op::OpConstant, { tFloat, cTiny, 0x0DA24260u });   // 1e-30: a ray changes ~1e-4 per pixel
     types.Op(spv::Op::OpConstant, { tFloat, cFar, 0x49742400u });    // 1e6: sky depth is inf
     types.Op(spv::Op::OpConstant, { tFloat, cOne, 0x3F800000u });
@@ -1452,11 +1462,11 @@ bool PatchScreenRayPositionFS(const uint32_t* code, size_t words, uint32_t stere
         if (k == firstType) out.insert(out.end(), deco.v.begin(), deco.v.end());
         if (k == firstFunc) out.insert(out.end(), types.v.begin(), types.v.end());
         if (!prodAt.count(k)) { out.insert(out.end(), i, i + in.n); continue; }
-        // p = ray*z -> raw = ray*z; p = raw + ddx(ray)/|ddx(ray)| * eye * (1 - clamp(z, wMin, 1e6)/max(conv, 1e-4))
-        // (eye is 0 in the left eye).
+        // p = ray*z -> raw = ray*z; p = raw + ddx(ray)/|ddx(ray)| * eye * (1 - clamp(z, wMin, 1e6)/conv), eye 0 in the
+        // left eye; z/conv as z*conv / max(conv^2, 1e-8): conv keeps its sign, and 0 gives 0, not a NaN.
         const uint32_t t3 = i[1], p = i[2];
         const uint32_t raw = next++, dR = next++, dd = next++, mx = next++, is = next++, pE = next++, eye = next++, pC = next++, conv = next++, cm = next++,
-                       pM = next++, wMin = next++, zc = next++, q = next++, om = next++, t1 = next++, kk = next++, corr = next++;
+                       pM = next++, wMin = next++, zc = next++, q = next++, om = next++, t1 = next++, kk = next++, corr = next++, c2 = next++, zcc = next++;
         Emit e;
         e.Op(spv::Op::OpVectorTimesScalar, { t3, raw, i[3], i[4] });
         e.Op(spv::Op::OpDPdx, { t3, dR, i[3] });
@@ -1467,11 +1477,13 @@ bool PatchScreenRayPositionFS(const uint32_t* code, size_t words, uint32_t stere
         e.Op(spv::Op::OpLoad, { tFloat, eye, pE });
         e.Op(spv::Op::OpAccessChain, { tPtrUF, pC, vStereo, cI1 });
         e.Op(spv::Op::OpLoad, { tFloat, conv, pC });
-        e.Op(spv::Op::OpExtInst, { tFloat, cm, glsl, 40, conv, cEps });          // FMax
+        e.Op(spv::Op::OpFMul, { tFloat, c2, conv, conv });
+        e.Op(spv::Op::OpExtInst, { tFloat, cm, glsl, 40, c2, cEps });            // FMax
         e.Op(spv::Op::OpAccessChain, { tPtrUF, pM, vStereo, cI2 });
         e.Op(spv::Op::OpLoad, { tFloat, wMin, pM });
         e.Op(spv::Op::OpExtInst, { tFloat, zc, glsl, 43, i[4], wMin, cFar });    // FClamp
-        e.Op(spv::Op::OpFDiv, { tFloat, q, zc, cm });
+        e.Op(spv::Op::OpFMul, { tFloat, zcc, zc, conv });
+        e.Op(spv::Op::OpFDiv, { tFloat, q, zcc, cm });
         e.Op(spv::Op::OpFSub, { tFloat, om, cOne, q });
         e.Op(spv::Op::OpFMul, { tFloat, t1, is, eye });
         e.Op(spv::Op::OpFMul, { tFloat, kk, t1, om });

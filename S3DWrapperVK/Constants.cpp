@@ -546,7 +546,7 @@ static bool ApplyCamera(Constants* c, unsigned char* dst, const float* src, size
         if (i == 0 && !Vk().VKMajorityP11) c->lastP11 = P.m[0];
         else if (i == 0 && consumerMask) ++c->p11Hist[(int)(P.m[0] * 1000.f + 0.5f)];
         Pp[i] = P;
-        Pp[i].m[8] += (convDist > 1e-4f) ? P.m[0] * eyeSep / convDist * s : 0.f;  // b: the w-proportional half
+        Pp[i].m[8] += (convDist != 0.f) ? P.m[0] * eyeSep / convDist * s : 0.f;   // b: the w-proportional half
         Pp[i].m[12] -= P.m[0] * eyeSep;                                           // m41: the clip-space constant
         if (!hasInv) { K[i] = Kinv[i] = M4Identity(); kOk[i] = 0; continue; }
         K[i] = M4Mul(M4Mul(invP, T), Pp[i]);
@@ -685,7 +685,7 @@ static bool ApplyCamera(Constants* c, unsigned char* dst, const float* src, size
         // P11 = 1/|cx|, comes off column z; the constant e*right half is the origin's (K_CamOffset).
         case K_RayBasis:
         {
-            if (convDist <= 1e-4f) continue;
+            if (convDist == 0.f) continue;
             const size_t bytes = regs * 16;
             float rb[12] = {};
             const bool packed = sl.stride != 16;
@@ -735,7 +735,7 @@ static bool ApplyCamera(Constants* c, unsigned char* dst, const float* src, size
             const float* u = src + sl.reg * 4;
             if (!UnitBasisOk(c, u)) continue;
             float* o = (float*)(dst + sl.reg * 16);
-            if (convDist > 1e-4f) o[16] = u[16] - eyeSep / (convDist * u[3]);
+            if (convDist != 0.f) o[16] = u[16] - eyeSep / (convDist * u[3]);
             for (int i = 0; i < 3; ++i) o[12 + i] = u[12 + i] + eyeSep * u[i];
             ++c->unitPatched;
             rayApplied = true;
@@ -1322,10 +1322,10 @@ void ConstantsSubmit(DeviceData* d, VkQueue queue, uint32_t cbCount, const VkCom
     }
     const unsigned kGiveUpAfter = 256;
     // Separation and convergence are independent here: the eye offset is StereoBase in world units (VKSeparationScale
-    // for games not in metres), the zero-parallax distance 1/One_div_ZPS.
+    // for games not in metres), the zero-parallax distance 1/One_div_ZPS at either sign. No convergence, no offset.
     const CameraPreset* preset = gInfo.Input.GetActivePreset();
-    const float eyeSep = (gInfo.Input.StereoActive && preset) ? preset->StereoBase * Vk().VKSeparationScale : 0.f;
     const float convDist = (preset && preset->One_div_ZPS != 0.f) ? 1.f / preset->One_div_ZPS : 0.f;
+    const float eyeSep = (gInfo.Input.StereoActive && preset && convDist != 0.f) ? preset->StereoBase * gInfo.SeparationScale * Vk().VKSeparationScale : 0.f;
     // A key dies with its preset: a preset change releases the quarantine, as deadKeys stops their ranges being
     // collected at all.
     if (fabsf(eyeSep - c->lastSep) > 1e-6f || fabsf(convDist - c->lastConv) > 1e-3f)

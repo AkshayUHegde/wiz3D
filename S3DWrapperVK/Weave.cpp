@@ -376,11 +376,11 @@ bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, V
     {
         VkImage left = img, right = gInfo.Input.StereoActive ? sib : img;
         if (gInfo.Input.SwapEyes && gInfo.Input.StereoActive) { VkImage t = left; left = right; right = t; }
-        // Same source rect for both eyes: drop the left band the shift uncovered
-        // in the right eye, which is otherwise stale sibling bytes.
-        const int32_t cropL = EdgeCropPx(d->lastSep, W, Vk().VKEdgeCrop);
-        blit.srcOffsets[0] = { cropL, 0, 0 };
-        blit.srcOffsets[1] = { W, H, 1 };
+        // Same source rect for both eyes: drop the band the shift uncovered in the right eye, which is otherwise stale
+        // sibling bytes. Its left edge, or its right edge under a negative convergence.
+        const int32_t crop = EdgeCropPx(d->lastSep, W, Vk().VKEdgeCrop);
+        blit.srcOffsets[0] = { d->lastSep < 0.f ? 0 : crop, 0, 0 };
+        blit.srcOffsets[1] = { d->lastSep < 0.f ? W - crop : W, H, 1 };
         blit.dstOffsets[1] = { W, H, 1 };
         d->CmdBlitImage(cbA, left, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_NEAREST);
         blit.dstOffsets[0] = { W, 0, 0 };

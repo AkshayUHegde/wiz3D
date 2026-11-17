@@ -245,11 +245,11 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         VkImageBlit blit = {};
         blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
         blit.dstSubresource = blit.srcSubresource;
-        // Same source rect for both eyes: drop the left band the shift
-        // uncovered in the right eye, which is otherwise stale sibling bytes.
-        const int32_t cropL = EdgeCropPx(d->lastSep, w, Vk().VKEdgeCrop);
-        blit.srcOffsets[0] = { cropL, 0, 0 };
-        blit.srcOffsets[1] = { w, h, 1 };
+        // Same source rect for both eyes: drop the band the shift uncovered in the right eye, which is otherwise stale
+        // sibling bytes. Its left edge, or its right edge under a negative convergence.
+        const int32_t crop = EdgeCropPx(d->lastSep, w, Vk().VKEdgeCrop);
+        blit.srcOffsets[0] = { d->lastSep < 0.f ? 0 : crop, 0, 0 };
+        blit.srcOffsets[1] = { d->lastSep < 0.f ? w - crop : w, h, 1 };
         blit.dstOffsets[0] = { 0, 0, 0 };
         blit.dstOffsets[1] = { w / 2, h, 1 };
         d->CmdBlitImage(cb, left, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);

@@ -29,9 +29,6 @@
 
 namespace wiz3d { namespace vk {
 
-// Convergence floor: the shift's sep*(w - conv) form needs a positive convergence, so the sign flip is refused.
-static const float kMinOneDivZps = 1e-6f;
-
 // Every instance and physical-device function the layer calls, resolved through the next layer's
 // vkGetInstanceProcAddr.
 #define WIZ3D_VK_INSTANCE_FUNCS(X)               \
@@ -580,8 +577,8 @@ struct PerfCounters
     std::vector<float> frameMs;                          // one per present since the last report
 };
 
-// Pixels cropped off the left of both eyes before compositing: the right eye's far field moves by `sep` NDC
-// (width/2 px each), leaving that much of its left edge undrawn. `mult` is VKEdgeCrop.
+// Pixels cropped off one edge of both eyes before compositing: the right eye's far field moves by `sep` NDC
+// (width/2 px each), leaving that much of one edge undrawn (the right one when sep is negative). `mult` is VKEdgeCrop.
 inline int32_t EdgeCropPx(float sep, int32_t width, float mult)
 {
     if (mult <= 0.f || width <= 0) return 0;

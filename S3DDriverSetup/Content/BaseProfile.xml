@@ -87,8 +87,6 @@
 		<VKDoubleArrayImages Value="0"/>
 		<VKRepointLearnedSets Value="0"/>
 		<VKShadowAtlasByShape Value="0"/>
-		<!-- The SR weave's stages wait for each other on the GPU, so the present no longer waits for the frame to finish -->
-		<VKWeaveGpuSync Value="1"/>
 		<Presets>
 			<!-- The projection gives near = 0.15 and camera coordinates in the
 			     thousands, so the world unit is the metre. Convergence at 5 m
@@ -117,8 +115,6 @@
 		<VKMajorityP11 Value="0"/>
 		<VKChainThroughBitcast Value="0"/>
 		<VKShadowAtlasByShape Value="0"/>
-		<!-- The SR weave's stages wait for each other on the GPU, so the present no longer waits for the frame to finish -->
-		<VKWeaveGpuSync Value="1"/>
 		<!-- Single quads are world geometry here (distant fog, smoke cards) and keep their depth; the HUD is listed below -->
 		<VKSmallDrawUnshift Value="0"/>
 		<!-- At screen depth: the full-screen passes' triangles, and the HUD layer's GUI shaders (text, icons, the tilted
@@ -247,8 +243,6 @@
 		<!-- Bloodborne, Shadow of the Colossus and Uncharted ship the same exe -->
 		<File Name="bb-probe.exe" />
 		<Engine Value="shadPS4"/>
-		<!-- The SR weave's stages wait for each other on the GPU, so the present no longer waits for the frame to finish -->
-		<VKWeaveGpuSync Value="1"/>
 		<!-- Uncharted's sun shadow rebuilds positions from gl_FragCoord and depth: the remap's pixel-ray rule moves them -->
 		<VKFragCoordRays Value="1"/>
 		<!-- Which Bloodborne shaders take each VKFsCameraWindows treatment (S3DWrapperVK\ShadPs4VK.cpp) -->

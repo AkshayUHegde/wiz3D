@@ -566,17 +566,6 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
                 loaded ? "StereoBase is 0" : "no active preset");
             gInfo.Input = savedInput;
         }
-        // A runaway preset saved to UserProfile.xml is reset: One_div_ZPS below the floor or above 2, or StereoBase
-        // outside 0.005-1. Far convergence itself is a real choice and stays.
-        CameraPreset* fix = gInfo.Input.GetActivePreset();
-        if (fix && (!(fix->One_div_ZPS >= kMinOneDivZps && fix->One_div_ZPS <= 2.f) ||
-                    !(fix->StereoBase >= 0.005f && fix->StereoBase <= 1.f)))
-        {
-            Log("Profile: insane preset (StereoBase=%.6f One_div_ZPS=%.6f) reset to 0.16/0.5\n",
-                fix->StereoBase, fix->One_div_ZPS);
-            fix->StereoBase = 0.16f;
-            fix->One_div_ZPS = 0.5f;
-        }
         const CameraPreset* act = gInfo.Input.GetActivePreset();
         Log("Profile: StereoBase=%.6f One_div_ZPS=%.6f eyeShift=%.6f DetectInverseMatrix=%d RTMode=%d DriverDirectory='%S'\n",
             act ? act->StereoBase : 0.f, act ? act->One_div_ZPS : 0.f, wiz3D_GetEffectiveEyeShift(),
