@@ -21,6 +21,62 @@
   finding CRCs. Hit Ctrl+F5 in-game to reload this file without restarting.
 -->
 <Profiles Version="1" xmlns="http://schemas.iz3d.com/baseprofile/2007">
+	<!-- Vulkan (S3DWrapperVK): every VK* element is a layer switch (S3DWrapperVK\ProfileVK.h) or an engine family
+	     (FamilyVK.cpp); games with no profile run the layer's defaults. -->
+	<Profile Name="DOOM (2016)">
+		<File Name="DOOMx64vk.exe" />
+		<!-- Forward-shifted geometry is enough; no inverse-matrix scan. The constants-path refinements stay off. -->
+		<DetectInverseMatrix Value="0"/>
+		<VKServeFallback Value="0"/>
+		<VKValidateInverse Value="0"/>
+		<VKRepointLearnedSets Value="0"/>
+		<VKEqualPassSelfShift Value="0"/>
+		<VKMaskMatrixSpan Value="0"/>
+		<VKDoubleArrayImages Value="0"/>
+		<VKMixedFramebufferMono Value="0"/>
+		<VKMajorityP11 Value="0"/>
+		<VKChainThroughBitcast Value="0"/>
+		<VKShadowAtlasByShape Value="0"/>
+		<!-- The SR weave's stages wait for each other on the GPU, so the present no longer waits for the frame to finish -->
+		<VKWeaveGpuSync Value="1"/>
+		<!-- Single quads are world geometry here (distant fog, smoke cards) and keep their depth; the HUD is listed below -->
+		<VKSmallDrawUnshift Value="0"/>
+		<!-- At screen depth: the full-screen passes' triangles, and the HUD layer's GUI shaders (text, icons, the tilted
+		     health and ammo panels) -->
+		<VKScreenDepth>
+			<Draw VertexShader="0x121000CC"/>
+			<Draw VertexShader="0xBC49CB5C"/>
+			<Draw VertexShader="0x7AF1E4F8"/>
+			<Draw VertexShader="0x7EA9FB90"/>
+			<Draw VertexShader="0x8CBEE084"/>
+			<Draw VertexShader="0x6C4A34DE"/>
+		</VKScreenDepth>
+		<Presets>
+			<!-- A door about two metres away sits at w = 77: convergence at 60 puts a room's near walls at the screen, and
+			     StereoBase 0.36 gives a far-field shift of 0.006 (StereoBase / convergence), as in RDR 2 -->
+			<Preset Index="0">
+				<One_div_ZPS Value="0.016667" />
+				<StereoBase Value="0.360000" />
+			</Preset>
+		</Presets>
+	</Profile>
+	<Profile Name="DOOM Eternal">
+		<File Name="DOOMEternalx64vk.exe" />
+		<!-- idTech 7, as DOOM 2016: the scan stays off, which also keeps the constants split inert, so every stage self-shifts -->
+		<DetectInverseMatrix Value="0"/>
+		<!-- Replays no compute dispatch, so storage-only siblings would be written by nobody -->
+		<VKDoubleStorageImages Value="0"/>
+		<VKShadowAtlasByShape Value="0"/>
+		<!-- As DOOM 2016: small world meshes (debris cards of 3-6 vertices) take the shift; w = 1 quads stay flat -->
+		<VKSmallDrawUnshift Value="0"/>
+		<!-- The weapon's depth hack gives it clip z = 0.18w + 0.073, never below 0.089 (its near plane); the world's is
+		     0.06 at every w. It gets a tenth of the scene's separation and convergence -->
+		<VKViewModel ClipZ="0.065" Scale="0.1"/>
+		<!-- Lights and decals are binned per 32 and 256 pixel tile for the left eye only: the right eye reads them there -->
+		<VKTileListsLeft Value="1"/>
+		<!-- Characters' contact shadows march from the pixel toward a point projected through the left camera -->
+		<VKScreenMarch Value="1"/>
+	</Profile>
 	<Profile Name="Disable driver">
 		<File AppName="iZ3D Control Center" Name="Control Center.exe" />
 		<File AppName="Windows Media Player" Name="wmplayer.exe" />
