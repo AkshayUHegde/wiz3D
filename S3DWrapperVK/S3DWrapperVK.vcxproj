@@ -107,6 +107,7 @@
     <ClCompile Include="KytyFrameGen.cpp" />
     <ClCompile Include="Composite.cpp" />
     <ClCompile Include="OSDRendererVK.cpp" />
+    <ClCompile Include="ScreenshotVK.cpp" />
     <ClCompile Include="ProfileVK.cpp" />
     <ClCompile Include="FamilyVK.cpp" />
     <ClCompile Include="RsxVK.cpp" />

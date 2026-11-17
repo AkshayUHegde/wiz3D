@@ -1008,6 +1008,14 @@ void OsdDraw(DeviceData* d, VkCommandBuffer cb, VkImage dst, VkFormat format, ui
 void OsdDestroySwapchain(DeviceData* d, SwapchainInfo& sc);
 void OsdDestroyDevice(DeviceData* d);
 
+// The DX9/DX11 stereo screenshot, Ctrl+F12 (ScreenshotVK.cpp). Lock held for all of these.
+void ScreenshotTick();                      // once per present: takes the hotkey's request
+bool ScreenshotArmed();                     // a request waits for a present to copy its eyes
+// Both images are w x h and in TRANSFER_SRC_OPTIMAL; right null = one eye; squeezed = left holds both eyes already.
+void ScreenshotCopy(DeviceData* d, VkCommandBuffer cb, VkImage left, VkImage right, VkFormat format, uint32_t w, uint32_t h, bool squeezed);
+void ScreenshotWrite(DeviceData* d, VkQueue queue);   // after the submit holding the copies
+void ScreenshotDestroy(DeviceData* d);
+
 // SR weave through a private D3D11 device and shared textures (Weave.cpp).
 // Lock held for all of these.
 bool WeaveSelected();

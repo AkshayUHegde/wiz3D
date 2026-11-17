@@ -609,6 +609,7 @@ static VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device, const VkAl
         std::lock_guard<std::shared_mutex> g(d->lock);
         for (auto& kv : d->swapchains) { WeaveDestroySwapchain(d, kv.second); CompositeDestroy(d, kv.second); }
         OsdDestroyDevice(d);
+        ScreenshotDestroy(d);
         Log("  swapchain resources released\n");
         WeaveDestroyDevice(d);
         Log("  weaver released\n");

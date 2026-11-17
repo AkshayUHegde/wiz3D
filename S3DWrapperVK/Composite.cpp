@@ -178,11 +178,11 @@ static VkImageMemoryBarrier ImageBarrier(VkImage img, VkImageLayout from, VkImag
 }
 
 // Lock held. A present the composite leaves as it is (frame generation's images, an image with no right eye) still
-// takes the OSD while an element shows: one submit that draws it over the image.
+// takes a screenshot's copy and the OSD while an element shows: one submit that reads the image and draws over it.
 static void PresentOsdOnly(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t family, uint32_t idx,
                            const VkPresentInfoKHR* info, std::vector<VkSemaphore>& outWait)
 {
-    if (idx >= sc.images.size() || !OsdWanted(d) || !EnsureCompositeResources(d, sc, family)) return;
+    if (idx >= sc.images.size() || !(OsdWanted(d) || ScreenshotArmed()) || !EnsureCompositeResources(d, sc, family)) return;
     d->WaitForFences(d->device, 1, &sc.fences[idx], VK_TRUE, UINT64_MAX);
     d->ResetFences(d->device, 1, &sc.fences[idx]);
     VkCommandBuffer cb = sc.cmds[idx];
@@ -190,8 +190,11 @@ static void PresentOsdOnly(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     d->BeginCommandBuffer(cb, &bi);
     const VkImage img = sc.images[idx];
-    VkImageMemoryBarrier b = ImageBarrier(img, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkImageMemoryBarrier b = ImageBarrier(img, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    ScreenshotCopy(d, cb, img, VK_NULL_HANDLE, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height, FgOn());
+    b = ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
     OsdDraw(d, cb, img, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height);
     b = ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0);
     d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
@@ -209,6 +212,7 @@ static void PresentOsdOnly(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint
     { const auto ql = FgQueueLock(); r = d->QueueSubmit(queue, 1, &si, sc.fences[idx]); }
     if (r != VK_SUCCESS) { Log("OSD submit failed %d\n", r); return; }
     outWait.push_back(sc.done[idx]);
+    ScreenshotWrite(d, queue);
 }
 
 void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std::vector<VkSemaphore>& outWait)
@@ -222,6 +226,7 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         if (q != d->queueFamilies.end()) family = q->second;
     }
     OsdTick(d);
+    ScreenshotTick();
     for (uint32_t i = 0; i < info->swapchainCount; ++i)
     {
         auto it = d->swapchains.find(info->pSwapchains[i]);
@@ -279,6 +284,7 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
             ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT),
         };
         d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, mid);
+        ScreenshotCopy(d, cb, sc.scratch, gInfo.Input.StereoActive ? sib : VK_NULL_HANDLE, sc.ci.imageFormat, (uint32_t)w, (uint32_t)h, FgOn());
 
         // Stereo toggle presents the left eye to both sides; SwapEyes crosses them.
         VkImage left = sc.scratch, right = gInfo.Input.StereoActive ? sib : sc.scratch;
@@ -319,6 +325,7 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         { const auto ql = FgQueueLock(); r = d->QueueSubmit(queue, 1, &si, sc.fences[idx]); }
         if (r != VK_SUCCESS) { Log("Composite submit failed %d\n", r); return; }
         outWait.push_back(sc.done[idx]);
+        ScreenshotWrite(d, queue);
     }
 }
 

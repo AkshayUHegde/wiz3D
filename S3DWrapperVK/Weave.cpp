@@ -348,6 +348,7 @@ bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, V
         Barrier(sib, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT),
     };
     d->CmdPipelineBarrier(cbA, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, fg ? 2 : 3, pre);
+    ScreenshotCopy(d, cbA, img, (!fg && gInfo.Input.StereoActive) ? sib : VK_NULL_HANDLE, sc.ci.imageFormat, (uint32_t)W, (uint32_t)H, fg);
     VkImageBlit blit = {};
     blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     blit.dstSubresource = blit.srcSubresource;
@@ -421,6 +422,7 @@ bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, V
     { const auto ql = FgQueueLock(); r = d->QueueSubmit(queue, 1, &si, gpuSync ? VK_NULL_HANDLE : s.fence); }
     if (r != VK_SUCCESS) { Log("Weave: stage A submit failed %d\n", r); s.failed = true; return false; }
     s.sbsInitialised = true;
+    ScreenshotWrite(d, queue);
     if (!gpuSync)
     {
         d->WaitForFences(d->device, 1, &s.fence, VK_TRUE, UINT64_MAX);
