@@ -265,6 +265,7 @@ bool EnsureFrames(DeviceData* d, VkQueue queue)
         ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         ai.commandBufferCount = 1;
         if (d->AllocateCommandBuffers(d->device, &ai, &f.cb) != VK_SUCCESS) return false;
+        StampCommandBuffers(d, &f.cb, 1);
         VkFenceCreateInfo fi = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
         fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         if (d->CreateFence(d->device, &fi, nullptr, &f.fence) != VK_SUCCESS) return false;

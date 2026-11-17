@@ -1159,6 +1159,7 @@ static bool AcquireXfer(DeviceData* d, uint32_t family, VkCommandBuffer* outCb, 
         ai.commandBufferCount = kRing;
         r.cbs.resize(kRing);
         if (d->AllocateCommandBuffers(d->device, &ai, r.cbs.data()) != VK_SUCCESS) { r.cbs.clear(); return false; }
+        StampCommandBuffers(d, r.cbs.data(), kRing);
         r.fences.assign(kRing, VK_NULL_HANDLE);
         VkFenceCreateInfo fi = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
         fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;

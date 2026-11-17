@@ -77,6 +77,8 @@ namespace wiz3d { namespace vk {
     X(BindImageMemory2)                          \
     X(CreateImageView)                           \
     X(DestroyImageView)                          \
+    X(CreateSampler)                             \
+    X(DestroySampler)                            \
     X(CreateFramebuffer)                         \
     X(DestroyFramebuffer)                        \
     X(CreateRenderPass)                          \
@@ -608,6 +610,7 @@ struct DeviceData
     VkPhysicalDevice           physDev = VK_NULL_HANDLE;
     InstanceData*              inst = nullptr;
     PFN_vkGetDeviceProcAddr    nextGDPA = nullptr;
+    PFN_vkSetDeviceLoaderData  setLoaderData = nullptr;   // the loader's, for StampCommandBuffers
     VkPhysicalDeviceProperties props = {};
     VkPhysicalDeviceMemoryProperties memProps = {};
     VkExtent2D                 bbSize = {};        // last created swapchain extent
@@ -617,6 +620,7 @@ struct DeviceData
     unsigned                   swapImages = 0;  // frames in flight cannot exceed this
     // Storage buffers a compute dispatch writes and needs a sibling for (the gate refuses it until then); `lock`.
     std::vector<VkBuffer>      pendingBufferSiblings;
+    struct OsdState*           osd = nullptr;         // the on-screen display (OSDRendererVK.cpp); `lock`
 #define X(name) PFN_vk##name name = nullptr;
     WIZ3D_VK_DEVICE_FUNCS(X)
     WIZ3D_VK_OPTIONAL_DEVICE_FUNCS(X)
@@ -986,8 +990,23 @@ bool ViewSibling(DeviceData* d, VkImageView view, VkImageView* sibling); // lock
 bool ViewOfDoubledImage(DeviceData* d, VkImageView view);              // lock held
 bool RegisterSwapchainImages(DeviceData* d, VkSwapchainKHR sc);
 
+// Command buffers the layer allocates itself take the loader's dispatch data here: a layer below this one finds its
+// device through it, and without it fails on the first command.
+inline void StampCommandBuffers(DeviceData* d, VkCommandBuffer* cbs, uint32_t count)
+{
+    for (uint32_t i = 0; d->setLoaderData && i < count; ++i) d->setLoaderData(d->device, cbs[i]);
+}
+
 void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std::vector<VkSemaphore>& outWait);
 void CompositeDestroy(DeviceData* d, SwapchainInfo& sc);
+
+// The DX9/DX11 on-screen display over the presented image (OSDRendererVK.cpp). Lock held for all of these.
+void OsdTick(DeviceData* d);                // once per present
+bool OsdWanted(DeviceData* d);              // an element is showing
+// dst is w x h and in TRANSFER_DST_OPTIMAL before and after.
+void OsdDraw(DeviceData* d, VkCommandBuffer cb, VkImage dst, VkFormat format, uint32_t w, uint32_t h);
+void OsdDestroySwapchain(DeviceData* d, SwapchainInfo& sc);
+void OsdDestroyDevice(DeviceData* d);
 
 // SR weave through a private D3D11 device and shared textures (Weave.cpp).
 // Lock held for all of these.

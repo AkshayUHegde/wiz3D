@@ -277,6 +277,7 @@ static bool EnsureWeaveState(DeviceData* d, SwapchainInfo& sc)
     ai.commandBufferCount = (uint32_t)sc.images.size();
     s.cmdsB.resize(sc.images.size());
     if (d->AllocateCommandBuffers(d->device, &ai, s.cmdsB.data()) != VK_SUCCESS) return false;
+    StampCommandBuffers(d, s.cmdsB.data(), ai.commandBufferCount);
     VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
     if (d->CreateFence(d->device, &fci, nullptr, &s.fence) != VK_SUCCESS) return false;
     s.failed = false;
@@ -459,6 +460,7 @@ bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, V
     copy.dstSubresource = copy.srcSubresource;
     copy.extent = { (uint32_t)W, (uint32_t)H, 1 };
     d->CmdCopyImage(cbB, s.vkOut, VK_IMAGE_LAYOUT_GENERAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    OsdDraw(d, cbB, img, sc.ci.imageFormat, (uint32_t)W, (uint32_t)H);
     VkImageMemoryBarrier post = Barrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0);
     d->CmdPipelineBarrier(cbB, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &post);
     d->EndCommandBuffer(cbB);

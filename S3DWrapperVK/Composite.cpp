@@ -31,8 +31,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateSwapchainKHR(
 {
     DeviceData* d = FindDevice(device);
     VkSwapchainCreateInfoKHR ci = *pCreateInfo;
-    // The composite blits into the presentable image and copies out of it.
-    if (d->stereoEnabled) ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // The composite blits into the presentable image and copies out of it; the OSD draws into it.
+    if (d->stereoEnabled) ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     VkResult r = d->CreateSwapchainKHR(device, &ci, pAllocator, pSwapchain);
     Log("vkCreateSwapchainKHR: %ux%u format=%d images>=%u usage=0x%x present=%d old=%p -> %d\n",
         pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height, pCreateInfo->imageFormat,
@@ -61,6 +61,7 @@ void CompositeDestroy(DeviceData* d, SwapchainInfo& sc)
 {
     for (VkFence f : sc.fences) if (f) { d->WaitForFences(d->device, 1, &f, VK_TRUE, UINT64_MAX); d->DestroyFence(d->device, f, nullptr); }
     for (VkSemaphore s : sc.done) if (s) d->DestroySemaphore(d->device, s, nullptr);
+    OsdDestroySwapchain(d, sc);
     sc.fences.clear();
     sc.done.clear();
     sc.cmds.clear();   // freed with the pool at device teardown
@@ -128,6 +129,7 @@ static bool EnsureCompositeResources(DeviceData* d, SwapchainInfo& sc, uint32_t 
     ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     ai.commandBufferCount = n;
     if (d->AllocateCommandBuffers(d->device, &ai, sc.cmds.data()) != VK_SUCCESS) { sc.cmds.clear(); return false; }
+    StampCommandBuffers(d, sc.cmds.data(), n);
     for (uint32_t i = 0; i < n; ++i)
     {
         VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
@@ -175,6 +177,40 @@ static VkImageMemoryBarrier ImageBarrier(VkImage img, VkImageLayout from, VkImag
     return b;
 }
 
+// Lock held. A present the composite leaves as it is (frame generation's images, an image with no right eye) still
+// takes the OSD while an element shows: one submit that draws it over the image.
+static void PresentOsdOnly(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t family, uint32_t idx,
+                           const VkPresentInfoKHR* info, std::vector<VkSemaphore>& outWait)
+{
+    if (idx >= sc.images.size() || !OsdWanted(d) || !EnsureCompositeResources(d, sc, family)) return;
+    d->WaitForFences(d->device, 1, &sc.fences[idx], VK_TRUE, UINT64_MAX);
+    d->ResetFences(d->device, 1, &sc.fences[idx]);
+    VkCommandBuffer cb = sc.cmds[idx];
+    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    d->BeginCommandBuffer(cb, &bi);
+    const VkImage img = sc.images[idx];
+    VkImageMemoryBarrier b = ImageBarrier(img, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    OsdDraw(d, cb, img, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height);
+    b = ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0);
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    d->EndCommandBuffer(cb);
+    std::vector<VkPipelineStageFlags> stages(info->waitSemaphoreCount, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    si.waitSemaphoreCount = outWait.empty() ? info->waitSemaphoreCount : 0;   // the first one takes the game's
+    si.pWaitSemaphores = info->pWaitSemaphores;
+    si.pWaitDstStageMask = stages.data();
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores = &sc.done[idx];
+    VkResult r;
+    { const auto ql = FgQueueLock(); r = d->QueueSubmit(queue, 1, &si, sc.fences[idx]); }
+    if (r != VK_SUCCESS) { Log("OSD submit failed %d\n", r); return; }
+    outWait.push_back(sc.done[idx]);
+}
+
 void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std::vector<VkSemaphore>& outWait)
 {
     outWait.clear();
@@ -185,6 +221,7 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         auto q = d->queueFamilies.find(queue);
         if (q != d->queueFamilies.end()) family = q->second;
     }
+    OsdTick(d);
     for (uint32_t i = 0; i < info->swapchainCount; ++i)
     {
         auto it = d->swapchains.find(info->pSwapchains[i]);
@@ -192,14 +229,18 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         SwapchainInfo& sc = it->second;
         const uint32_t idx = info->pImageIndices[i];
         // Frame generation: every image here already holds both eyes; only the weave has more to do.
-        if (FgOn() && !WeaveSelected()) continue;
+        if (FgOn() && !WeaveSelected()) { PresentOsdOnly(d, sc, queue, family, idx, info, outWait); continue; }
         if (idx >= sc.images.size())
         {
             if (FgOn()) { static bool s_once = false; if (!s_once) { s_once = true; Log("[fg] a present of an image the layer never listed: not woven\n"); } }
             continue;
         }
         VkImage img = sc.images[idx], sib = VK_NULL_HANDLE;
-        if (!ImageIsStereo(d, img, &sib)) { if (!FgOn()) continue; sib = img; }
+        if (!ImageIsStereo(d, img, &sib))
+        {
+            if (!FgOn()) { PresentOsdOnly(d, sc, queue, family, idx, info, outWait); continue; }
+            sib = img;
+        }
         if (!EnsureCompositeResources(d, sc, family)) return;
 
         // Weave when the output method asks for it and the interop is up;
@@ -256,6 +297,7 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         blit.dstOffsets[0] = { w / 2, 0, 0 };
         blit.dstOffsets[1] = { w, h, 1 };
         d->CmdBlitImage(cb, right, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        OsdDraw(d, cb, img, sc.ci.imageFormat, (uint32_t)w, (uint32_t)h);
 
         VkImageMemoryBarrier post[2] = {
             ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0),

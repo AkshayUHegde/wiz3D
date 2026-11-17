@@ -456,6 +456,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     PFN_vkGetInstanceProcAddr nextGIPA = link->u.pLayerInfo->pfnNextGetInstanceProcAddr;
     PFN_vkGetDeviceProcAddr   nextGDPA = link->u.pLayerInfo->pfnNextGetDeviceProcAddr;
     link->u.pLayerInfo = link->u.pLayerInfo->pNext;
+    // The loader's callback for command buffers a layer allocates itself (StampCommandBuffers).
+    auto* loaderData = FindLayerLinkInfo<VkLayerDeviceCreateInfo, VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO>(
+        pCreateInfo->pNext, VK_LOADER_DATA_CALLBACK);
 
     auto nextCreate = (PFN_vkCreateDevice)nextGIPA(inst->instance, "vkCreateDevice");
     if (!nextCreate) return VK_ERROR_INITIALIZATION_FAILED;
@@ -517,6 +520,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     }
     d->inst = inst;
     d->nextGDPA = nextGDPA;
+    d->setLoaderData = loaderData ? loaderData->u.pfnSetDeviceLoaderData : nullptr;
     // Promoted functions may only exist under their KHR name on older devices.
 #define X(name) d->name = (PFN_vk##name)nextGDPA(*pDevice, "vk" #name); \
                 if (!d->name) d->name = (PFN_vk##name)nextGDPA(*pDevice, "vk" #name "KHR");
@@ -604,6 +608,7 @@ static VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device, const VkAl
     {
         std::lock_guard<std::shared_mutex> g(d->lock);
         for (auto& kv : d->swapchains) { WeaveDestroySwapchain(d, kv.second); CompositeDestroy(d, kv.second); }
+        OsdDestroyDevice(d);
         Log("  swapchain resources released\n");
         WeaveDestroyDevice(d);
         Log("  weaver released\n");
