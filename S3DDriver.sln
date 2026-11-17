@@ -327,6 +327,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SimulatedRealityWeaveOutput
 		{A9359B0C-631A-4DC3-BC68-2FAB517022DB} = {A9359B0C-631A-4DC3-BC68-2FAB517022DB}
 	EndProjectSection
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "S3DWrapperVK", "S3DWrapperVK\S3DWrapperVK.vcxproj", "{F7A8B9C0-1234-5678-9ABC-DEF012345678}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -1081,6 +1083,15 @@ Global
 		{A1B2C3D4-9999-9999-9999-000000000001}.Release|Win32.Build.0 = Release|Win32
 		{A1B2C3D4-9999-9999-9999-000000000001}.Release|x64.ActiveCfg = Release|x64
 		{A1B2C3D4-9999-9999-9999-000000000001}.Release|x64.Build.0 = Release|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Debug|Win32.ActiveCfg = Debug|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Debug|x64.ActiveCfg = Debug|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Debug|x64.Build.0 = Debug|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Final Release|Win32.ActiveCfg = Final Release|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Final Release|x64.ActiveCfg = Final Release|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Final Release|x64.Build.0 = Final Release|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Release|Win32.ActiveCfg = Release|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Release|x64.ActiveCfg = Release|x64
+		{F7A8B9C0-1234-5678-9ABC-DEF012345678}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

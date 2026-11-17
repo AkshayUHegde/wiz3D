@@ -1,157 +1,157 @@
-/* wiz3D - S3DWrapperVK.dll
- *
- * The Vulkan stereo wrapper. Currently passthrough-only — establishes the
- * InitializeExchangeServer protocol that wiz3D-proxy/vulkan-1/vulkan-1.dll
- * uses to hand off instance creation, but performs no stereo injection yet.
- *
- * Per S3DWrapper12/PLAN.md, this shares almost all logic with S3DWrapper12 —
- * only the proxy DLL entry point and (eventually) the Vulkan implicit-layer
- * manifest differ. The actual stereo work will live in a shared add-on
- * codebase common to DX12 and Vulkan.
- *
- * M0 groundwork. Loader-lock-safe DllMain, lazy init in
- * EnsureWrapperInitialized() — same pattern as the DX12 wrapper.
- */
+/*
+* Project : wiz3D
+* Copyright (C) Akshay Hegde 2026
+*/
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+// S3DWrapperVK.dll: an explicit Vulkan layer (VK_LAYER_wiz3D_stereo.json) that the vulkan-1.dll proxy enables; the
+// hooks live in Layer.cpp. DllMain only opens the log, as in the other wrappers.
+
+#include "Layer.h"
+#include "../S3DAPI/GlobalData.h"
 #include <stdio.h>
 #include <stdarg.h>
-#include <stdint.h>
 
-// ---------------------------------------------------------------------------
-// Local Vulkan types — same minimal subset as the proxy
-// ---------------------------------------------------------------------------
-typedef int      VkResult;
-typedef uint32_t VkU32;
-struct VkInstance_T;
-typedef struct VkInstance_T* VkInstance;
+GlobalInfo& gInfo = _gInfo;
 
-typedef VkResult (__stdcall *PFN_vkCreateInstance)(const void*, const void*, VkInstance*);
-
-// ---------------------------------------------------------------------------
-// Diagnostic log
-// ---------------------------------------------------------------------------
 static HMODULE g_hSelf = nullptr;
+static HANDLE  g_log   = INVALID_HANDLE_VALUE;
+static CRITICAL_SECTION g_logLock;
 
-static void WriteLog(const char* fmt, ...)
+namespace wiz3d { namespace vk {
+
+// What the layer was last doing, so a fault can say whether it happened inside
+// our work or in a call the game made next.
+char g_breadcrumb[160] = "none";
+void Breadcrumb(const char* fmt, ...)
 {
-    wchar_t dir[MAX_PATH] = {};
-    if (g_hSelf)
-    {
-        GetModuleFileNameW(g_hSelf, dir, MAX_PATH);
-        wchar_t* p = wcsrchr(dir, L'\\');
-        if (p) p[1] = L'\0';
-    }
-    if (!dir[0] && !GetTempPathW(MAX_PATH, dir)) return;
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(g_breadcrumb, sizeof(g_breadcrumb), _TRUNCATE, fmt, ap);
+    va_end(ap);
+}
 
-    wchar_t path[MAX_PATH];
-    wcscpy_s(path, dir);
-    wcscat_s(path, L"wiz3D_Logs");
-    CreateDirectoryW(path, NULL);
-    wcscat_s(path, L"\\S3DWrapperVK.log");
-    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    SetFilePointer(h, 0, nullptr, FILE_END);
-
+void Log(const char* fmt, ...)
+{
+    if (g_log == INVALID_HANDLE_VALUE) return;
     char buf[1024];
     va_list ap;
     va_start(ap, fmt);
     int n = _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
     va_end(ap);
-    if (n > 0)
-    {
-        DWORD written;
-        WriteFile(h, buf, (DWORD)n, &written, nullptr);
-    }
-    CloseHandle(h);
+    if (n < 0) n = (int)strlen(buf);   // too long for buf: the part that fits, not nothing
+    if (n <= 0) return;
+    EnterCriticalSection(&g_logLock);
+    DWORD written;
+    WriteFile(g_log, buf, (DWORD)n, &written, nullptr);
+    LeaveCriticalSection(&g_logLock);
 }
 
-// ---------------------------------------------------------------------------
-// Lazy init
-// ---------------------------------------------------------------------------
-static volatile LONG g_bInitialized = 0;
-static HMODULE g_hRealVulkan = nullptr;
-static PFN_vkCreateInstance g_pfnRealCreateInstance = nullptr;
-
-static BOOL EnsureRealVulkanLoaded()
+// A game with its own unhandled-exception filter exits on a fault before Windows records it; a vectored handler
+// runs ahead of that filter, so the fault gets named in the log.
+static PVOID g_veh = nullptr;
+static LONG CALLBACK FaultLogger(EXCEPTION_POINTERS* ep)
 {
-    if (g_pfnRealCreateInstance) return TRUE;
+    const DWORD code = ep->ExceptionRecord->ExceptionCode;
+    // Only real faults; C++ throws and debugger notifications pass through.
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
+        code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_INT_DIVIDE_BY_ZERO &&
+        code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_IN_PAGE_ERROR)
+        return EXCEPTION_CONTINUE_SEARCH;
+    static LONG once = 0;
+    if (InterlockedExchange(&once, 1)) return EXCEPTION_CONTINUE_SEARCH;
 
-    wchar_t sysDir[MAX_PATH];
-    GetSystemDirectoryW(sysDir, MAX_PATH);
-    wchar_t path[MAX_PATH];
-    wcscpy_s(path, sysDir);
-    wcscat_s(path, L"\\vulkan-1.dll");
-
-    g_hRealVulkan = LoadLibraryW(path);
-    if (!g_hRealVulkan)
-    {
-        WriteLog("[wiz3D-VK] FAIL: could not load real vulkan-1.dll (err=%lu)\n", GetLastError());
-        return FALSE;
-    }
-
-    g_pfnRealCreateInstance = (PFN_vkCreateInstance)
-        GetProcAddress(g_hRealVulkan, "vkCreateInstance");
-    if (!g_pfnRealCreateInstance)
-    {
-        WriteLog("[wiz3D-VK] FAIL: real vulkan-1.dll has no vkCreateInstance export\n");
-        return FALSE;
-    }
-    WriteLog("[wiz3D-VK] Real vulkan-1.dll resolved at %p\n", g_pfnRealCreateInstance);
-    return TRUE;
+    void* addr = ep->ExceptionRecord->ExceptionAddress;
+    char module[MAX_PATH] = "?";
+    HMODULE mod = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)addr, &mod) && mod)
+        GetModuleFileNameA(mod, module, MAX_PATH);
+    wiz3d::vk::Log("\n!!!! FAULT code=0x%08X at %p in %s (base %p, +0x%llX)\n",
+                   code, addr, module, (void*)mod,
+                   mod ? (unsigned long long)((char*)addr - (char*)mod) : 0ull);
+    wiz3d::vk::Log("!!!! layer was: %s\n", wiz3d::vk::g_breadcrumb);
+    if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR)
+        wiz3d::vk::Log("!!!! %s address %p\n",
+                       ep->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+                       (void*)ep->ExceptionRecord->ExceptionInformation[1]);
+    return EXCEPTION_CONTINUE_SEARCH;   // let the game's own handler run as before
 }
 
-void EnsureWrapperInitialized()
+}} // namespace wiz3d::vk
+
+static void OpenLog()
 {
-    if (InterlockedCompareExchange(&g_bInitialized, 1, 0) != 0) return;
-    WriteLog("[wiz3D-VK] EnsureWrapperInitialized — passthrough mode\n");
-    EnsureRealVulkanLoaded();
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(g_hSelf, path, MAX_PATH);
+    wchar_t* p = wcsrchr(path, L'\\');
+    if (p) p[1] = L'\0';
+    wcscat_s(path, L"wiz3D_Logs");
+    CreateDirectoryW(path, nullptr);
+    wcscat_s(path, L"\\S3DWrapperVK.log");
+    g_log = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (g_log != INVALID_HANDLE_VALUE) return;
+    // Game folders under Program Files-style ACLs refuse writes.
+    wchar_t local[MAX_PATH] = {};
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH)) return;
+    wcscat_s(local, L"\\wiz3D");
+    CreateDirectoryW(local, nullptr);
+    wcscat_s(local, L"\\S3DWrapperVK.log");
+    g_log = CreateFileW(local, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 }
 
-// ---------------------------------------------------------------------------
 // Exports
-// ---------------------------------------------------------------------------
 extern "C" __declspec(dllexport) DWORD WINAPI InitializeExchangeServer()
 {
-    EnsureWrapperInitialized();
+    wiz3d::vk::Log("InitializeExchangeServer (proxy probe)\n");
     return 0;
 }
 
-extern "C" __declspec(dllexport) VkResult __stdcall vkCreateInstance(
-    const void* pCreateInfo, const void* pAllocator, VkInstance* pInstance)
+// Loader interface v2: the loader asks for our proc-addr functions through the
+// entry point named in the manifest instead of fixed exports.
+extern "C" __declspec(dllexport) VkResult VKAPI_CALL wiz3D_NegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct)
 {
-    EnsureWrapperInitialized();
-    if (!g_pfnRealCreateInstance) return -1;  // VK_ERROR_INITIALIZATION_FAILED
-
-    VkResult r = g_pfnRealCreateInstance(pCreateInfo, pAllocator, pInstance);
-    WriteLog("[wiz3D-VK] vkCreateInstance (passthrough) -> %d\n", r);
-    // TODO: when stereo work begins, install our pfnGetInstanceProcAddr
-    // chain here to intercept vkCreateDevice / vkCreateSwapchainKHR / etc.
-    return r;
+    if (!pVersionStruct || pVersionStruct->sType != LAYER_NEGOTIATE_INTERFACE_STRUCT)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    if (pVersionStruct->loaderLayerInterfaceVersion < 2)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    pVersionStruct->loaderLayerInterfaceVersion = 2;
+    pVersionStruct->pfnGetInstanceProcAddr = &wiz3d::vk::LayerGetInstanceProcAddr;
+    pVersionStruct->pfnGetDeviceProcAddr   = &wiz3d::vk::LayerGetDeviceProcAddr;
+    pVersionStruct->pfnGetPhysicalDeviceProcAddr = nullptr;
+    wiz3d::vk::Log("Loader negotiated layer interface v2\n");
+    return VK_SUCCESS;
 }
 
-// ---------------------------------------------------------------------------
-// DllMain
-// ---------------------------------------------------------------------------
+extern "C" __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char* pName)
+{
+    return wiz3d::vk::LayerGetInstanceProcAddr(instance, pName);
+}
+
+extern "C" __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, const char* pName)
+{
+    return wiz3d::vk::LayerGetDeviceProcAddr(device, pName);
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
     {
         g_hSelf = hModule;
         DisableThreadLibraryCalls(hModule);
-        WriteLog("[wiz3D-VK] DLL_PROCESS_ATTACH\n");
+        InitializeCriticalSection(&g_logLock);
+        OpenLog();
+        wiz3d::vk::Log("=== S3DWrapperVK attached (pid %lu) ===\n", GetCurrentProcessId());
+        wiz3d::vk::g_veh = AddVectoredExceptionHandler(1, wiz3d::vk::FaultLogger);
     }
     else if (reason == DLL_PROCESS_DETACH)
     {
-        if (g_hRealVulkan)
-        {
-            FreeLibrary(g_hRealVulkan);
-            g_hRealVulkan = nullptr;
-            g_pfnRealCreateInstance = nullptr;
-        }
+        if (wiz3d::vk::g_veh) { RemoveVectoredExceptionHandler(wiz3d::vk::g_veh); wiz3d::vk::g_veh = nullptr; }
+        wiz3d::vk::Log("=== S3DWrapperVK detached ===\n");
+        if (g_log != INVALID_HANDLE_VALUE) CloseHandle(g_log);
+        g_log = INVALID_HANDLE_VALUE;
+        DeleteCriticalSection(&g_logLock);
     }
     return TRUE;
 }

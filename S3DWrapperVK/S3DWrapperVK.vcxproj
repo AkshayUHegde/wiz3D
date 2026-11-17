@@ -1,161 +1,137 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project DefaultTargets="Build" ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Release|Win32">
-      <Configuration>Release</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Final Release|Win32">
+      <Configuration>Final Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Final Release|x64">
+      <Configuration>Final Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
     <ProjectConfiguration Include="Release|x64">
       <Configuration>Release</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug|x64">
-      <Configuration>Debug</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectName>S3DWrapperVK</ProjectName>
     <ProjectGuid>{F7A8B9C0-1234-5678-9ABC-DEF012345678}</ProjectGuid>
     <RootNamespace>S3DWrapperVK</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <Keyword>Win32Proj</Keyword>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+  <PropertyGroup Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
-    <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
-    <CharacterSet>Unicode</CharacterSet>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
-    <WholeProgramOptimization>true</WholeProgramOptimization>
-    <CharacterSet>Unicode</CharacterSet>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
-    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'!='Debug'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Final Release'">true</WholeProgramOptimization>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings" />
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
+  <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="..\FinalRelease.props" Condition="'$(Configuration)'=='Final Release'" />
+    <Import Project="..\Release.props" Condition="'$(Configuration)'=='Release'" />
+    <Import Project="..\Debug.props" Condition="'$(Configuration)'=='Debug'" />
   </ImportGroup>
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\$(Platform)\</OutDir>
-    <IntDir>$(Configuration)\</IntDir>
-    <TargetName>S3DWrapperVK</TargetName>
+  <PropertyGroup>
+    <OutDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)bin\$(Configuration)\$(Platform)\</OutDir>
+    <IntDir Condition="'$(Platform)'=='Win32'">$(Platform)\$(Configuration)\</IntDir>
+    <OutDir Condition="'$(Platform)'=='x64'">$(SolutionDir)bin\$(Configuration)\Win64\</OutDir>
+    <IntDir Condition="'$(Platform)'=='x64'">Win64\$(Configuration)\</IntDir>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\$(Platform)\</OutDir>
-    <IntDir>$(Configuration)\</IntDir>
-    <TargetName>S3DWrapperVK</TargetName>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\Win64\</OutDir>
-    <IntDir>$(Configuration)_x64\</IntDir>
-    <TargetName>S3DWrapperVK</TargetName>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\Win64\</OutDir>
-    <IntDir>$(Configuration)_x64\</IntDir>
-    <TargetName>S3DWrapperVK</TargetName>
-  </PropertyGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+  <ItemDefinitionGroup>
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <Optimization>MaxSpeed</Optimization>
-      <FunctionLevelLinking>true</FunctionLevelLinking>
-      <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;S3DWRAPPERVK_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <PreprocessorDefinitions>_WINDOWS;_USRDLL;S3DWRAPPERVK_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\ThirdPartyLibs\Vulkan-Headers_v1.4.360\include;$(MSBuildThisFileDirectory)..\ThirdPartyLibs\SPIRV-Headers_v1.6.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
+      <OutputFile>$(OutDir)$(ProjectName).dll</OutputFile>
+      <ModuleDefinitionFile>$(ProjectName).def</ModuleDefinitionFile>
       <SubSystem>Windows</SubSystem>
-      <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <OptimizeReferences>true</OptimizeReferences>
-      <ModuleDefinitionFile>S3DWrapperVK.def</ModuleDefinitionFile>
+      <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+      <AdditionalDependencies>Winmm.lib;d3d11.lib;dxgi.lib;delayimp.lib;$(SRLib);$(MinHookLib);%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(MSBuildThisFileDirectory)VK_LAYER_wiz3D_stereo.json" "$(OutDir)"</Command>
+      <Message>Copy layer manifest next to the DLL</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <!-- SR-Lib weave: the SR runtime DLLs must be delay-loaded by the consumer
+       of the static lib (see SR.hpp); names are arch-suffixed. -->
+  <ItemDefinitionGroup Condition="'$(Platform)'=='Win32'">
+    <Link>
+      <DelayLoadDLLs>SimulatedRealityCore32.dll;SimulatedRealityDirectX32.dll;SimulatedRealityOpenGL32.dll;opencv_world343.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;S3DWRAPPERVK_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-    </ClCompile>
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
     <Link>
-      <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <ModuleDefinitionFile>S3DWrapperVK.def</ModuleDefinitionFile>
-    </Link>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <Optimization>MaxSpeed</Optimization>
-      <FunctionLevelLinking>true</FunctionLevelLinking>
-      <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>WIN64;NDEBUG;_WINDOWS;_USRDLL;S3DWRAPPERVK_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-    </ClCompile>
-    <Link>
-      <SubSystem>Windows</SubSystem>
-      <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <OptimizeReferences>true</OptimizeReferences>
-      <ModuleDefinitionFile>S3DWrapperVK.def</ModuleDefinitionFile>
-    </Link>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN64;_DEBUG;_WINDOWS;_USRDLL;S3DWRAPPERVK_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-    </ClCompile>
-    <Link>
-      <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <ModuleDefinitionFile>S3DWrapperVK.def</ModuleDefinitionFile>
+      <DelayLoadDLLs>SimulatedRealityCore.dll;SimulatedRealityDirectX.dll;SimulatedRealityOpenGL.dll;opencv_world343.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Weave.cpp" />
     <ClCompile Include="S3DWrapperVK.cpp" />
+    <ClCompile Include="Layer.cpp" />
+    <ClCompile Include="StereoParams.cpp" />
+    <ClCompile Include="SpirvPatch.cpp" />
+    <ClCompile Include="FsPatch.cpp" />
+    <ClCompile Include="Resources.cpp" />
+    <ClCompile Include="Descriptors.cpp" />
+    <ClCompile Include="Constants.cpp" />
+    <ClCompile Include="NgxVK.cpp" />
+    <ClCompile Include="Pipelines.cpp" />
+    <ClCompile Include="CommandBuffer.cpp" />
+    <ClCompile Include="StereoBuffers.cpp" />
+    <ClCompile Include="CameraWindows.cpp" />
+    <ClCompile Include="ComputeRemap.cpp" />
+    <ClCompile Include="RsxPosition.cpp" />
+    <ClCompile Include="GtsVelocity.cpp" />
+    <ClCompile Include="RageVK.cpp" />
+    <ClCompile Include="KytyTiles.cpp" />
+    <ClCompile Include="KytyFrameGen.cpp" />
+    <ClCompile Include="Composite.cpp" />
+    <ClCompile Include="ProfileVK.cpp" />
+    <ClCompile Include="FamilyVK.cpp" />
+    <ClCompile Include="RsxVK.cpp" />
+    <ClCompile Include="ShadPs4VK.cpp" />
+    <ClCompile Include="ShadGtVK.cpp" />
+    <ClCompile Include="KytyVK.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Layer.h" />
+    <ClInclude Include="FsPatch.h" />
+    <ClInclude Include="ProfileVK.h" />
+    <ClInclude Include="FamilyVK.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="S3DWrapperVK.def" />
+    <None Include="VK_LAYER_wiz3D_stereo.json" />
     <None Include="README.md" />
   </ItemGroup>
-    <ItemDefinitionGroup>
-    <ClCompile>
-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
-    </ClCompile>
-  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\S3DAPI\S3DAPI.vcxproj">
+      <Project>{1a6f9cd3-e915-4c1c-ac06-b87d7b21de35}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\ZLOg\ZLOg.vcxproj">
+      <Project>{c538d122-90db-4d2b-accb-d5b43eabc2cc}</Project>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

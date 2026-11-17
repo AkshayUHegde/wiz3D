@@ -1,4 +1,6 @@
 LIBRARY S3DWrapperVK
 EXPORTS
-    InitializeExchangeServer  @1  PRIVATE
-    vkCreateInstance          @2
+    InitializeExchangeServer                    @1  PRIVATE
+    wiz3D_NegotiateLoaderLayerInterfaceVersion  @2
+    vkGetInstanceProcAddr                       @3
+    vkGetDeviceProcAddr                         @4

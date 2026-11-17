@@ -1,0 +1,14 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_wiz3D_stereo",
+        "type": "GLOBAL",
+        "library_path": ".\\S3DWrapperVK.dll",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "wiz3D stereoscopic 3D layer",
+        "functions": {
+            "vkNegotiateLoaderLayerInterfaceVersion": "wiz3D_NegotiateLoaderLayerInterfaceVersion"
+        }
+    }
+}
