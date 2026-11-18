@@ -13,9 +13,9 @@
 # This script does NOT handle:
 # - The DX12 HD3D variant (D3d12VendorProxy) — no longer deployed; AmdQbProxy
 #   covers DX12 games via the dxgi.dll path.
-# - wiz3D-proxy-d3d12 / wiz3D-proxy-vulkan-1 (d3d12.dll, vulkan-1.dll) — M0a
-#   passthrough plumbing only (see S3DWrapper12/PLAN.md). No stereo wrapper
-#   DLL ships behind them yet, so they're dev-only and not deployed.
+# - wiz3D-proxy-d3d12 (d3d12.dll) — M0a passthrough plumbing only (see
+#   S3DWrapper12/PLAN.md). No stereo wrapper DLL ships behind it yet, so
+#   it's dev-only and not deployed.
 #
 # Usage:
 #   .\bin\deploy_to_releases.ps1                # both Win32 + x64
@@ -207,6 +207,23 @@ foreach ($archName in $archs) {
                -Files @('d3d9.dll', 'd3d10.dll', 'd3d11.dll', 'dxgi.dll')              `
                -Tag   "DX10-11/$archAlias proxies"
 
+    # --- Vulkan (64-bit only) ---
+    # S3DWrapperVK.dll is an explicit Vulkan layer; VK_LAYER_wiz3D_stereo.json
+    # is its manifest. The vulkan-1.dll proxy next to the game's exe points the
+    # loader at this folder. Hosts that reject or bypass a local vulkan-1.dll
+    # (RPCS3, KytyPS5) use the same folder without the proxy, through
+    # VK_ADD_LAYER_PATH + VK_LOADER_LAYERS_ENABLE (see wiki/API-Vulkan.md).
+    # No OutputMethods folder: side-by-side and the SR weave are built in.
+    if ($archAlias -eq '64-bit') {
+        $dst = Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\Vulkan\64-bit'
+        Copy-Files -SrcDir $binDir   -DstDir $dst                                          `
+                   -Files (@('S3DWrapperVK.dll', 'VK_LAYER_wiz3D_stereo.json') + $commonDeps) `
+                   -Tag   'Vulkan/64-bit layer+deps'
+        Copy-Files -SrcDir $proxyBinDir -DstDir $dst                                       `
+                   -Files @('vulkan-1.dll')                                                `
+                   -Tag   'Vulkan/64-bit proxy'
+    }
+
     # --- opengl quad-buffer stereo (both archs) ---
     # Folder name spells out the capability: this wrapper captures native
     # OpenGL quad-buffer stereo (PFD_STEREO / GL_BACK_LEFT/RIGHT) from games
@@ -352,6 +369,9 @@ $profileTargets = @(
 # if ($archs -contains 'x64') {
 #     $profileTargets += "$relRoot\Stereo-Injector\DX12\64-bit"
 # }
+# The Vulkan leaf exists only once the x64 build was deployed above.
+$vulkanLeaf = "$relRoot\Stereo-Injector\Vulkan\64-bit"
+if (Test-Path $vulkanLeaf) { $profileTargets += $vulkanLeaf }
 Spread-File -SrcPath $baseProfileSrc -DstDirs $profileTargets -Tag 'BaseProfile.xml'
 
 # --- wiz3D_Config.xml into every Stereo-Injector leaf ---
@@ -369,6 +389,7 @@ $wiz3dConfigTargets = @(
     "$relRoot\Stereo-Injector\DX10-11\32-bit",
     "$relRoot\Stereo-Injector\DX10-11\64-bit"
 )
+if (Test-Path $vulkanLeaf) { $wiz3dConfigTargets += $vulkanLeaf }
 foreach ($t in $wiz3dConfigTargets) {
     $dst = Join-Path $t 'wiz3D_Config.xml'
     if (Test-Path $t) {

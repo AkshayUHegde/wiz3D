@@ -32,6 +32,7 @@ wiz3D stands on the shoulders of some incredible people and projects. Huge thank
 * **AMD HD3D:** ✅ **Mostly Working!** HD3D games render stereo internally; the proxy enables rendering, captures the quad-buffer output and displays it using modern stereo-3D formats. Currently Half SBS / Half TAB work for about half the games; the rest still need output work. Deus Ex: Human Revolution + Director's Cut fixed in 0.4.0.
 * **OpenGL Quad-Buffer Stereo:** ✅ **Partially Working.** Captures native OpenGL quad-buffer stereo output (`PFD_STEREO` / `GL_BACK_LEFT/RIGHT`) from games that produce it (id Tech 3/4, CAD, flight sims) and displays it in modern stereo formats. 0.4.0 migrates OpenGL to the unified OutputMode naming (SR Weave default where supported). Does not inject stereo into mono OpenGL games, that's a separate project planned for a later release.
 * **DirectX 11:** ✅ **Mostly Working!** _(new in 0.4.0)_ Full DX11 COM-wrap pipeline, devices, deferred contexts, DXGI 1.2+ factories, DXBC analyser with per-shader view-projection capture, draw-time constant patching, HUD at scene depth, stereo scissors, deferred-light + decal + fog + screen-ray cameras, compute/UAV eye duplication, 3D Vision stereo texel for GameWorks ShadowLib. Per-game profiles ship for Battlefield 3, Battlefield Hardline, BioShock Infinite, Far Cry 3, Far Cry 4, Grand Theft Auto V (Legacy), Mass Effect: Andromeda, Mass Effect Legendary Edition, Max Payne 3, Metro Redux, NieR:Automata, Ryse: Son of Rome, Star Wars Jedi: Fallen Order and What Remains of Edith Finch.
+* **Vulkan:** ✅ **Working on the tested titles.** An explicit Vulkan layer (`S3DWrapperVK.dll`) loaded through a `vulkan-1.dll` proxy: every pass is replayed for the right eye, vertex shaders are shifted, camera constants and screen-space shaders are patched per profile, DLSS gets a right-eye twin and DLSS Frame Generation carries both eyes in one image. Output is SR Weave or Half SBS; the DX9/DX11 on-screen display, hotkeys and stereo screenshot work. Profiles ship for Red Dead Redemption 2, DOOM (2016), DOOM Eternal, Cemu, Ryubing, Lichii, RPCS3, KytyPS5 and eight PS4 ports. Some emulators need a launch script or a settings change: see [the Vulkan page](wiki/API-Vulkan.md).
 * **DirectX 10:** ⚠️ **In Progress.** The DX10 vendor proxy was revived for 0.4.0 (SR stub + Win11 SDK fix) and builds again, but the DX10 analyser coverage is minimal, DX10 inherits DX11 scaffolding but no per-game profiles currently work. Testing DX10 titles is one of the biggest open contribution areas.
 * **DirectX 9:** ✅ **Mostly Working!** `d3d9.dll` proxy loader works. Left 4 Dead 2 and many others run in full stereo 3D; profile system loads shader fixes and stereo settings for every originally-supported iZ3D game. Modern OSD + laser-sight crosshair ported from DX11 in 0.4.0.
 * **DirectX 8:** ✅ **Partially Working.** Wrapper that converts DX8 to use the DX9 stereoisation path. Known-good on a handful of titles, needs broader coverage.
@@ -141,6 +142,31 @@ Games that render stereoscopic 3D themselves and display that via 3D Vision's 'D
 | Vomitoreum | `OpenGL-Quad-Buffer-Stereo/32-bit` | Untested | Check [3D/VR Compatibility Database](https://airtable.com/appByPZJsOQSVGDID/shrAfMuGs1IOIEpRT?uMgeK=recp8rMIlwRlwDYzX) to enable the game's native stereo 3D. |
 | World of Padman | `OpenGL-Quad-Buffer-Stereo/32-bit` | Untested | Check [3D/VR Compatibility Database](https://airtable.com/appByPZJsOQSVGDID/shrAfMuGs1IOIEpRT?uMgeK=rec5wq4OBzfTqGSJq) to enable the game's native stereo 3D. |
 | Wrath: Aeon of Ruin | `OpenGL-Quad-Buffer-Stereo/32-bit` | Untested | Check [3D/VR Compatibility Database](https://airtable.com/appByPZJsOQSVGDID/shrAfMuGs1IOIEpRT?uMgeK=recVVJQxrjuGFbsxA) to enable the game's native stereo 3D. |
+
+### Vulkan Games
+
+64-bit only. Copy the contents of `Stereo-Injector/Vulkan/64-bit` next to the `.exe` that runs the game (for ports started by a launcher, that is the `bin` or `out` subfolder). Do not run the game as administrator. Tested versions, launch scripts, the Demon's Souls 3D shader precompile and the DLSS / Frame Generation / FSR table are on [the Vulkan page](wiki/API-Vulkan.md).
+
+| Game | Host | Install Path | Testing | Notes |
+|------|------|--------------|---------|-------|
+| Red Dead Redemption 2 | PC | `Stereo-Injector/Vulkan/64-bit` | ✅ Working | Graphics API: Vulkan. DLSS works. |
+| DOOM (2016) | PC | `Stereo-Injector/Vulkan/64-bit` | ✅ Working | Graphics API: Vulkan (`DOOMx64vk.exe`). |
+| DOOM Eternal | PC | `Stereo-Injector/Vulkan/64-bit` | ✅ Working | Turn "Present From Compute" off in the video settings. DLSS works. |
+| The Legend of Zelda: Breath of the Wild | Cemu 1.22.7 | `Stereo-Injector/Vulkan/64-bit` | ✅ Working | Graphics API: Vulkan. |
+| The Legend of Zelda: Tears of the Kingdom | Ryubing 1.3.3 | `Stereo-Injector/Vulkan/64-bit` | ✅ Working |  |
+| Ocarina of Time Remake | Lichii build-316 | `Stereo-Injector/Vulkan/64-bit` | ✅ Working |  |
+| Donkey Kong Bananza | Lichii build-316 | `Stereo-Injector/Vulkan/64-bit` | ⚠️ Partial | Artefacts in the tutorial video windows. |
+| Mario Kart World | Lichii build-316 | `Stereo-Injector/Vulkan/64-bit` | ⚠️ Partial | The shadows under the vehicles are wrong. |
+| Gran Turismo 5 / 6, Killzone 2 / 3 / HD | RPCS3 0.0.43 | `Stereo-Injector/Vulkan/64-bit` without `vulkan-1.dll` | ✅ Working | RPCS3 refuses the proxy: start it with the script on the Vulkan page. |
+| Demon's Souls | KytyPS5 v20261102 | `Stereo-Injector/Vulkan/64-bit` without `vulkan-1.dll`, in `<KytyPS5>\wiz3D` | ✅ Working | Needs the `launch.json` lines and the 3D shader precompile on the Vulkan page. DLSS and Frame Generation work. |
+| Bloodborne | bbport (PS4 port) | `Stereo-Injector/Vulkan/64-bit` in `bin` | ✅ Working | DLSS works. |
+| Shadow of the Colossus | SotC-PC 0.75 (PS4 port) | `Stereo-Injector/Vulkan/64-bit` in `bin` | ✅ Working | Turn the atmospheric fog effect off in the launcher. DLSS and Frame Generation work. |
+| Uncharted: The Nathan Drake Collection | uncharted-windows (PS4 port) | `Stereo-Injector/Vulkan/64-bit` in `bin` | ✅ Working | FSR works. |
+| The Last Guardian | tlg_pc v2026.11.14 (PS4 port) | `Stereo-Injector/Vulkan/64-bit` in `out` | ✅ Working | Replaces the port's own `vulkan-1.dll`: keep a backup. FSR works. |
+| inFAMOUS Second Son | PS4 port v2026.10.28 | `Stereo-Injector/Vulkan/64-bit` in `out` | ✅ Working with FSR | Replaces the port's own `vulkan-1.dll`. No stereo with the DLSS upscaler. |
+| God of War III | SpartanPort (PS4 port) | `Stereo-Injector/Vulkan/64-bit` in `bin` | ✅ Working | `settings.json`: `"pipeline_binary_cache": false`. |
+| DriveClub | driveclub-recomp 0.2.5 (PS4 port) | `Stereo-Injector/Vulkan/64-bit` in `runtime` | ✅ Working | DLAA works. |
+| Gran Turismo Sport | RyGT prerelease 2026-10-29 | `Stereo-Injector/Vulkan/64-bit` | ✅ Working |  |
 
 ### DirectX 10 / 11 Games
 

@@ -18,8 +18,11 @@ driver patterns; pick the one that matches the game you're setting up.
     DX10-11/32-bit|64-bit/     DirectX 10 / 11 games. Full COM-wrap +
                                DXBC analyser; per-game profiles ship in
                                BaseProfile.xml for 15+ engines.
+    Vulkan/64-bit/             Vulkan games, emulators and PS4 ports.
+                               A Vulkan layer plus a vulkan-1.dll proxy;
+                               output is SR Weave or Half SBS.
 
-  HD3D/32-bit|64-bit/          AMD HD3D vendor path. For games that
+  HD3D/32-bit|64-bit/         AMD HD3D vendor path. For games that
                                ship with AMD's HD3D stereo support.
                                Routes per-eye output through wiz3D's
                                software compositor at Present time.
@@ -51,6 +54,37 @@ driver patterns; pick the one that matches the game you're setting up.
    scheme is unified across every wiz3D path. SR Weave is the default on
    LeiaSR panels.
 4. Launch the game normally. The proxy loads automatically.
+
+
+## Stereo-Injector Setup (Vulkan)
+
+1. Copy the ENTIRE contents of Stereo-Injector\Vulkan\64-bit\ next to the
+   .exe that runs the game. For ports started by a launcher that is the
+   bin\ or out\ subfolder, not the launcher's folder.
+2. Do NOT run the game as administrator: the Vulkan loader then ignores
+   the wiz3D layer and the game runs in 2D.
+3. If the folder already holds a vulkan-1.dll (The Last Guardian, inFAMOUS
+   Second Son), rename it as a backup and use the wiz3D one.
+4. Hosts that refuse or bypass a local vulkan-1.dll take every file EXCEPT
+   vulkan-1.dll, and are started with two environment variables set:
+     VK_ADD_LAYER_PATH=<folder holding VK_LAYER_wiz3D_stereo.json>
+     VK_LOADER_LAYERS_ENABLE=VK_LAYER_wiz3D_stereo
+   - RPCS3: files in RPCS3's folder, started through a small .cmd script.
+   - KytyPS5 (Demon's Souls): files in <KytyPS5>\wiz3D\, variables in
+     launch.json, and a 3D shader precompile run once.
+   The scripts, the launch.json lines and the precompile steps are in
+   wiki\API-Vulkan.md (https://github.com/Stereopticon-Org/wiz3D/wiki).
+5. Turn pipeline binary caches off where the host has one (God of War III:
+   "pipeline_binary_cache": false in settings.json), or shader fixes are
+   ignored. DOOM Eternal: turn "Present From Compute" off. Shadow of the
+   Colossus: turn the atmospheric fog effect off in the launcher.
+6. (Optional) wiz3D_Config.xml: OutputMode SRWeave or HalfSBS. Other modes
+   are shown as Half SBS under Vulkan.
+7. Hotkeys are the DX9 / DX11 ones: Numpad * toggles stereo, Numpad +/-
+   separation, Shift + Numpad +/- screen plane, Ctrl+F12 stereo screenshot,
+   Shift+F1 the hotkey list.
+8. The log is wiz3D_Logs\S3DWrapperVK.log in that folder, or
+   %LOCALAPPDATA%\wiz3D\ when the game folder is read-only.
 
 
 ## HD3D Setup

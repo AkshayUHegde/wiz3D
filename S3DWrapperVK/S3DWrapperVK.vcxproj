@@ -104,7 +104,7 @@
     <ClCompile Include="GtsVelocity.cpp" />
     <ClCompile Include="RageVK.cpp" />
     <ClCompile Include="KytyTiles.cpp" />
-    <ClCompile Include="KytyFrameGen.cpp" />
+    <ClCompile Include="FrameGenVK.cpp" />
     <ClCompile Include="Composite.cpp" />
     <ClCompile Include="OSDRendererVK.cpp" />
     <ClCompile Include="ScreenshotVK.cpp" />
@@ -120,6 +120,9 @@
     <ClInclude Include="FsPatch.h" />
     <ClInclude Include="ProfileVK.h" />
     <ClInclude Include="FamilyVK.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="app.rc" />
   </ItemGroup>
   <ItemGroup>
     <None Include="S3DWrapperVK.def" />

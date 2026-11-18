@@ -4,7 +4,7 @@
 */
 
 // KytyPS5 (Demon's Souls) on Vulkan, the <VKKyty> family: buffer trips, the fused MAD, the tile lists (KytyTiles.cpp),
-// DLSS-G (KytyFrameGen.cpp), its material masks and the compute shaders the remap leaves alone, from <VKKyty> children.
+// its material masks and the compute shaders the remap leaves alone, from <VKKyty> children.
 
 #include "Layer.h"
 #include "FamilyVK.h"

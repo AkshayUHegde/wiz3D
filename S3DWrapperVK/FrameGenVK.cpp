@@ -3,8 +3,8 @@
 * Copyright (C) Akshay Hegde 2026
 */
 
-// KytyPS5 (Demon's Souls) with DLSS-G over Streamline, which sits above the layer: at its present the fake swapchain
-// image becomes two squeezed views (depth and motion too), so one generated image carries both eyes (KYTY_FRAMEGEN).
+// DLSS-G over Streamline, which sits above the layer (VKFrameGen): at its present the fake swapchain image becomes two
+// squeezed views (depth and motion too), so one generated image carries both eyes. KytyPS5 sets KYTY_FRAMEGEN.
 
 #include "Layer.h"
 #include "FamilyVK.h"

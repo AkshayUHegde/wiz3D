@@ -475,7 +475,7 @@ void UpdateSlots(OsdState* o, bool wantStatus, bool wantFps, bool wantHelp)
             L"Shift + Numpad +/-",   L"Screen Plane (where zero-parallax depth sits)",
             L"Numpad 7 / 8 / 9",     L"Preset Low / Default / Strong",
             L"Ctrl + F12",           L"Stereo screenshot",
-            L"Shift + F1",          L"Toggle this hotkey list",
+            L"Shift + F1",           L"Toggle this hotkey list",
             L"Ctrl + F1",            L"Toggle OSD strip + FPS",
             L"Ctrl + F5",            L"Reset preset values",
         };

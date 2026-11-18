@@ -11,6 +11,7 @@
 #include "../S3DAPI/GlobalData.h"
 #include "../S3DAPI/ReadData.h"
 #include "../S3DAPI/KeyboardHook.h"
+#include "../Shared/OutputModeNames.h"
 #include <string.h>
 #include <algorithm>
 
@@ -586,6 +587,12 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     if (d->stereoEnabled) TilesInit(d);
     if (d->stereoEnabled) FgInit(d);
     if (d->stereoEnabled) InstallNgxWatcherVK();
+    // The layer presents the SR weave or half side-by-side: any other OutputMode gets side-by-side, named in this row.
+    if (d->stereoEnabled && !WeaveSelected() && gInfo.OutputMode != OUTMODE_HALF_SIDE_BY_SIDE)
+    {
+        const char* mode = OutputModeToCanonical((int)gInfo.OutputMode);
+        Log("OutputMode %d (%s) is not one the Vulkan layer presents: half side-by-side is used\n", (int)gInfo.OutputMode, mode ? mode : "unknown");
+    }
     if (d->stereoEnabled)
         Log("Stereo ENABLED, DetectInverseMatrix=%d\n", (int)gInfo.DetectInverseMatrix);
     else

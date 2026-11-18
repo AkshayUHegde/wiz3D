@@ -972,7 +972,7 @@ void TileForgetBuffer(DeviceData* d, VkBuffer buffer, VkDeviceSize size);
 bool TileChainShader(DeviceData* d, uint32_t crc);
 bool TileRightBlock(DeviceData* d, VkPipeline pipeline, uint32_t crc, uint32_t* pc, uint32_t dwords);
 bool TileRightArgs(DeviceData* d, VkBuffer buf, VkDeviceSize off, VkBuffer* out, VkDeviceSize* outOff);
-// KytyFrameGen.cpp: DLSS-G over two squeezed views. t_foreignCalls: inside a Streamline call recording into the
+// FrameGenVK.cpp: DLSS-G over two squeezed views. t_foreignCalls: inside a Streamline call recording into the
 // game's command buffer.
 extern thread_local int t_foreignCalls;
 void FgInit(DeviceData* d);

@@ -64,7 +64,7 @@ struct VkSwitches
     float VKUnitWEpsilon          = 0.001f; // VKSkipUnitW's band around w = 1
     bool  VKStereoDLSS            = true;   // a DLSS-SR feature twin per eye at the NGX boundary (NgxVK.cpp)
     bool  VKWeaveGpuSync          = true;   // the SR weave's stages wait on the GPU (a shared D3D11 fence), not the CPU
-    bool  VKFrameGen              = true;   // DLSS-G over Streamline: both eyes squeezed into one image (KytyFrameGen)
+    bool  VKFrameGen              = true;   // DLSS-G over Streamline: both eyes squeezed into one image (FrameGenVK.cpp)
     bool  VKShadowAtlasByShape    = true;   // shadow atlases are picked by shape, not area, and stay mono
     int   VKDumpModifiedShaders   = 0;      // 1: dump original and patched SPIR-V; 2: also the twins
 };

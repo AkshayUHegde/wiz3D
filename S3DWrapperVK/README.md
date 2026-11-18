@@ -25,8 +25,15 @@ Hosts that load the layer themselves (emulators) set those two variables instead
   (`CommandBuffer.cpp`, `Descriptors.cpp`). Dispatches touching doubled images are doubled in place; copies, clears and
   barriers are mirrored.
 - **Present** blits both eyes side by side into the presentable image, or hands them to the SR weaver through a private
-  D3D11 device and shared textures (`Composite.cpp`, `Weave.cpp`).
+  D3D11 device and shared textures (`Composite.cpp`, `Weave.cpp`). These are the two output modes; any other
+  `OutputMode` is presented side by side and named in the log.
+- **On-screen display and screenshot**: the DX9/DX11 status strip, FPS counter and hotkey list are drawn over the final
+  image (`OSDRendererVK.cpp`), and Ctrl+F12 writes both eyes at full size, taken before the composite
+  (`ScreenshotVK.cpp`).
+- **Separation and convergence** follow DX11: `sep = StereoBase * One_div_ZPS` scaled by the camera's P11, and
+  `conv = 1 / One_div_ZPS` at either sign (`StereoParams.cpp`). Changed inputs are saved five seconds after the last change.
 - **DLSS-SR** gets a right-eye twin feature with its own history at the NGX exports (`NgxVK.cpp`).
+- **DLSS-G** over Streamline gets both eyes squeezed into one image, depth and motion too (`FrameGenVK.cpp`).
 
 ### The constants path (`DetectInverseMatrix`)
 
