@@ -159,11 +159,15 @@ static VkResult CreateShaderModuleImpl(
     SpirvRules rules;
     rules.screenUv = ((Vk().VKPushDeltas && Vk().VKComputeRemap >= 3) || Vk().VKScreenUvVaryings) && !ComputeRemapKeepsScreenUv(Crc32(pCreateInfo->pCode, pCreateInfo->codeSize));
     const bool screenUv = rules.screenUv;
+    rules.depthSprites = Vk().VKDepthSprites;
     SpirvCounts counts;
     const bool vsPatched = PatchSpirv(pCreateInfo->pCode, words, rules, patched, &reason, &model, &counts);
     const unsigned posVaryings = counts.posVaryings, prevClip = counts.prevClip, ndcVaryings = counts.ndcVaryings, screenUvMoved = counts.screenUvMoved;
     if (vsPatched)
     {
+        if (counts.depthSpriteInputs)
+            Log("[sprite] VS %08X: a w == 1 sprite moves by its own depth's parallax (%u input(s))\n", Crc32(pCreateInfo->pCode, pCreateInfo->codeSize),
+                counts.depthSpriteInputs);
         if (screenUvMoved && Vk().VKScreenUvVaryings)
             Log("[screenuv] VS %08X: %u screen-uv products take x after the shift\n", Crc32(pCreateInfo->pCode, pCreateInfo->codeSize), screenUvMoved);
         if (posVaryings) { std::lock_guard<std::shared_mutex> g(d->lock); ++d->statPosVaryingShaders; }
@@ -512,6 +516,7 @@ static VkResult CreateShaderModuleImpl(
             rules.uvAffine = level >= 4;
             rules.froxelLookups = Vk().VKFroxelLookups;
             rules.fragRays = level >= 3 && Vk().VKFragCoordRays;
+            rules.cornerRays = Vk().VKFroxelCornerRays;
             ComputeRemapCounts c;
             bool remapped = PatchComputeRemap(src, srcWords, kStereoSet, rules, ct, c);
             // (1/FragCoord.w) * (v * FragCoord.w) is v only where w is 1: that twin serves unit-w pipelines alone.

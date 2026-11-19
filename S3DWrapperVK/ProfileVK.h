@@ -60,6 +60,8 @@ struct VkSwitches
     bool  VKScreenUvVaryings      = false;  // screen-uv varyings fma(x * (1/w), k, c) shift with gl_Position
     bool  VKFroxelLookups         = false;  // FS froxel-volume lookups read at the right eye's uv
     bool  VKFragCoordRays         = false;  // uv-ray rule for the pixel's own uv (needs VKComputeRemap 4)
+    bool  VKFroxelCornerRays      = false;  // volume builders placing cells by corner rays: the right run's own frustum
+    bool  VKDepthSprites          = false;  // w == 1 sprites tested against depth move by their own depth's parallax
     bool  VKOcclusionBothEyes     = false;  // occlusion queries count both eyes through twin pools
     float VKUnitWEpsilon          = 0.001f; // VKSkipUnitW's band around w = 1
     bool  VKStereoDLSS            = true;   // a DLSS-SR feature twin per eye at the NGX boundary (NgxVK.cpp)

@@ -26,7 +26,9 @@ Hosts that load the layer themselves (emulators) set those two variables instead
   barriers are mirrored.
 - **Present** blits both eyes side by side into the presentable image, or hands them to the SR weaver through a private
   D3D11 device and shared textures (`Composite.cpp`, `Weave.cpp`). These are the two output modes; any other
-  `OutputMode` is presented side by side and named in the log.
+  `OutputMode` is presented side by side and named in the log. A game presenting from a queue family with no
+  graphics gets each eye copied for the weave; side by side and the on-screen display need blits and draws and are
+  left out there.
 - **On-screen display and screenshot**: the DX9/DX11 status strip, FPS counter and hotkey list are drawn over the final
   image (`OSDRendererVK.cpp`), and Ctrl+F12 writes both eyes at full size, taken before the composite
   (`ScreenshotVK.cpp`).

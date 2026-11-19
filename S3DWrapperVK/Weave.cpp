@@ -15,6 +15,32 @@
 
 namespace wiz3d { namespace vk {
 
+// Packaged (Xbox app) games do not search PATH for delay-loads: the SR runtime is loaded from its PATH entry.
+static void PreloadSrRuntime()
+{
+    static const wchar_t* const kDlls[] = { L"SimulatedRealityCore.dll", L"SimulatedRealityDirectX.dll", L"opencv_world343.dll" };
+    if (LoadLibraryW(kDlls[0])) return;
+    static wchar_t path[32768];
+    const DWORD n = GetEnvironmentVariableW(L"PATH", path, _countof(path));
+    if (!n || n >= _countof(path)) { Log("Weave: SR runtime pre-load: PATH unreadable\n"); return; }
+    wchar_t* ctx = nullptr;
+    for (wchar_t* dir = wcstok_s(path, L";", &ctx); dir; dir = wcstok_s(nullptr, L";", &ctx))
+    {
+        wchar_t full[MAX_PATH];
+        if (!dir[0] || swprintf_s(full, L"%s\\%s", dir, kDlls[0]) < 0 || GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES) continue;
+        int ok = 0;
+        for (const wchar_t* d : kDlls)
+        {
+            swprintf_s(full, L"%s\\%s", dir, d);
+            if (LoadLibraryExW(full, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) ++ok;
+            else Log("Weave: SR runtime pre-load: %ls failed from %ls (err=%lu)\n", d, dir, GetLastError());
+        }
+        Log("Weave: SR runtime pre-load: %d of %d from %ls (default search missed it)\n", ok, (int)_countof(kDlls), dir);
+        return;
+    }
+    Log("Weave: SR runtime pre-load: not on any PATH entry\n");
+}
+
 struct WeaveDevice
 {
     ID3D11Device*        dev = nullptr;
@@ -159,6 +185,7 @@ static bool EnsureWeaveDevice(DeviceData* d, HWND hwnd)
     w.dev->CreateQuery(&qd, &w.evt);
 
     // E_NOINTERFACE when the delay-loaded SR runtime is absent.
+    PreloadSrRuntime();
     hr = SimulatedReality::CreateSRInterfaceDX11(w.ctx, hwnd, &w.sr);
     if (FAILED(hr) || !w.sr) { Log("Weave: CreateSRInterfaceDX11 failed 0x%08lX (hwnd=%p) -- SBS fallback\n", hr, (void*)hwnd); return false; }
     w.failed = false;
@@ -271,18 +298,32 @@ static bool EnsureWeaveState(DeviceData* d, SwapchainInfo& sc)
     w.sr->SetInputTexture(s.sbsSRV);
     w.input = s.sbsSRV;
 
-    VkCommandBufferAllocateInfo ai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-    ai.commandPool = sc.pool;
-    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = (uint32_t)sc.images.size();
-    s.cmdsB.resize(sc.images.size());
-    if (d->AllocateCommandBuffers(d->device, &ai, s.cmdsB.data()) != VK_SUCCESS) return false;
-    StampCommandBuffers(d, s.cmdsB.data(), ai.commandBufferCount);
     VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
     if (d->CreateFence(d->device, &fci, nullptr, &s.fence) != VK_SUCCESS) return false;
     s.failed = false;
     Log("Weave: shared textures ready (%ux%u sbs, %ux%u out, fmt=%d)\n", W * 2, H, W, H, fmt);
     return true;
+}
+
+// Stage C's per-image command buffers, from the swapchain's pool (the present queue's family).
+static bool EnsureWeaveCommands(DeviceData* d, SwapchainInfo& sc, WeaveState& s)
+{
+    if (!s.cmdsB.empty()) return true;
+    VkCommandBufferAllocateInfo ai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+    ai.commandPool = sc.pool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = (uint32_t)sc.images.size();
+    s.cmdsB.resize(sc.images.size());
+    if (d->AllocateCommandBuffers(d->device, &ai, s.cmdsB.data()) != VK_SUCCESS) { s.cmdsB.clear(); return false; }
+    StampCommandBuffers(d, s.cmdsB.data(), ai.commandBufferCount);
+    return true;
+}
+
+void WeaveFreeCommands(DeviceData* d, SwapchainInfo& sc)
+{
+    if (!sc.weave || sc.weave->cmdsB.empty()) return;
+    d->FreeCommandBuffers(d->device, sc.pool, (uint32_t)sc.weave->cmdsB.size(), sc.weave->cmdsB.data());
+    sc.weave->cmdsB.clear();
 }
 
 void WeaveDestroySwapchain(DeviceData* d, SwapchainInfo& sc)
@@ -322,13 +363,16 @@ static VkImageMemoryBarrier Barrier(VkImage img, VkImageLayout from, VkImageLayo
 }
 
 bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, VkImage img, VkImage sib,
-                const VkPresentInfoKHR* info, bool firstSwapchain, VkSemaphore* outDone)
+                const VkPresentInfoKHR* info, bool firstSwapchain, bool graphics, VkSemaphore* outDone)
 {
     if (!d->externalMemoryWin32) return false;
+    // Frame generation's squeezed halves are scaled by blits, which a queue family with no graphics cannot record.
+    if (!graphics && FgOn()) return false;
     if (!EnsureWeaveDevice(d, sc.hwnd)) return false;
     if (!EnsureWeaveState(d, sc)) return false;
     WeaveDevice& w = *d->weave;
     WeaveState& s = *sc.weave;
+    if (!EnsureWeaveCommands(d, sc, s)) return false;
     const int32_t W = (int32_t)sc.ci.imageExtent.width, H = (int32_t)sc.ci.imageExtent.height;
     const bool gpuSync = w.vkFence != VK_NULL_HANDLE;   // VKWeaveGpuSync with its fence shared
 
@@ -384,10 +428,24 @@ bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, V
         blit.srcOffsets[0] = { d->lastSep < 0.f ? 0 : crop, 0, 0 };
         blit.srcOffsets[1] = { d->lastSep < 0.f ? W - crop : W, H, 1 };
         blit.dstOffsets[1] = { W, H, 1 };
-        d->CmdBlitImage(cbA, left, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_NEAREST);
-        blit.dstOffsets[0] = { W, 0, 0 };
-        blit.dstOffsets[1] = { W * 2, H, 1 };
-        d->CmdBlitImage(cbA, right, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_NEAREST);
+        if (graphics)
+        {
+            d->CmdBlitImage(cbA, left, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_NEAREST);
+            blit.dstOffsets[0] = { W, 0, 0 };
+            blit.dstOffsets[1] = { W * 2, H, 1 };
+            d->CmdBlitImage(cbA, right, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_NEAREST);
+        }
+        else
+        {
+            // A compute present queue has no blit: each eye is copied whole, same size and format, without the crop.
+            VkImageCopy c = {};
+            c.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            c.dstSubresource = c.srcSubresource;
+            c.extent = { (uint32_t)W, (uint32_t)H, 1 };
+            d->CmdCopyImage(cbA, left, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+            c.dstOffset = { W, 0, 0 };
+            d->CmdCopyImage(cbA, right, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        }
     }
     VkImageMemoryBarrier midA[2] = {
         Barrier(s.vkSbs, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT),
@@ -462,7 +520,7 @@ bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, V
     copy.dstSubresource = copy.srcSubresource;
     copy.extent = { (uint32_t)W, (uint32_t)H, 1 };
     d->CmdCopyImage(cbB, s.vkOut, VK_IMAGE_LAYOUT_GENERAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-    OsdDraw(d, cbB, img, sc.ci.imageFormat, (uint32_t)W, (uint32_t)H);
+    if (graphics) OsdDraw(d, cbB, img, sc.ci.imageFormat, (uint32_t)W, (uint32_t)H);
     VkImageMemoryBarrier post = Barrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0);
     d->CmdPipelineBarrier(cbB, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &post);
     d->EndCommandBuffer(cbB);

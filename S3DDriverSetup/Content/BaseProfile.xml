@@ -153,6 +153,37 @@
 		<!-- Characters' contact shadows march from the pixel toward a point projected through the left camera -->
 		<VKScreenMarch Value="1"/>
 	</Profile>
+	<Profile Name="Wolfenstein II: The New Colossus">
+		<File Name="NewColossus_x64vk.exe" />
+		<!-- idTech 6, as DOOM (2016): no inverse-matrix scan, the constants-path refinements stay off -->
+		<DetectInverseMatrix Value="0"/>
+		<VKServeFallback Value="0"/>
+		<VKValidateInverse Value="0"/>
+		<VKRepointLearnedSets Value="0"/>
+		<VKEqualPassSelfShift Value="0"/>
+		<VKMaskMatrixSpan Value="0"/>
+		<VKDoubleArrayImages Value="0"/>
+		<VKMixedFramebufferMono Value="0"/>
+		<VKMajorityP11 Value="0"/>
+		<VKChainThroughBitcast Value="0"/>
+		<VKShadowAtlasByShape Value="0"/>
+		<VKSmallDrawUnshift Value="0"/>
+		<!-- w is in metres: characters a metre away have vertices inside the default unit-w band (as Lichii's fairy) -->
+		<VKUnitWEpsilon Value="0.000001"/>
+		<!-- Fog volumes per eye: the builder's right run places its cells by the right frustum's corner rays -->
+		<VKComputeRemap Value="1"/>
+		<VKDoubleFroxelVolumes Value="1"/>
+		<VKFroxelCornerRays Value="1"/>
+		<!-- Light flares: w == 1 quads that test their own depth move by that depth's parallax -->
+		<VKDepthSprites Value="1"/>
+		<!-- DOOM (2016)'s preset: idTech 6 world units -->
+		<Presets>
+			<Preset Index="0">
+				<One_div_ZPS Value="0.016667" />
+				<StereoBase Value="0.360000" />
+			</Preset>
+		</Presets>
+	</Profile>
 	<Profile Name="Cemu">
 		<File Name="Cemu.exe" />
 		<!-- Wii U: register-chain positions, screen varyings, edge crop; the separation scale is BOTW's projection P00 -->

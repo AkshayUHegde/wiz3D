@@ -113,10 +113,10 @@ struct ComputeRemapRules
     bool froxelLookups = false;    // FS froxel-volume lookups read at the right eye's uv
     bool fragRays = false;         // the uv-ray rule with the pixel's own uv
     bool perspInputs = false;      // (1/FragCoord.w) * (v * FragCoord.w) varyings: twins for unit-w pipelines only
+    bool cornerRays = false;       // volume builders placing cells by camera position + corner rays lerped by uv
 };
 // What it rewrote: ndc reconstructions, matrix rows, froxel rays, 3D reprojections, view vectors.
 struct ComputeRemapCounts { unsigned ndc = 0, rows = 0, rays = 0, reproj = 0, eye = 0; };
 bool PatchComputeRemap(const uint32_t* code, size_t words, uint32_t stereoSet, const ComputeRemapRules& rules,
                        std::vector<uint32_t>& out, ComputeRemapCounts& counts);
-
 }} // namespace wiz3d::vk

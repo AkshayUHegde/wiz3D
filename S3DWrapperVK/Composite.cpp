@@ -104,10 +104,16 @@ static VKAPI_ATTR void VKAPI_CALL Hook_DestroySwapchainKHR(VkDevice device, VkSw
     d->DestroySwapchainKHR(device, sc, pAllocator);
 }
 
+// A queue family with graphics: blits and render passes are recorded only for those.
+static bool FamilyHasGraphics(const DeviceData* d, uint32_t family)
+{
+    return family >= d->familyProps.size() || (d->familyProps[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+}
+
 // Lock held. Per-image command buffer, fence, semaphore and the scratch copy.
 static bool EnsureCompositeResources(DeviceData* d, SwapchainInfo& sc, uint32_t family)
 {
-    if (!sc.cmds.empty()) return true;
+    if (!sc.cmds.empty() && sc.cmdFamily == family) return true;
     VkCommandPool pool = VK_NULL_HANDLE;
     auto pit = d->presentPools.find(family);
     if (pit != d->presentPools.end()) pool = pit->second;
@@ -119,7 +125,27 @@ static bool EnsureCompositeResources(DeviceData* d, SwapchainInfo& sc, uint32_t 
         if (d->CreateCommandPool(d->device, &pci, nullptr, &pool) != VK_SUCCESS) return false;
         d->presentPools[family] = pool;
     }
+    if (!sc.cmds.empty())
+    {
+        // The game presents from another queue family now (its async compute queue): once every image's last
+        // submit is done, the command buffers move to that family's pool.
+        for (VkFence f : sc.fences) d->WaitForFences(d->device, 1, &f, VK_TRUE, UINT64_MAX);
+        d->FreeCommandBuffers(d->device, sc.pool, (uint32_t)sc.cmds.size(), sc.cmds.data());
+        WeaveFreeCommands(d, sc);
+        VkCommandBufferAllocateInfo ai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+        ai.commandPool = pool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = (uint32_t)sc.cmds.size();
+        sc.pool = pool;
+        sc.cmdFamily = family;
+        if (d->AllocateCommandBuffers(d->device, &ai, sc.cmds.data()) != VK_SUCCESS) { sc.cmds.clear(); return false; }
+        StampCommandBuffers(d, sc.cmds.data(), ai.commandBufferCount);
+        Log("Composite: presents moved to queue family %u (%s)\n", family,
+            FamilyHasGraphics(d, family) ? "graphics" : "no graphics: the eyes are copied, the OSD is left out");
+        return true;
+    }
     sc.pool = pool;
+    sc.cmdFamily = family;
     const uint32_t n = (uint32_t)sc.images.size();
     sc.cmds.resize(n);
     sc.fences.resize(n);
@@ -195,7 +221,7 @@ static void PresentOsdOnly(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint
     ScreenshotCopy(d, cb, img, VK_NULL_HANDLE, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height, FgOn());
     b = ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-    OsdDraw(d, cb, img, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height);
+    if (FamilyHasGraphics(d, family)) OsdDraw(d, cb, img, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height);
     b = ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0);
     d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
     d->EndCommandBuffer(cb);
@@ -225,6 +251,7 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         auto q = d->queueFamilies.find(queue);
         if (q != d->queueFamilies.end()) family = q->second;
     }
+    const bool graphics = FamilyHasGraphics(d, family);
     OsdTick(d);
     ScreenshotTick();
     for (uint32_t i = 0; i < info->swapchainCount; ++i)
@@ -253,9 +280,17 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         if (WeaveSelected())
         {
             VkSemaphore done = VK_NULL_HANDLE;
-            if (WeaveFrame(d, sc, queue, idx, img, sib, info, outWait.empty(), &done)) { outWait.push_back(done); continue; }
+            if (WeaveFrame(d, sc, queue, idx, img, sib, info, outWait.empty(), graphics, &done)) { outWait.push_back(done); continue; }
             static bool s_fellBack = false;
             if (!s_fellBack) { s_fellBack = true; Log("Weave unavailable, presenting side-by-side\n"); }
+        }
+        // Side by side squeezes each eye with a blit, which a queue family with no graphics cannot record.
+        if (!graphics)
+        {
+            static bool s_noBlit = false;
+            if (!s_noBlit) { s_noBlit = true; Log("Composite: queue family %u has no graphics: the left eye is presented\n", family); }
+            PresentOsdOnly(d, sc, queue, family, idx, info, outWait);
+            continue;
         }
 
         d->WaitForFences(d->device, 1, &sc.fences[idx], VK_TRUE, UINT64_MAX);

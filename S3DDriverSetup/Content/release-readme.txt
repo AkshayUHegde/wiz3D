@@ -79,7 +79,8 @@ driver patterns; pick the one that matches the game you're setting up.
    ignored. DOOM Eternal: turn "Present From Compute" off. Shadow of the
    Colossus: turn the atmospheric fog effect off in the launcher.
 6. (Optional) wiz3D_Config.xml: OutputMode SRWeave or HalfSBS. Other modes
-   are shown as Half SBS under Vulkan.
+   are shown as Half SBS under Vulkan. Wolfenstein II presents from a
+   compute queue: it needs SRWeave, and shows no on-screen display.
 7. Hotkeys are the DX9 / DX11 ones: Numpad * toggles stereo, Numpad +/-
    separation, Shift + Numpad +/- screen plane, Ctrl+F12 stereo screenshot,
    Shift+F1 the hotkey list.

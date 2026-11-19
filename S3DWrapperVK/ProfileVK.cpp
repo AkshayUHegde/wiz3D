@@ -40,7 +40,8 @@ const Switch kSwitches[] = {
     B(VKShadowSetTwins), B(VKDynByPipeline), B(VKPushDeltas),
     B(VKPinLayer),
     B(VKHideDescriptorBuffer), B(VKHideDepthBiasControl), B(VKMonoPassCopies), B(VKMeshDraws),
-    B(VKScreenUvVaryings), B(VKFroxelLookups), B(VKFragCoordRays), B(VKOcclusionBothEyes),
+    B(VKScreenUvVaryings), B(VKFroxelLookups), B(VKFragCoordRays), B(VKFroxelCornerRays),
+    B(VKDepthSprites), B(VKOcclusionBothEyes),
     F(VKUnitWEpsilon), B(VKStereoDLSS), B(VKWeaveGpuSync), B(VKFrameGen), B(VKShadowAtlasByShape), I(VKDumpModifiedShaders),
 };
 #undef B

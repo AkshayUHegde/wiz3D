@@ -542,6 +542,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
 #undef X
     inst->GetPhysicalDeviceMemoryProperties(physDev, &d->memProps);
     inst->GetPhysicalDeviceProperties(physDev, &d->props);
+    if (inst->GetPhysicalDeviceQueueFamilyProperties)
+    {
+        uint32_t families = 0;
+        inst->GetPhysicalDeviceQueueFamilyProperties(physDev, &families, nullptr);
+        d->familyProps.resize(families);
+        inst->GetPhysicalDeviceQueueFamilyProperties(physDev, &families, d->familyProps.data());
+    }
     {
         std::lock_guard<std::mutex> g(s_lock);
         s_devices[DispatchKey(*pDevice)] = d;

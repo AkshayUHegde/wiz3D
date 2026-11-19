@@ -38,6 +38,7 @@ namespace wiz3d { namespace vk {
     X(GetPhysicalDeviceMemoryProperties)         \
     X(GetPhysicalDeviceFeatures)                 \
     X(GetPhysicalDeviceFormatProperties)         \
+    X(GetPhysicalDeviceQueueFamilyProperties)    \
     X(EnumerateDeviceExtensionProperties)        \
     X(GetPhysicalDeviceProperties2)              \
     X(GetPhysicalDeviceFeatures2)                \
@@ -553,6 +554,7 @@ struct SwapchainInfo
     VkImage        scratch = VK_NULL_HANDLE;     // left copy, the blit source
     VkDeviceMemory scratchMem = VK_NULL_HANDLE;
     VkCommandPool  pool = VK_NULL_HANDLE;
+    uint32_t       cmdFamily = UINT32_MAX;       // the queue family `cmds` and the weave's were allocated for
     WeaveState*    weave = nullptr;
 };
 
@@ -757,6 +759,7 @@ struct DeviceData
     // Composite (Composite.cpp)
     std::unordered_map<uint32_t, VkCommandPool> presentPools;   // by queue family
     std::unordered_map<VkQueue, uint32_t>       queueFamilies;
+    std::vector<VkQueueFamilyProperties>        familyProps;    // a game may present from a family with no graphics
     bool          externalMemoryWin32 = false;     // VK_KHR_external_memory_win32 enabled
     bool          externalSemaphoreWin32 = false;  // VK_KHR_external_semaphore_win32 enabled (VKWeaveGpuSync)
     bool          dedicatedImageAliasing = false;  // VK_NV_dedicated_allocation_image_aliasing enabled
@@ -880,6 +883,7 @@ struct SpirvRules
     int  spriteVarying = -1;       // ... and this output varying with it; -1 none
     bool forceVaryings = false;    // clip varyings shift as for a screen-reading FS (the VS twin)
     bool screenUv = false;         // screen-uv varyings, k * (x / w) + c, take x after the shift
+    bool depthSprites = false;     // w == 1 sprites tested against depth move by their own depth's parallax
 };
 struct SpirvCounts
 {
@@ -887,6 +891,7 @@ struct SpirvCounts
     unsigned prevClip = 0;         // previous-frame clip varyings
     unsigned ndcVaryings = 0;      // xy / w and projected varyings
     unsigned screenUvMoved = 0;    // screen-uv products
+    unsigned depthSpriteInputs = 0;   // inputs a depth sprite reads moved (its position first)
 };
 bool PatchSpirv(const uint32_t* code, size_t words, const SpirvRules& rules, std::vector<uint32_t>& out, const char** reason,
                 spv::ExecutionModel* model, SpirvCounts* counts = nullptr);
@@ -1020,7 +1025,8 @@ void ScreenshotDestroy(DeviceData* d);
 // Lock held for all of these.
 bool WeaveSelected();
 bool WeaveFrame(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint32_t idx, VkImage img, VkImage sib,
-                const VkPresentInfoKHR* info, bool firstSwapchain, VkSemaphore* outDone);
+                const VkPresentInfoKHR* info, bool firstSwapchain, bool graphics, VkSemaphore* outDone);
+void WeaveFreeCommands(DeviceData* d, SwapchainInfo& sc);   // before the swapchain's command pool changes
 void WeaveDestroySwapchain(DeviceData* d, SwapchainInfo& sc);
 void WeaveDestroyDevice(DeviceData* d);
 

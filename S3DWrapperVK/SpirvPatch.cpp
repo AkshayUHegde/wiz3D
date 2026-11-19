@@ -6,6 +6,7 @@
 // The vertex patch (ShaderAnalysis/modify.cpp method 2): Position.x += sep * (w - conv) from set kStereoSet after the
 // stage's own body, by a wrapping entry point (before each OpEmitVertex in geometry shaders).
 
+#define SPV_ENABLE_UTILITY_CODE
 #include "Layer.h"
 #include "FamilyVK.h"
 #include "../S3DAPI/GlobalData.h"
@@ -1204,6 +1205,243 @@ bool PatchSpirv(const uint32_t* code, size_t n, const SpirvRules& rules, std::ve
     decos.Emit(spv::Op::OpDecorate, { id.vParams, (uint32_t)spv::Decoration::DescriptorSet, kStereoSet });
     decos.Emit(spv::Op::OpDecorate, { id.vParams, (uint32_t)spv::Decoration::Binding, 0 });
 
+    // Depth sprites: a w == 1 sprite whose shader linearises its own z with the function it also applies to a depth
+    // sample (an occlusion-tested flare) moves by that depth's parallax; main reads x-shifted copies of its inputs.
+    uint32_t dsFn = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> dsArgs;           // the call's argument variables: (pointer type, value)
+    std::vector<uint32_t> dsInputs, dsInputTypes;                // the position input, then depth-sample uv inputs
+    std::unordered_map<uint32_t, uint32_t> dsCopy, dsPtrType;    // input -> Private copy; Input pointer -> Private
+    Builder dsPre;                                               // re-loads of the call's arguments
+    if (rules.depthSprites && em == spv::ExecutionModel::Vertex)
+    {
+        std::unordered_map<uint32_t, size_t> def;
+        std::unordered_map<uint32_t, uint32_t> varClass, varPtr, ptrPointee, ptrClass, konst;
+        std::unordered_set<uint32_t> builtins, ones, halves;
+        std::unordered_map<uint32_t, std::vector<uint32_t>> stored;   // variable -> values stored, through chains too
+        std::vector<uint32_t> blockOf(m.insts.size());
+        uint32_t blk = 0;
+        for (size_t i = 0; i < m.insts.size(); ++i)
+        {
+            const Inst& in = m.insts[i];
+            if (in.op == spv::Op::OpLabel) ++blk;
+            blockOf[i] = blk;
+            bool r = false, t = false;
+            spv::HasResultAndType(in.op, &r, &t);
+            if (r) def[t ? in.w[2] : in.w[1]] = i;
+            if (in.op == spv::Op::OpVariable) { varClass[in.w[2]] = in.w[3]; varPtr[in.w[2]] = in.w[1]; }
+            if (in.op == spv::Op::OpTypePointer) { ptrClass[in.w[1]] = in.w[2]; ptrPointee[in.w[1]] = in.w[3]; }
+            if (in.op == spv::Op::OpDecorate && in.count >= 4 && in.w[2] == (uint32_t)spv::Decoration::BuiltIn) builtins.insert(in.w[1]);
+            if (in.op == spv::Op::OpConstant && in.count == 4)
+            {
+                konst[in.w[2]] = in.w[3];
+                if (in.w[1] == id.tFloat && in.w[3] == FloatBits(1.f)) ones.insert(in.w[2]);
+                if (in.w[1] == id.tFloat && in.w[3] == FloatBits(0.5f)) halves.insert(in.w[2]);
+            }
+        }
+        auto Def = [&](uint32_t v) -> const Inst* { auto it = def.find(v); return it == def.end() ? nullptr : &m.insts[it->second]; };
+        auto baseOf = [&](uint32_t p) {
+            const Inst* a = Def(p);
+            return a && (a->op == spv::Op::OpAccessChain || a->op == spv::Op::OpInBoundsAccessChain) ? a->w[3] : p; };
+        auto classOf = [&](uint32_t var) { auto c = varClass.find(var); return c == varClass.end() ? ~0u : c->second; };
+        auto vecSize = [&](uint32_t v) -> uint32_t {
+            const Inst* a = Def(v); const Inst* t = a ? Def(a->w[1]) : nullptr;
+            return t && t->op == spv::Op::OpTypeVector ? t->w[3] : 0; };
+        for (const Inst& in : m.insts)
+            if (in.op == spv::Op::OpStore) stored[baseOf(in.w[1])].push_back(in.w[2]);
+        // What a Function variable holds at `at`: its last whole store before it in that block, 0 when not known.
+        auto heldAt = [&](uint32_t var, size_t at) -> uint32_t {
+            if (classOf(var) != (uint32_t)spv::StorageClass::Function) return 0;
+            for (size_t k = at; k-- > 0 && blockOf[k] == blockOf[at]; )
+            {
+                const Inst& in = m.insts[k];
+                if (in.op == spv::Op::OpStore && baseOf(in.w[1]) == var) return in.w[1] == var ? in.w[2] : 0;
+                if (in.op == spv::Op::OpFunctionCall) for (uint16_t a = 4; a < in.count; ++a) if (in.w[a] == var) return 0;
+            }
+            return 0; };
+        auto val = [&](uint32_t v) -> uint32_t {
+            for (int g = 0; g < 16; ++g)
+            {
+                const Inst* l = Def(v);
+                const uint32_t h = l && l->op == spv::Op::OpLoad ? heldAt(l->w[3], def[v]) : 0;
+                if (!h) return v;
+                v = h;
+            }
+            return v; };
+        // A scalar's source (lane ~0u) or a vector's lane: (Input variable, component), else (the value, ~0u).
+        std::function<std::pair<uint32_t, uint32_t>(uint32_t, uint32_t, int)> laneOf =
+            [&](uint32_t v, uint32_t lane, int depth) -> std::pair<uint32_t, uint32_t>
+        {
+            v = val(v);
+            const Inst* in = Def(v);
+            if (!in || depth > 12) return { v, ~0u };
+            if (in->op == spv::Op::OpLoad)
+            {
+                const uint32_t b = baseOf(in->w[3]);
+                if (classOf(b) != (uint32_t)spv::StorageClass::Input || builtins.count(b)) return { v, ~0u };
+                if (b == in->w[3]) return { lane == ~0u ? v : b, lane };
+                const Inst* a = Def(in->w[3]);
+                auto c = a->count == 5 ? konst.find(a->w[4]) : konst.end();
+                return c != konst.end() && lane == ~0u ? std::make_pair(b, c->second) : std::make_pair(v, ~0u);
+            }
+            if (in->op == spv::Op::OpCompositeExtract && in->count == 5 && lane == ~0u) return laneOf(in->w[3], in->w[4], depth + 1);
+            if (in->op == spv::Op::OpVectorShuffle && lane != ~0u && 5 + lane < in->count)
+            {
+                const uint32_t pick = in->w[5 + lane], na = vecSize(in->w[3]);
+                if (!na || pick == 0xFFFFFFFFu) return { v, ~0u };
+                return pick < na ? laneOf(in->w[3], pick, depth + 1) : laneOf(in->w[4], pick - na, depth + 1);
+            }
+            if (in->op == spv::Op::OpCompositeConstruct && lane != ~0u && 3 + lane < in->count && in->count - 3u == vecSize(v))
+                return laneOf(in->w[3 + lane], ~0u, depth + 1);
+            return { v, ~0u };
+        };
+        // The position input: Position stored whole as (I.x, ., ., 1.0), I an Input vec4.
+        uint32_t posIn = 0;
+        for (size_t i = 0; i < m.insts.size() && !posIn; ++i)
+        {
+            const Inst& in = m.insts[i];
+            if (in.op != spv::Op::OpStore) continue;
+            const Inst* a = Def(in.w[1]);
+            auto mem = a && a->count == 5 ? konst.find(a->w[4]) : konst.end();
+            const bool toPos = (id.posDirect && in.w[1] == id.posDirect) ||
+                (id.posVar && a && a->op == spv::Op::OpAccessChain && a->w[3] == id.posVar && mem != konst.end() && (int)mem->second == posMember);
+            if (!toPos) continue;
+            const auto w = laneOf(in.w[2], 3, 0), x = laneOf(in.w[2], 0, 0);
+            if (w.second == ~0u && ones.count(w.first) && x.second == 0 && ptrPointee[varPtr[x.first]] == id.tVec4) posIn = x.first;
+        }
+        // The depth function: called with the position input's z, and with a sample's first component.
+        size_t callAt = SIZE_MAX;
+        std::vector<std::pair<uint32_t, size_t>> zCalls;   // (function, call)
+        std::unordered_set<uint32_t> sampledFns;
+        for (size_t i = 0; posIn && i < m.insts.size(); ++i)
+        {
+            const Inst& in = m.insts[i];
+            if (in.op != spv::Op::OpFunctionCall || in.w[1] != id.tFloat) continue;
+            for (uint16_t a = 4; a < in.count; ++a)
+            {
+                const uint32_t h = heldAt(in.w[a], i);
+                if (!h) continue;
+                const auto src = laneOf(h, ~0u, 0);
+                if (src.first == posIn && src.second == 2) zCalls.push_back({ in.w[3], i });
+                const Inst* e = Def(val(h));
+                const Inst* s = e && e->op == spv::Op::OpCompositeExtract && e->count == 5 && e->w[4] == 0 ? Def(e->w[3]) : nullptr;
+                if (s && (s->op == spv::Op::OpImageSampleExplicitLod || s->op == spv::Op::OpImageSampleImplicitLod || s->op == spv::Op::OpImageFetch))
+                    sampledFns.insert(in.w[3]);
+            }
+        }
+        for (const auto& zc : zCalls) if (sampledFns.count(zc.first)) { dsFn = zc.first; callAt = zc.second; break; }
+        // Its arguments re-load at the wrapper's start: constants, loads of inputs or blocks through constant chains.
+        std::function<uint32_t(uint32_t, int)> clone = [&](uint32_t v, int depth) -> uint32_t
+        {
+            const Inst* in = Def(v);
+            if (!in || depth > 8) return 0;
+            if (in->op == spv::Op::OpConstant || in->op == spv::Op::OpConstantTrue || in->op == spv::Op::OpConstantFalse ||
+                in->op == spv::Op::OpConstantComposite) return v;
+            if (in->op == spv::Op::OpLoad)
+            {
+                const uint32_t b = baseOf(in->w[3]), c = classOf(b);
+                if (c != (uint32_t)spv::StorageClass::Input && c != (uint32_t)spv::StorageClass::Uniform &&
+                    c != (uint32_t)spv::StorageClass::PushConstant && c != (uint32_t)spv::StorageClass::StorageBuffer) return 0;
+                uint32_t p = b;
+                if (b != in->w[3])
+                {
+                    const Inst* a = Def(in->w[3]);
+                    for (uint16_t k = 4; k < a->count; ++k) if (!konst.count(a->w[k])) return 0;
+                    p = NewId();
+                    dsPre.out.push_back(a->w[0]);
+                    dsPre.out.insert(dsPre.out.end(), { a->w[1], p, b });
+                    dsPre.out.insert(dsPre.out.end(), a->w + 4, a->w + a->count);
+                }
+                const uint32_t r = NewId();
+                dsPre.Emit(spv::Op::OpLoad, { in->w[1], r, p });
+                return r;
+            }
+            if (in->op != spv::Op::OpCompositeExtract && in->op != spv::Op::OpVectorShuffle && in->op != spv::Op::OpCompositeConstruct &&
+                in->op != spv::Op::OpFAdd && in->op != spv::Op::OpFSub && in->op != spv::Op::OpFMul && in->op != spv::Op::OpFDiv &&
+                in->op != spv::Op::OpFNegate) return 0;
+            std::vector<uint32_t> w(in->w, in->w + in->count);
+            const uint16_t ids = in->op == spv::Op::OpCompositeExtract ? 4 : in->op == spv::Op::OpVectorShuffle ? 5 : in->count;
+            for (uint16_t k = 3; k < ids; ++k) if (!(w[k] = clone(in->w[k], depth + 1))) return 0;
+            w[2] = NewId();
+            dsPre.out.insert(dsPre.out.end(), w.begin(), w.end());
+            return w[2];
+        };
+        if (dsFn)
+        {
+            const Inst& call = m.insts[callAt];
+            for (uint16_t a = 4; a < call.count && dsFn; ++a)
+            {
+                const uint32_t h = heldAt(call.w[a], callAt), c = h ? clone(h, 0) : 0;
+                if (!c) dsFn = 0;
+                else dsArgs.push_back({ varPtr[call.w[a]], c });
+            }
+        }
+        // Inputs a depth sample's coordinate reaches that the shader maps to uv by * 0.5 (ndc): they move with it.
+        if (dsFn)
+        {
+            dsInputs.push_back(posIn);
+            std::unordered_set<uint32_t> seen, reached;
+            std::vector<uint32_t> todo;
+            for (const Inst& in : m.insts)
+                if (in.op == spv::Op::OpImageSampleExplicitLod || in.op == spv::Op::OpImageSampleImplicitLod) todo.push_back(in.w[4]);
+            while (!todo.empty() && seen.size() < 4096)
+            {
+                const uint32_t v = todo.back(); todo.pop_back();
+                if (!seen.insert(v).second) continue;
+                if (classOf(v) == (uint32_t)spv::StorageClass::Input) { reached.insert(v); continue; }
+                auto st = stored.find(v);
+                if (st != stored.end()) { for (uint32_t s : st->second) todo.push_back(s); continue; }
+                const Inst* in = Def(v);
+                if (!in) continue;
+                switch (in->op)
+                {
+                case spv::Op::OpLoad: case spv::Op::OpAccessChain: case spv::Op::OpInBoundsAccessChain: todo.push_back(in->w[3]); break;
+                case spv::Op::OpCompositeExtract: todo.push_back(in->w[3]); break;
+                case spv::Op::OpVectorShuffle: case spv::Op::OpCompositeInsert: todo.push_back(in->w[3]); todo.push_back(in->w[4]); break;
+                case spv::Op::OpImageSampleExplicitLod: case spv::Op::OpImageSampleImplicitLod: todo.push_back(in->w[4]); break;
+                case spv::Op::OpFunctionCall: for (uint16_t k = 4; k < in->count; ++k) todo.push_back(in->w[k]); break;
+                case spv::Op::OpFAdd: case spv::Op::OpFSub: case spv::Op::OpFMul: case spv::Op::OpFDiv: case spv::Op::OpFNegate:
+                case spv::Op::OpVectorTimesScalar: case spv::Op::OpCompositeConstruct:
+                    for (uint16_t k = 3; k < in->count; ++k) todo.push_back(in->w[k]);
+                    break;
+                default: break;
+                }
+            }
+            for (const Inst& in : m.insts)
+            {
+                if (in.op != spv::Op::OpVectorTimesScalar && in.op != spv::Op::OpFMul) continue;
+                for (int o = 0; o < 2; ++o)
+                {
+                    const Inst* l = Def(in.w[3 + o]);
+                    const uint32_t other = in.w[4 - o];
+                    const Inst* sp = Def(other);
+                    const bool half = halves.count(other) || (sp && sp->op == spv::Op::OpCompositeConstruct && halves.count(sp->w[3]));
+                    if (!l || l->op != spv::Op::OpLoad || l->w[3] == posIn || !reached.count(l->w[3]) || !half || builtins.count(l->w[3]) ||
+                        !vecSize(in.w[3 + o]) || std::find(dsInputs.begin(), dsInputs.end(), l->w[3]) != dsInputs.end()) continue;
+                    dsInputs.push_back(l->w[3]);
+                }
+            }
+            // Private copies, and Private pointers for chains into them.
+            auto privPtr = [&](uint32_t pointee) -> uint32_t {
+                for (const auto& p : ptrPointee)
+                    if (p.second == pointee && ptrClass[p.first] == (uint32_t)spv::StorageClass::Private) return p.first;
+                const uint32_t t = NewId();
+                types.Emit(spv::Op::OpTypePointer, { t, (uint32_t)spv::StorageClass::Private, pointee });
+                ptrPointee[t] = pointee; ptrClass[t] = (uint32_t)spv::StorageClass::Private;
+                return t; };
+            for (uint32_t in : dsInputs)
+            {
+                const uint32_t c = NewId();
+                dsInputTypes.push_back(ptrPointee[varPtr[in]]);
+                types.Emit(spv::Op::OpVariable, { privPtr(dsInputTypes.back()), c, (uint32_t)spv::StorageClass::Private });
+                dsCopy[in] = c;
+            }
+            for (const Inst& in : m.insts)
+                if ((in.op == spv::Op::OpAccessChain || in.op == spv::Op::OpInBoundsAccessChain) && dsCopy.count(in.w[3]) && !dsPtrType.count(in.w[1]))
+                    dsPtrType[in.w[1]] = privPtr(ptrPointee[in.w[1]]);
+            if (counts) counts->depthSpriteInputs = (unsigned)dsInputs.size();
+        }
+    }
+
     const bool geometry = em == spv::ExecutionModel::Geometry;
     uint32_t countVar = 0;   // set 8 binding 1, declared by EmitSpriteShift
     uint32_t newMain = 0;
@@ -1214,8 +1452,45 @@ bool PatchSpirv(const uint32_t* code, size_t n, const SpirvRules& rules, std::ve
         const uint32_t label = NewId(), callRes = NewId();
         func.Emit(spv::Op::OpFunction, { voidType, newMain, (uint32_t)spv::FunctionControlMask::MaskNone, fnType });
         func.Emit(spv::Op::OpLabel, { label });
+        if (dsFn)
+        {
+            // D = the shader's own depth function of its z; x moves by sep*(max(D, wMin) - conv)/D (none at D <= 1e-4).
+            std::vector<uint32_t> argVars;
+            for (const auto& a : dsArgs) { argVars.push_back(NewId()); func.Emit(spv::Op::OpVariable, { a.first, argVars.back(), (uint32_t)spv::StorageClass::Function }); }
+            func.out.insert(func.out.end(), dsPre.out.begin(), dsPre.out.end());
+            for (size_t k = 0; k < dsArgs.size(); ++k) func.Emit(spv::Op::OpStore, { argVars[k], dsArgs[k].second });
+            const uint32_t dv = NewId();
+            func.out.push_back(((uint32_t)(4 + argVars.size()) << 16) | (uint32_t)spv::Op::OpFunctionCall);
+            func.out.insert(func.out.end(), { id.tFloat, dv, dsFn });
+            func.out.insert(func.out.end(), argVars.begin(), argVars.end());
+            const uint32_t cTiny = NewId();
+            types.Emit(spv::Op::OpConstant, { id.tFloat, cTiny, FloatBits(1e-4f) });
+            auto F = [&](spv::Op op, uint32_t a, uint32_t c) { const uint32_t r = NewId(); func.Emit(op, { id.tFloat, r, a, c }); return r; };
+            auto Ld = [&](uint32_t member) {
+                const uint32_t p = NewId(), r = NewId();
+                func.Emit(spv::Op::OpAccessChain, { id.tPtrUniFloat, p, id.vParams, member });
+                func.Emit(spv::Op::OpLoad, { id.tFloat, r, p });
+                return r; };
+            const uint32_t sep = Ld(id.cInt0), conv = Ld(id.cInt1), wMin = Ld(id.cInt2);
+            const uint32_t dOk = NewId(), lowW = NewId(), dc = NewId(), den = NewId(), s = NewId();
+            func.Emit(spv::Op::OpFOrdGreaterThan, { id.tBool, dOk, dv, cTiny });
+            func.Emit(spv::Op::OpFOrdLessThan, { id.tBool, lowW, dv, wMin });
+            func.Emit(spv::Op::OpSelect, { id.tFloat, dc, lowW, wMin, dv });
+            func.Emit(spv::Op::OpSelect, { id.tFloat, den, dOk, dv, id.cFloat1 });
+            const uint32_t s0 = F(spv::Op::OpFMul, sep, F(spv::Op::OpFDiv, F(spv::Op::OpFSub, dc, conv), den));
+            func.Emit(spv::Op::OpSelect, { id.tFloat, s, dOk, s0, id.cFloat0 });
+            for (size_t k = 0; k < dsInputs.size(); ++k)
+            {
+                const uint32_t t = dsInputTypes[k], l = NewId(), x = NewId(), nx = NewId(), nl = NewId();
+                func.Emit(spv::Op::OpLoad, { t, l, dsInputs[k] });
+                func.Emit(spv::Op::OpCompositeExtract, { id.tFloat, x, l, 0 });
+                func.Emit(spv::Op::OpFAdd, { id.tFloat, nx, x, s });
+                func.Emit(spv::Op::OpCompositeInsert, { t, nl, nx, l, 0 });
+                func.Emit(spv::Op::OpStore, { dsCopy[dsInputs[k]], nl });
+            }
+        }
         func.Emit(spv::Op::OpFunctionCall, { voidType, callRes, entryFn });
-        EmitShift(func, id, next);
+        if (!dsFn) EmitShift(func, id, next);
         // Same displacement for any varying carrying this clip position, so
         // the fragment shader's screen coordinate follows the geometry.
         for (uint32_t vy : posVaryings)
@@ -1272,6 +1547,7 @@ bool PatchSpirv(const uint32_t* code, size_t n, const SpirvRules& rules, std::ve
             if (newMain) ep[2] = newMain;
             if (listAllGlobals) ep.push_back(id.vParams);
             if (listAllGlobals && countVar) ep.push_back(countVar);
+            if (listAllGlobals) for (const auto& c : dsCopy) ep.push_back(c.second);
             ep[0] = ((uint32_t)ep.size() << 16) | (uint32_t)spv::Op::OpEntryPoint;
             out.insert(out.end(), ep.begin(), ep.end());
             continue;
@@ -1296,6 +1572,16 @@ bool PatchSpirv(const uint32_t* code, size_t n, const SpirvRules& rules, std::ve
             }
             out.insert(out.end(), b.out.begin(), b.out.end());
             ++emits;
+        }
+        // Depth sprites: the shader reads its moved inputs from their copies.
+        if (!dsCopy.empty() && (in.op == spv::Op::OpLoad || in.op == spv::Op::OpAccessChain || in.op == spv::Op::OpInBoundsAccessChain) &&
+            dsCopy.count(in.w[3]))
+        {
+            const size_t at = out.size();
+            out.insert(out.end(), in.w, in.w + in.count);
+            out[at + 3] = dsCopy[in.w[3]];
+            if (in.op != spv::Op::OpLoad) out[at + 1] = dsPtrType[in.w[1]];
+            continue;
         }
         auto mp = mesh ? meshPairs.find(i) : meshPairs.end();
         if (mp != meshPairs.end() && !mp->second.xPtr)

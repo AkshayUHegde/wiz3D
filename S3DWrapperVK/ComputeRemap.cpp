@@ -231,6 +231,7 @@ bool PatchComputeRemap(const uint32_t* code, size_t words, uint32_t stereoSet, c
     const bool wide = rules.wide, uvRays = rules.uvRays, storeCamera = rules.storeCamera, counters = rules.counters;
     const bool tiledLights = rules.tiledLights, rayRows = rules.rayRows, softRead = rules.softRead, viewRows = rules.viewRows;
     const bool flareX = rules.flareX, uvAffine = rules.uvAffine, froxelLookups = rules.froxelLookups, fragRays = rules.fragRays;
+    const bool cornerRays = rules.cornerRays;
     counts = ComputeRemapCounts();
     if (words < 5 || code[0] != spv::MagicNumber) return false;
     Cs m;
@@ -2605,6 +2606,223 @@ bool PatchComputeRemap(const uint32_t* code, size_t words, uint32_t stereoSet, c
         }
         froxels += taps;
         counts.reproj += taps;
+    }
+    // Corner rays: a volume builder placing each cell at pos + mix(mix(c0, c1, u*k), mix(c2, c3, u*k), s) * d through
+    // function variables. The right run's cell is the left frustum's at u - h(d): the product loses dR/du * h(d) * d.
+    if (cornerRays && !fragment)
+    {
+        std::unordered_map<uint32_t, std::vector<size_t>> stores;   // function variable -> its whole stores
+        std::unordered_set<uint32_t> opaque;                        // also written through a chain or by a call
+        for (size_t k = firstFunc; k < m.ins.size(); ++k)
+        {
+            const uint32_t* i = code + m.ins[k].at;
+            if (m.ins[k].op == spv::Op::OpStore)
+            {
+                auto vc = m.varClass.find(i[1]);
+                if (vc != m.varClass.end() && vc->second == (uint32_t)spv::StorageClass::Function) stores[i[1]].push_back(k);
+                else if (const uint32_t* p = m.Op(i[1], spv::Op::OpAccessChain)) opaque.insert(p[3]);
+            }
+            else if (m.ins[k].op == spv::Op::OpFunctionCall)
+                for (uint16_t a = 4; a < m.ins[k].n; ++a) opaque.insert(i[a]);
+        }
+        auto fnEntry = [&](size_t at) -> uint32_t
+        {
+            while (at > 0 && m.ins[at].op != spv::Op::OpFunction) --at;
+            while (at < m.ins.size() && m.ins[at].op != spv::Op::OpLabel) ++at;
+            return at < m.ins.size() ? m.ins[at].block : 0;
+        };
+        // A value through function variables: a load's last store before it in its block, else the only store when
+        // that one sits in the function's first block.
+        auto val = [&](uint32_t id) -> uint32_t
+        {
+            for (int g = 0; g < 16; ++g)
+            {
+                id = m.Strip(id);
+                const uint32_t* l = m.Op(id, spv::Op::OpLoad);
+                auto st = l && !opaque.count(l[3]) ? stores.find(l[3]) : stores.end();
+                if (st == stores.end()) return id;
+                const size_t at = m.def[id];
+                uint32_t v = 0;
+                for (auto s = st->second.rbegin(); s != st->second.rend() && !v; ++s)
+                    if (*s < at && m.ins[*s].block == m.ins[at].block) v = code[m.ins[*s].at + 2];
+                if (!v && st->second.size() == 1 && st->second[0] < at && m.ins[st->second[0]].block == fnEntry(at))
+                    v = code[m.ins[st->second[0]].at + 2];
+                if (!v) return id;
+                id = v;
+            }
+            return id;
+        };
+        // Reaches an invocation-id builtin (no targets) or one of `targets`: operands, variables' stores, call args.
+        auto reaches = [&](uint32_t from, const std::unordered_set<uint32_t>& targets) -> bool
+        {
+            std::vector<uint32_t> todo{ from };
+            std::unordered_set<uint32_t> seen;
+            while (!todo.empty() && seen.size() < 2048)
+            {
+                const uint32_t v = m.Strip(todo.back()); todo.pop_back();
+                if (!seen.insert(v).second) continue;
+                if (targets.empty() ? m.idVars.count(v) != 0 : targets.count(v) != 0) return true;
+                auto st = stores.find(v);
+                if (st != stores.end()) { for (size_t s : st->second) todo.push_back(code[m.ins[s].at + 2]); continue; }
+                spv::Op op; const uint32_t* i = m.At(v, &op);
+                if (!i) continue;
+                if (op == spv::Op::OpLoad || op == spv::Op::OpAccessChain || op == spv::Op::OpInBoundsAccessChain) { todo.push_back(i[3]); continue; }
+                if (op == spv::Op::OpFunctionCall)
+                {
+                    for (uint16_t a = 4; a < (uint16_t)(i[0] >> 16); ++a) todo.push_back(i[a]);
+                    continue;
+                }
+                bool r = false, t = false;
+                spv::HasResultAndType(op, &r, &t);
+                if (r && t) ForIds(i, (uint16_t)(i[0] >> 16), op, [&](uint32_t a) { todo.push_back(a); });
+            }
+            return false;
+        };
+        const std::unordered_set<uint32_t> pixel;
+        // A screen x: component 0 of a vector built from the invocation id, loaded through a chain or extracted.
+        auto screenX = [&](uint32_t id) -> bool
+        {
+            const uint32_t v = val(id);
+            if (const uint32_t* l = m.Op(v, spv::Op::OpLoad))
+            {
+                const uint32_t* p = m.Op(l[3], spv::Op::OpAccessChain);
+                auto c = p && (p[0] >> 16) == 5 ? m.iconst.find(p[4]) : m.iconst.end();
+                return c != m.iconst.end() && c->second == 0 && !opaque.count(p[3]) && reaches(p[3], pixel);
+            }
+            const uint32_t* x = m.Op(v, spv::Op::OpCompositeExtract);
+            return x && (x[0] >> 16) == 5 && x[4] == 0 && reaches(x[3], pixel);
+        };
+        auto uniVec = [&](uint32_t id) -> bool
+        {
+            const uint32_t* s = m.Op(val(id), spv::Op::OpVectorShuffle);
+            return s ? m.FromBuffer(val(s[3])) && m.FromBuffer(val(s[4])) : m.FromBuffer(val(id));
+        };
+        auto splat = [&](uint32_t id) -> uint32_t
+        {
+            const uint32_t* c = m.Op(val(id), spv::Op::OpCompositeConstruct);
+            if (!c || (c[0] >> 16) < 5) return 0;
+            for (uint16_t a = 4; a < (uint16_t)(c[0] >> 16); ++a) if (c[a] != c[3]) return 0;
+            return c[3];
+        };
+        // Ids an emit at `at` may read: defined earlier in its block, or in its function's first block.
+        auto usable = [&](uint32_t id, size_t at) -> bool
+        {
+            auto d = m.def.find(id);
+            return d != m.def.end() && d->second < at && (m.ins[d->second].block == m.ins[at].block || m.ins[d->second].block == fnEntry(at));
+        };
+        std::unordered_set<uint32_t> placed;
+        for (size_t k = firstFunc; k < m.ins.size(); ++k)
+        {
+            if (m.ins[k].op != spv::Op::OpVectorTimesScalar || replace.count(k) || rewrite.count(k) || before.count(k)) continue;
+            const uint32_t* vt = code + m.ins[k].at;
+            const uint32_t* outer = m.Glsl(val(vt[3]), GLSLstd450FMix);
+            if (!outer || !splat(outer[7])) continue;
+            uint32_t ua = 0, ub = 0, kk = 0;
+            for (int o = 0; o < 2 && !kk; ++o)
+            {
+                const uint32_t* in = m.Glsl(val(outer[5 + o]), GLSLstd450FMix);
+                const uint32_t t = in ? splat(in[7]) : 0;
+                const uint32_t* mul = t ? m.Op(val(t), spv::Op::OpFMul) : nullptr;
+                if (!mul || !uniVec(in[5]) || !uniVec(in[6])) continue;
+                for (int q = 0; q < 2 && !kk; ++q)
+                    if (uniOnly(val(mul[4 - q]), 0) && screenX(mul[3 + q])) kk = mul[4 - q];
+                if (kk) { ua = in[5]; ub = in[6]; }
+            }
+            if (!kk || !usable(ua, k) || !usable(ub, k) || !usable(kk, k)) continue;
+            Emit& e = replace[k];
+            uint32_t sep, conv, wMin;
+            stereo(e, sep, conv, wMin);
+            const uint32_t raw = next++, du = next++, ad = next++, md = next++, df = next++, sk = next++, sh = next++, c = next++, corr = next++;
+            e.Op(spv::Op::OpVectorTimesScalar, { vt[1], raw, vt[3], vt[4] });
+            e.Op(spv::Op::OpFSub, { vt[1], du, ub, ua });
+            e.Op(spv::Op::OpExtInst, { m.tFloat, ad, m.glsl, GLSLstd450FAbs, vt[4] });
+            e.Op(spv::Op::OpExtInst, { m.tFloat, md, m.glsl, GLSLstd450FMax, ad, wMin });
+            e.Op(spv::Op::OpFSub, { m.tFloat, df, md, conv });
+            e.Op(spv::Op::OpFMul, { m.tFloat, sk, sep, kk });
+            e.Op(spv::Op::OpFMul, { m.tFloat, sh, sk, cHalf });
+            e.Op(spv::Op::OpFMul, { m.tFloat, c, sh, df });
+            e.Op(spv::Op::OpVectorTimesScalar, { vt[1], corr, du, c });
+            e.Op(spv::Op::OpFSub, { vt[1], vt[2], raw, corr });
+            placed.insert(vt[2]);
+            ++counts.rays;
+        }
+        // History: a placed cell's projection divided by its w, scaled into volume uv by a uniform vec2, read by a 3D
+        // sample; the right run's history holds that point h(w) further along u.
+        auto vecSize = [&](uint32_t id) -> uint32_t
+        {
+            spv::Op op; const uint32_t* i = m.At(id, &op);
+            bool r = false, t = false;
+            if (i) spv::HasResultAndType(op, &r, &t);
+            const uint32_t* vt = i && t ? m.Op(i[1], spv::Op::OpTypeVector) : nullptr;
+            return vt ? vt[3] : 0;
+        };
+        auto lane = [&](uint32_t id, uint32_t l, uint32_t& src) -> uint32_t
+        {
+            for (int g = 0; g < 8; ++g)
+            {
+                id = val(id);
+                const uint32_t* s = m.Op(id, spv::Op::OpVectorShuffle);
+                if (!s || 5 + l >= (s[0] >> 16)) break;
+                const uint32_t pick = s[5 + l], na = vecSize(s[3]);
+                if (!na || pick == 0xFFFFFFFFu) return UINT32_MAX;
+                if (pick < na) { id = s[3]; l = pick; } else { id = s[4]; l = pick - na; }
+            }
+            src = id;
+            return l;
+        };
+        std::unordered_map<uint32_t, uint32_t> divW;   // xyz / w of a placed cell's projection -> w
+        for (size_t k = firstFunc; k < m.ins.size() && !placed.empty(); ++k)
+        {
+            if (m.ins[k].op != spv::Op::OpFDiv) continue;
+            const uint32_t* dv = code + m.ins[k].at;
+            const uint32_t w = splat(dv[4]);
+            if (w && vecSize(dv[2]) >= 2 && reaches(dv[3], placed)) divW[dv[2]] = w;
+        }
+        std::vector<uint32_t> coords3D;
+        for (size_t k = firstFunc; k < m.ins.size() && !divW.empty(); ++k)
+        {
+            const spv::Op op = m.ins[k].op;
+            if (op != spv::Op::OpImageSampleExplicitLod && op != spv::Op::OpImageSampleImplicitLod) continue;
+            const uint32_t* s = code + m.ins[k].at;
+            spv::Op lop; const uint32_t* l = m.At(s[3], &lop);
+            const uint32_t* st = l ? m.Op(l[1], spv::Op::OpTypeSampledImage) : nullptr;
+            const uint32_t* it = st ? m.Op(st[2], spv::Op::OpTypeImage) : nullptr;
+            if (it && it[3] == (uint32_t)spv::Dim::Dim3D) coords3D.push_back(s[4]);
+        }
+        for (size_t k = firstFunc; k < m.ins.size() && !coords3D.empty(); ++k)
+        {
+            if (m.ins[k].op != spv::Op::OpFMul || replace.count(k) || rewrite.count(k) || before.count(k)) continue;
+            const uint32_t* f = code + m.ins[k].at;
+            if (vecSize(f[2]) != 2) continue;
+            for (int o = 0; o < 2; ++o)
+            {
+                uint32_t s0 = 0, s1 = 0;
+                if (lane(f[3 + o], 0, s0) != 0 || lane(f[3 + o], 1, s1) != 1 || s0 != s1 || !uniVec(f[4 - o])) continue;
+                auto dw = divW.find(s0);
+                if (dw == divW.end() || !usable(dw->second, k)) continue;
+                const std::unordered_set<uint32_t> self{ f[2] };
+                bool sampled = false;
+                for (uint32_t c3 : coords3D) if (!sampled && reaches(c3, self)) sampled = true;
+                if (!sampled) continue;
+                Emit& e = replace[k];
+                uint32_t sep, conv, wMin;
+                stereo(e, sep, conv, wMin);
+                const uint32_t raw = next++, x = next++, ad = next++, md = next++, df = next++, lo = next++, q = next++, h = next++, hh = next++, x2 = next++;
+                e.Op(spv::Op::OpFMul, { f[1], raw, f[3], f[4] });
+                e.Op(spv::Op::OpCompositeExtract, { m.tFloat, x, raw, 0 });
+                e.Op(spv::Op::OpExtInst, { m.tFloat, ad, m.glsl, GLSLstd450FAbs, dw->second });
+                e.Op(spv::Op::OpExtInst, { m.tFloat, md, m.glsl, GLSLstd450FMax, ad, wMin });
+                e.Op(spv::Op::OpFSub, { m.tFloat, df, md, conv });
+                e.Op(spv::Op::OpExtInst, { m.tFloat, lo, m.glsl, GLSLstd450FMax, ad, cTiny });
+                e.Op(spv::Op::OpFDiv, { m.tFloat, q, df, lo });
+                e.Op(spv::Op::OpFMul, { m.tFloat, h, sep, q });
+                e.Op(spv::Op::OpFMul, { m.tFloat, hh, h, cHalf });
+                e.Op(spv::Op::OpFAdd, { m.tFloat, x2, x, hh });
+                e.Op(spv::Op::OpCompositeInsert, { f[1], f[2], x2, raw, 0 });
+                ++counts.reproj;
+                break;
+            }
+        }
     }
     if (!counts.ndc && !counts.rays && !camStores && !froxels) return false;
 

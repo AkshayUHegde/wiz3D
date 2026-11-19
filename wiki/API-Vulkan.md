@@ -48,6 +48,7 @@ VK_LOADER_LAYERS_ENABLE=VK_LAYER_wiz3D_stereo
 
 - **Output modes:** `SRWeave` and `HalfSBS` (`OutputMode` in `wiz3D_Config.xml`). Any other mode is presented as half side-by-side, and the log says so.
 - **On-screen display:** the same status strip, FPS counter and hotkey list as DX9 / DX11 (`ShowOSD`, `ShowFPS`).
+- **Games that present from a compute queue** (Wolfenstein II from its 3D menu on): the SR weave works. Half side-by-side and the on-screen display need drawing commands that queue cannot run, so Half SBS shows only the left eye there and the display is not drawn.
 
 | Hotkey | Action |
 |---|---|
@@ -73,6 +74,7 @@ Versions are the ones each title was accepted on. "Folder" is where the release 
 | Red Dead Redemption 2 | `RDR2.exe` 1.0.1491.50 | Next to `RDR2.exe` | Graphics API: Vulkan. The game folder is usually read-only, so the log goes to `%LOCALAPPDATA%\wiz3D\` and hotkey tuning is not saved unless `UserProfile.xml` there is writable. | ✅ Working |
 | DOOM (2016) | Steam build of 2026-11 (version not recorded) | Next to `DOOMx64vk.exe` | Graphics API: Vulkan (the game then runs `DOOMx64vk.exe`). | ✅ Working |
 | DOOM Eternal | Version not recorded | Next to `DOOMEternalx64vk.exe` | **Video settings: "Present From Compute" Off.** | ✅ Working |
+| Wolfenstein II: The New Colossus | Xbox app package 1.5.0.0 | Next to `NewColossus_x64vk.exe` (the `Content` folder) | **`OutputMode` SRWeave.** The game presents from a compute queue (see below). | ✅ Working |
 
 ### Emulators
 
@@ -118,7 +120,7 @@ Tested = run in stereo and accepted. Untested = never run with this wrapper; it 
 | inFAMOUS Second Son | ❌ No stereo with the DLSS upscaler | Untested | ✅ Tested |
 | Gran Turismo Sport | ⚠️ DLSS runs per eye; a right-eye shimmer was reported and its fix has not been re-run | Untested | Untested |
 | RPCS3 titles | n/a | n/a | ✅ Tested (RPCS3's own FSR output) |
-| DOOM (2016), Cemu, Ryubing, Lichii titles | n/a | n/a | n/a |
+| DOOM (2016), Wolfenstein II, Cemu, Ryubing, Lichii titles | n/a | n/a | n/a |
 
 Frame generation carries both eyes in one image, so each eye has half the horizontal resolution while it is on.
 
@@ -180,6 +182,7 @@ pause
 ## Known issues
 
 - inFAMOUS Second Son with the DLSS upscaler has no stereo. Use FSR.
+- Wolfenstein II: SR weave only (Half SBS shows the left eye), and no on-screen display, because it presents from a compute queue.
 - Shadow of the Colossus needs its atmospheric fog effect turned off.
 - Donkey Kong Bananza (Lichii): the tutorial video windows show artefacts.
 - Mario Kart World (Lichii): the shadows under the vehicles are wrong.
